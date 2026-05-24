@@ -11,7 +11,7 @@ import ffmpegPath from 'ffmpeg-static';
 import MusicTempo from 'music-tempo';
 import { buildMedleyDesignPayload, buildTrackIntelligence, evaluateSectionPair } from './src/engine/medleyIntelligence';
 import type { TrackIntelligence } from './src/engine/medleyIntelligence';
-import { analyzeLocalAudioFile } from './src/engine/localAudioAnalysis';
+import { analyzeLocalAudioFile, analyzeMedleyQuality } from './src/engine/localAudioAnalysis';
 
 dotenv.config();
 
@@ -797,6 +797,19 @@ app.post('/api/section-pair-evaluate', (req, res) => {
   res.json({ success: true, transition: result });
 });
 
+app.post('/api/medley-quality', async (req, res) => {
+  const { filePath, sessionId } = req.body || {};
+  if (!filePath) {
+    return res.status(400).json({ error: 'filePath is required' });
+  }
+  try {
+    const result = await analyzeMedleyQuality(filePath, sessionId ? path.join(workDir, sessionId) : workDir);
+    res.json({ success: true, quality: result });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.post('/api/session/design-plan', (req, res) => {
   const { sessionId, plan } = req.body || {};
   if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
@@ -850,6 +863,28 @@ app.post('/api/exec', (req, res) => {
   const sessionDir = path.join(workDir, sessionId || 'default');
   if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
 
+  const session = sessionId ? sessions[sessionId] : null;
+  const designPlan = session?.designPlan;
+
+  // Lightweight plan awareness (personal project style — advisory, not hard blocking)
+  let planNote = '';
+  if (designPlan && designPlan.transitions && Array.isArray(designPlan.transitions)) {
+    // Very simple heuristic: look for -ss and -t / -to in the command
+    const ssMatch = command.match(/-ss\s+([\d.]+)/);
+    const tMatch = command.match(/-t\s+([\d.]+)/) || command.match(/-to\s+([\d.]+)/);
+
+    if (ssMatch) {
+      const ss = parseFloat(ssMatch[1]);
+      // Find if this looks like it's cutting one of the planned transitions
+      const relevant = designPlan.transitions.find((t: any) => 
+        Math.abs((t.fromExitSec || 0) - ss) < 3 || Math.abs((t.toEntrySec || 0) - ss) < 3
+      );
+      if (relevant) {
+        planNote = ` [Plan reference: ${relevant.fromSectionId || ''} → ${relevant.toSectionId || ''}]`;
+      }
+    }
+  }
+
   // Replace ffmpeg references with the bundled binary path
   const sanitizedCmd = command.replace(/\bffmpeg\b/g, `"${ffmpegPath}"`);
 
@@ -860,10 +895,13 @@ app.post('/api/exec', (req, res) => {
     if (err) output += `ERROR:\n${err.message}\n`;
     
     if (sessionId && sessions[sessionId]) {
-      logToSession(sessionId, `CMD: ${command.substring(0, 80)}...`);
+      logToSession(sessionId, `CMD: ${command.substring(0, 80)}...${planNote}`);
     }
     
-    res.json({ output: output || 'Success with no output.' });
+    const response: any = { output: output || 'Success with no output.' };
+    if (planNote) response.planNote = planNote.trim();
+    
+    res.json(response);
   });
 });
 

@@ -377,6 +377,17 @@ export default function App() {
               }
               toolRes = { functionResponse: { name: call.name, id: call.id, response: data } };
             }
+            else if (call.name === 'analyze_medley_quality') {
+              addLog(`   Analyzing medley quality: ${args.filePath}`);
+              const res = await fetch('/api/medley-quality', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ filePath: args.filePath, sessionId: sid }),
+                signal
+              });
+              const data = await res.json();
+              toolRes = { functionResponse: { name: call.name, id: call.id, response: data } };
+            }
             else if (call.name === 'read_file') {
               const res = await fetch(`/api/file-read?filePath=${encodeURIComponent(args.filePath)}`, { signal });
               toolRes = { functionResponse: { name: call.name, id: call.id, response: await res.json() } };

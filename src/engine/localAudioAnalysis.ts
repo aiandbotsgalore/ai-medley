@@ -795,3 +795,68 @@ export async function analyzeLocalAudioFile(input: {
 
   return { analysis, analysisText, medleyIntelligence };
 }
+
+/**
+ * Analyzes an assembled medley file for professional quality metrics.
+ * Focused on what actually matters for a good-sounding medley:
+ * - Loudness compliance (EBU R128 style via loudnorm)
+ * - True peak safety
+ * - Basic dynamic range information
+ * 
+ * Designed for personal project use — pragmatic and informative rather than over-engineered.
+ */
+export async function analyzeMedleyQuality(filePath: string, workDir: string): Promise<{
+  integratedLUFS: number | null;
+  loudnessRange: number | null;
+  truePeak: number | null;
+  overallQualityNote: string;
+  rawOutput?: string;
+}> {
+  const absolutePath = path.isAbsolute(filePath) ? filePath : path.join(workDir, filePath);
+
+  if (!fs.existsSync(absolutePath)) {
+    throw new Error(`Medley file not found for quality analysis: ${absolutePath}`);
+  }
+
+  // Use ffmpeg loudnorm in measurement mode (most reliable for this use case)
+  const loudnormOutput = await execFfmpeg(
+    [
+      '-hide_banner',
+      '-i', absolutePath,
+      '-af', 'loudnorm=print_format=json',
+      '-f', 'null',
+      '-'
+    ],
+    180000
+  );
+
+  let stats: any = null;
+  try {
+    const jsonMatch = loudnormOutput.match(/\{[\s\S]*"input_i"[\s\S]*?\}/);
+    if (jsonMatch) stats = JSON.parse(jsonMatch[0]);
+  } catch (_) {
+    // best effort
+  }
+
+  const integrated = stats?.input_i ? Number(stats.input_i) : null;
+  const lra = stats?.input_lra ? Number(stats.input_lra) : null;
+  const truePeak = stats?.input_tp ? Number(stats.input_tp) : null;
+
+  let note = 'Quality analysis completed.';
+  if (integrated !== null) {
+    if (integrated > -11) note = 'Quite loud — watch for fatigue.';
+    else if (integrated < -16) note = 'On the quiet side.';
+    else note = 'Loudness in a comfortable modern range.';
+  }
+  if (truePeak !== null && truePeak > -0.8) {
+    note += ' True peak is high — consider limiting.';
+  }
+
+  return {
+    integratedLUFS: integrated !== null ? round(integrated, 2) : null,
+    loudnessRange: lra !== null ? round(lra, 2) : null,
+    truePeak: truePeak !== null ? round(truePeak, 2) : null,
+    overallQualityNote: note,
+    rawOutput: loudnormOutput
+  };
+}

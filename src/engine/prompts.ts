@@ -91,6 +91,17 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
+    name: 'analyze_medley_quality',
+    description: 'Get objective professional loudness and true peak measurements on the current assembled medley file (or an intermediate render). Use this during EVALUATE and REFINE phases to get real data instead of only relying on your own judgment or listen_to_audio. Returns integrated LUFS, loudness range, true peak, and a short note.',
+    parameters: {
+      type: 'object',
+      properties: {
+        filePath: { type: 'string', description: 'Path to the medley file to analyze (can be the final output or an intermediate render in the workdir)' }
+      },
+      required: ['filePath']
+    }
+  },
+  {
     name: 'read_file',
     description: 'Read a text file from disk.',
     parameters: {
@@ -216,10 +227,20 @@ Required design output (be explicit and reference specific data from the Medley 
 - Planned transition types between pairs and supporting evidence from the scores.
 - Any risky transitions and mitigation.
 
-## Phase 3: BUILD
+## Phase 3: BUILD — EXECUTE YOUR LOCKED DESIGN PLAN
+
+You have already called 'set_design_plan' and received confirmation. Your design (including the exact fromExitSec and toEntrySec timestamps for every transition) is now locked for this session.
+
+**Primary Rule for BUILD:**
+- Use the exact timestamps and section ranges from the plan you just locked whenever possible.
+- When writing 'execute_shell_command' calls for cutting or crossfading, prefer the precise fromExitSec / toEntrySec values you committed to in your design plan.
+- Only deviate if the command fails or you discover a clear technical problem (and even then, explain the deviation).
+
+This is how you deliver the coherent medley you designed.
+
 Execute FFmpeg commands to:
-1. Extract the selected snippet from each source file.
-2. **Normalize:** Use the 'loudnorm' filter (target I=-14, TP=-1, LRA=7) on every snippet to ensure volume consistency.
+1. Extract the selected snippet from each source file using the timestamps from your locked plan.
+2. **Normalize:** Use the 'loudnorm' filter (target I=-14, TP=-1, LRA=7) on every snippet.
 3. **Crossfade:** Apply 'acrossfade' between clips (duration=${config.crossfadeDuration}s, curve=tri).
 4. **Export:** Produce a single high-quality 320kbps MP3 medley.
 
