@@ -993,3 +993,26 @@ export function validateAiMedleyPlan(plan: any, payload: MedleyDesignPayload) {
     warnings
   };
 }
+
+/**
+ * Public entry point for evaluating a specific exit section from one track
+ * against a specific entry section from another. Returns null if either
+ * sectionId is not found in the respective TrackIntelligence.
+ */
+export function evaluateSectionPair(
+  fromTrack: TrackIntelligence,
+  toTrack: TrackIntelligence,
+  fromSectionId: string,
+  toSectionId: string
+): TransitionScore | null {
+  const fromScore = fromTrack.sectionScores.find(s => s.sectionId === fromSectionId);
+  const toScore = toTrack.sectionScores.find(s => s.sectionId === toSectionId);
+  if (!fromScore || !toScore) return null;
+  const pairData = computeSectionPairTransition(fromTrack, toTrack, fromScore, toScore);
+  if (!pairData) return null;
+  return {
+    fromTrackId: fromTrack.profile.trackId,
+    toTrackId: toTrack.profile.trackId,
+    ...pairData
+  };
+}
