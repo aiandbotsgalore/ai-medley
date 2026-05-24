@@ -402,6 +402,7 @@ const sessions: Record<string, {
     overallScore?: number;
     iteration?: number;
   };
+  designPlan?: any;
 }> = {};
 
 // Cache of the last computed TrackIntelligence[] for on-demand section pair evaluation
@@ -794,6 +795,34 @@ app.post('/api/section-pair-evaluate', (req, res) => {
     return res.status(404).json({ error: `One or both section IDs not found (fromSectionId=${fromSectionId}, toSectionId=${toSectionId}).` });
   }
   res.json({ success: true, transition: result });
+});
+
+app.post('/api/session/design-plan', (req, res) => {
+  const { sessionId, plan } = req.body || {};
+  if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+  if (!plan || !Array.isArray(plan.transitions)) {
+    return res.status(400).json({ error: 'plan.transitions must be an array' });
+  }
+  if (!sessions[sessionId]) {
+    sessions[sessionId] = { status: 'running', logs: [] };
+  }
+  sessions[sessionId].designPlan = plan;
+
+  // Soft validation: warn about any low-score pairs
+  const warnings: string[] = [];
+  if (cachedTrackIntelligence) {
+    for (const t of plan.transitions) {
+      const fromTrack = cachedTrackIntelligence.tracks.find((tr: TrackIntelligence) => tr.profile.trackId === t.fromTrackId);
+      const toTrack = cachedTrackIntelligence.tracks.find((tr: TrackIntelligence) => tr.profile.trackId === t.toTrackId);
+      if (fromTrack && toTrack && t.fromSectionId && t.toSectionId) {
+        const score = evaluateSectionPair(fromTrack, toTrack, t.fromSectionId, t.toSectionId);
+        if (score && score.score < 0.35) {
+          warnings.push(`Low-score transition (${score.score.toFixed(2)}): ${t.fromSectionId} → ${t.toSectionId}. Consider reviewing.`);
+        }
+      }
+    }
+  }
+  res.json({ success: true, storedTransitions: plan.transitions.length, warnings });
 });
 
 // History endpoints

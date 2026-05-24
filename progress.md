@@ -1,0 +1,138 @@
+# Progress: Provider API Key Settings
+
+## 2026-05-19
+
+- Logged conversation under `C:\Users\Logan\Documents\Codex Conversations`.
+- Read `planning-with-files` skill instructions.
+- Ran planning session catchup; no unsynced context was reported.
+- Inspected project startup files and app structure.
+- Found existing dependencies are installed and app is already runnable at `http://localhost:3000`.
+- Inspected `server.ts`, `src/App.tsx`, `src/components/ConfigPanel.tsx`, and `src/engine/prompts.ts`.
+- Confirmed current app is Gemini-specific in runtime code.
+- Checked OpenRouter official docs for chat completions, tool calling, auth, and audio input support.
+- Created `task_plan.md`, `findings.md`, and `progress.md`.
+- Received approval and implemented provider-aware configuration settings.
+- Added provider selection, Gemini API key input, OpenRouter API key input, and OpenRouter model input/presets.
+- Added shared tool schema and provider adapter runtime.
+- Updated the autonomous loop and pre-analysis flow to use provider-aware audio analysis.
+- Updated `/api/config` to expose OpenRouter environment fallback.
+- Fixed TypeScript issues introduced during integration and updated `test_sdk.ts` to the current Gemini SDK shape.
+- Verified with `npm run lint`, `npm run build`, and `http://localhost:3000` returning `HTTP 200`.
+- Fixed generated/final audio analysis by adding `/api/audio-file` and routing non-library `listen_to_audio` paths through it.
+- Stopped deleting the session work directory immediately on finish so final audio remains available.
+- Caught interrupted preview playback promises in `LibrarySidebar`.
+- Disabled Vite HMR to avoid stale websocket retries against `localhost:24678`.
+- Re-verified with `npm run lint`, `npm run build`, `GET /api/health`, `GET /`, and `GET /api/audio-file`.
+- Investigated cost-control request.
+- Confirmed current app sends full audio files during provider analysis.
+- Confirmed bundled FFmpeg has local analysis filters needed for a local-first implementation.
+- Added proposed local-first redesign to `task_plan.md` and cost findings to `findings.md`.
+- Implemented `audioAnalysisMode` config with `Local Only` as the default.
+- Added `/api/audio-analysis/local` server endpoint using local FFmpeg.
+- Installed `music-tempo` to improve local BPM detection.
+- Updated pre-analysis and `listen_to_audio` so raw audio uploads happen only when `Ask First` is confirmed or `Cloud Allowed` is selected.
+- Updated model prompt so the provider receives compact local analysis and does not request cloud audio by default.
+- Verified with `npm run lint`, `npm run build`, restarted dev server, and tested local analysis on an existing track.
+
+## 2026-05-20
+
+- Logged Logan's Bluetooth connection issue to the external Codex conversation log.
+- Read `planning-with-files` instructions for the multi-step diagnosis.
+- Started a read-only Windows Bluetooth diagnosis side task.
+- Checked Bluetooth adapter, driver, services, PnP state, and recent System events.
+- Narrowed the requested focus to the 11:49 incident.
+- Found the 11:49 incident was BTHUSB adapter command timeouts followed by Windows unloading the Bluetooth driver.
+- Confirmed the adapter later recovered to `OK`, so this appears intermittent/hang-related rather than permanently missing hardware.
+- Per Logan's request, reset the Realtek Bluetooth adapter and Bluetooth services.
+- Found `BTAGService` got stuck in `StopPending`; killed its isolated service host PID and restarted the service.
+- Verified final Bluetooth state: core adapter `OK`; core Bluetooth services running.
+- After Logan reported Bluetooth still unselectable, checked Bluetooth radio software device, Radio Management service, and policy blocks.
+- Restarted Explorer/Settings shell and opened Bluetooth settings.
+- Tried Plug and Play/radio-layer refresh; Windows device-management operations hung, then were stopped.
+- Tried no-reboot hard repair at Logan's request.
+- `pnputil /restart-device` against the Realtek Bluetooth adapter hung and was stopped.
+- Device Association Service failed and became stuck in `StartPending`.
+- Ran DISM health check; component store was repairable.
+- Ran DISM RestoreHealth; repair completed successfully.
+- Retried Device Association Service; it still hung.
+- Tried SFC; Windows refused because a pending system repair now requires reboot.
+
+- Logged Logan's export/download complaint to the external Codex conversation log.
+- Re-read `planning-with-files` instructions and current planning files.
+- Found the current Export Output link points at the inline `/api/audio/:sessionId` route.
+- Found that a missing audio file returns JSON, which can explain JSON being downloaded instead of the medley MP3.
+- Started a scoped export fix: dedicated download route plus client-side response validation.
+
+- Added a dedicated /api/audio/:id/download route for attachment downloads.
+- Updated the sidebar export control to fetch the route, reject JSON/error responses, and save a real MP3 blob.
+- Updated history downloads to use the dedicated download route.
+- Progress append command failed once because PowerShell interpreted quoted content incorrectly; retried with a literal here-string.
+- Verified `npm run lint` passed.
+- Verified `npm run build` passed.
+- Started the dev server at `http://localhost:3000`.
+- Verified `/api/audio/u6dcusk/download` returns HTTP 200, `audio/mpeg`, `attachment; filename="final_medley.mp3"`, and 9,986,039 bytes.
+- Verified `/api/audio/u6dcusk` still returns inline `audio/mpeg` for playback.
+- Verified the app root returns HTTP 200.
+
+- Logged Logan's request for a high-impact medley song-selection plan.
+- Confirmed the work is only for `G:\ai-medley--main`.
+- Reviewed current planning files and source-level evidence for local analysis, prompts, scoring gaps, and UI/config behavior.
+- Added the proposed Medley Intelligence Upgrade to `task_plan.md` with phases 8-13 and an approval gate.
+- Added medley intelligence planning findings to `findings.md`.
+- No implementation code was changed for this plan.
+- Read Logan's instruction file at `C:\Users\Logan\OneDrive\Documents\You are working inside my Medley Cr.txt`; it instructed immediate implementation in the Medley Creator project only.
+- Implemented `src/engine/medleyIntelligence.ts` with local facts, heuristic guesses, section scoring, pairwise transition scoring, ranked order strategies, compact design payload generation, and AI-plan validation.
+- Added `/api/medley-intelligence/design` and wired local analysis to save `medleyIntelligence` in library entries.
+- Updated local analysis text to clearly separate facts, heuristic guesses, scoring/ranking, and candidate sections.
+- Updated `src/engine/prompts.ts` so the model receives the compact Medley Design JSON and must avoid unsupported claims about key, lyrics, or song meaning.
+- Updated `src/App.tsx` to build Medley Intelligence before the autonomous loop and pass it into the model prompt.
+- Updated pre-analysis and `listen_to_audio` so local analysis always runs first; optional cloud audio can supplement but not replace the local facts.
+- Added `src/components/MedleyMatchPanel.tsx` so the workshop sidebar shows candidate sections, transition scores, order strategies, and warnings before final export.
+- Added `src/engine/medleyIntelligence.test.ts` and `npm test` for no-API scoring/payload/validation coverage.
+- Fixed a TypeScript key-prop issue in `MedleyMatchPanel`.
+- Verified `npm test` passed.
+- Verified `npm run lint` passed.
+- Verified `npm run build` passed; Vite emitted only the existing large chunk warning.
+- Started the dev server at `http://localhost:3000`.
+- Verified `GET /api/health` returned OK.
+- Verified `GET /` returned HTTP 200 HTML.
+- Verified `POST /api/medley-intelligence/design` returned success with 7 tracks, 32 transition scores, 6 strategies, and source `local_medley_intelligence`.
+- Stopped the dev server after runtime checks.
+- Updated `task_plan.md`, `findings.md`, and `progress.md` with implementation status and validation results.
+- Logged Logan's request to plan deeper local audio analysis.
+- Re-read the planning-with-files instructions and current project planning files.
+- Researched local audio-analysis tool options: Essentia/Essentia.js, aubio, and librosa.
+- Added the proposed Deep Local Audio Analysis Upgrade to `task_plan.md` with phases 14-23 and an approval gate.
+- Added deep local audio analysis planning findings and sources to `findings.md`.
+- No implementation code was changed for this plan.
+
+## 2026-05-21
+
+- Logan approved the Deep Local Audio Analysis Upgrade plan.
+- Marked the deep local analysis implementation as in progress in `task_plan.md`.
+- Confirmed current implementation still has local FFmpeg analysis in `server.ts`, Medley Intelligence in `src/engine/medleyIntelligence.ts`, and no advanced local MIR dependency installed yet.
+- Installed `essentia.js`; it added 2 packages and updated `package.json` / `package-lock.json`.
+- Inspected the Essentia.js package shape and confirmed it exposes `Essentia`, `EssentiaWASM`, `EssentiaModel`, `EssentiaExtractor`, and `EssentiaPlot`.
+- Found direct Essentia WASM algorithms can throw raw numeric errors on unsuitable/synthetic input, so implementation uses Essentia defensively and keeps local DSP fallback.
+- Added `src/engine/localAudioAnalysis.ts`.
+- Implemented `local_audio_analysis_v2` with beat grid, beat confidence, tempo segments, onset detection, onset density windows, spectral centroid/rolloff/flatness/flux, brightness/density descriptors, chroma/key estimate, RMS loudness windows, beat-snapped segments, and quality warnings.
+- Wired `/api/audio-analysis/local` to the V2 analyzer.
+- Updated `src/engine/medleyIntelligence.ts` to consume V2 facts and score beat alignment, downbeat confidence, harmonic stability, spectral contrast, groove continuity, transition shock/risk, and harmonic transition compatibility.
+- Updated `src/components/MedleyMatchPanel.tsx` to show advanced track count, key estimate count, beat/key confidence, and beat/key transition scores.
+- Added `src/engine/localAudioAnalysis.test.ts`, which generates a WAV locally and verifies V2 analysis without API calls.
+- Updated `npm test` to run both Medley Intelligence and local analyzer tests.
+- Verified `npm test` passed.
+- Verified `npm run lint` passed.
+- Verified `npm run build` passed; Vite emitted only the existing large chunk warning.
+- Started the dev server at `http://localhost:3000`.
+- Verified `GET /api/health` returned OK.
+- Verified `GET /` returned HTTP 200 HTML.
+- Verified `POST /api/audio-analysis/local` on library track `09ffc54c-b8bc-4305-9a85-d28ab4798f88` returned `local_audio_analysis_v2`, BPM `128`, estimated key `F major`, 14 segments, 18 facts, and beat-aligned section scoring.
+- Verified `POST /api/medley-intelligence/design` returned success with 7 tracks, 1 advanced V2 track, 32 transition scores, and 6 strategies.
+- Stopped the dev server after runtime checks.
+- Marked Deep Local Audio Analysis phases 14-23 complete in `task_plan.md`.
+- Added implementation findings and license note to `findings.md`.
+- Patched pre-analysis so older tracks that already had the previous analysis still get re-analyzed when `localAnalysisV2` is missing.
+- Re-verified `npm run lint` passed.
+- Re-verified `npm test` passed.
+- Re-verified `npm run build` passed; Vite emitted only the existing large chunk warning.

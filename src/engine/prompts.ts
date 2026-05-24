@@ -3,34 +3,30 @@ import type { MedleyConfig } from '../components/ConfigPanel';
 import type { LibraryFile } from '../components/LibrarySidebar';
 import type { MedleyDesignPayload } from './medleyIntelligence';
 
-const DETAILED_DESIGN_INSTRUCTIONS = `
-## Phase 2: DESIGN — COHERENT SNIPPET SELECTION & BLENDING (MOST IMPORTANT PHASE)
-Your primary job in this phase is to create a *beautiful, seamless, musically coherent medley* — not just a sequence of good songs.
-
-You must:
-1. **Choose the single best specific snippet** from each track for its role in the *overall medley*, not just the best snippet for that track in isolation.
-   - For the very first track: strongly prefer the highest-ranked **intro_candidate**, **clean_exit_candidate** (if used as opener), or **first_strong_entrance** that also has good energy for starting the whole experience.
-   - For middle tracks: choose entry + exit snippets that create natural, low-shock handoffs with the previous track's exit and the next track's entry.
-   - For the final track: prioritize **finale_candidate** or strong high-energy late sections that give satisfying closure.
-
-2. **Think in terms of specific section-to-section blending**, not just track order.
-   - Look at the transitionMatrixSummary for high-scoring pairs.
-   - When the matrix gives you a strong fromSectionId to toSectionId recommendation between two tracks, treat that as high-value data for creating seamlessness.
-   - Prefer combinations where beat alignment is high, energy contour flows naturally, spectral brightness/density is compatible, and the exit of one and entry of the next feel like they belong together.
-
-3. **Explicitly design the global intro and global outro** (use the new recommendedGlobalIntros and recommendedGlobalFinales fields):
-   - Strongly consider the highest-ranked entries from recommendedGlobalIntros when choosing the opening snippet.
-   - Strongly consider the highest-ranked entries from recommendedGlobalFinales when choosing the closing snippet.
-   - The opening 15-30 seconds of the entire medley should feel like a deliberate, inviting beginning.
-   - The final 20-40 seconds should feel like a purposeful, satisfying conclusion.
-
-4. Use the recommendedStrategies heavily. They were computed specifically to optimize for different kinds of coherence.
-
-**Strict rules for this phase:**
-- Default to using the exact timestamps from the highest-ranked relevant candidates in the Medley Design JSON.
-- If you override a top-ranked candidate, you MUST write a clear justification in terms of improved overall medley coherence with neighboring snippets.
-- Never invent arbitrary timestamps in BUILD. Stick to what you justified in DESIGN.
-`;
+const DETAILED_DESIGN_INSTRUCTIONS = 
+"## Phase 2: DESIGN — COHERENT SNIPPET SELECTION & BLENDING (MOST IMPORTANT PHASE)\n" +
+"Your primary job in this phase is to create a *beautiful, seamless, musically coherent medley* — not just a sequence of good songs.\n\n" +
+"You must:\n" +
+"1. **Choose the single best specific snippet** from each track for its role in the *overall medley*, not just the best snippet for that track in isolation.\n" +
+"   - For the very first track: strongly prefer the highest-ranked **intro_candidate**, **clean_exit_candidate** (if used as opener), or **first_strong_entrance** that also has good energy for starting the whole experience.\n" +
+"   - For middle tracks: choose entry + exit snippets that create natural, low-shock handoffs with the previous track's exit and the next track's entry.\n" +
+"   - For the final track: prioritize **finale_candidate** or strong high-energy late sections that give satisfying closure.\n\n" +
+"2. **Think in terms of specific section-to-section blending**, not just track order.\n" +
+"   - Look at the transitionMatrixSummary for high-scoring pairs.\n" +
+"   - When the matrix gives you a strong fromSectionId to toSectionId recommendation between two tracks, treat that as high-value data for creating seamlessness.\n" +
+"   - Prefer combinations where beat alignment is high, energy contour flows naturally, spectral brightness/density is compatible, and the exit of one and entry of the next feel like they belong together.\n\n" +
+"3. **Explicitly design the global intro and global outro** (use the new recommendedGlobalIntros and recommendedGlobalFinales fields):\n" +
+"   - Strongly consider the highest-ranked entries from recommendedGlobalIntros when choosing the opening snippet.\n" +
+"   - Strongly consider the highest-ranked entries from recommendedGlobalFinales when choosing the closing snippet.\n" +
+"   - The opening 15-30 seconds of the entire medley should feel like a deliberate, inviting beginning.\n" +
+"   - The final 20-40 seconds should feel like a purposeful, satisfying conclusion.\n\n" +
+"4. Use the recommendedStrategies heavily. They were computed specifically to optimize for different kinds of coherence.\n\n" +
+"**Strict rules for this phase:**\n" +
+"- Default to using the exact timestamps from the highest-ranked relevant candidates in the Medley Design JSON.\n" +
+"- If you override a top-ranked candidate, you MUST write a clear justification in terms of improved overall medley coherence with neighboring snippets.\n" +
+"- Never invent arbitrary timestamps in BUILD. Stick to what you justified in DESIGN.\n\n" +
+"**MANDATORY HANDOFF:**\n" +
+"At the very end of your DESIGN reasoning (before you start writing any FFmpeg commands), you **MUST** call the `set_design_plan` tool with your final ordered list of transitions, including exact `fromExitSec` / `toEntrySec` values and justification for each pair. This is required before entering the BUILD phase.\n";
 
 const TOOL_DEFINITIONS = [
   {
@@ -63,6 +59,35 @@ const TOOL_DEFINITIONS = [
         toSectionId: { type: 'string', description: 'The sectionId of the entry section in the destination track (e.g. "track02_section_01")' }
       },
       required: ['fromTrackId', 'fromSectionId', 'toTrackId', 'toSectionId']
+    }
+  },
+  {
+    name: 'set_design_plan',
+    description: 'Lock in your DESIGN decisions before starting the BUILD phase. Call this exactly once at the end of DESIGN, after you have chosen your snippet sections and transition pairs. Provide the ordered list of transitions you plan to execute. The system validates each pair and warns you about low-score combinations. You MUST call this before any execute_shell_command calls.',
+    parameters: {
+      type: 'object',
+      properties: {
+        sessionId: { type: 'string', description: 'The current session ID (provided at session start)' },
+        transitions: {
+          type: 'array',
+          description: 'Ordered list of planned transitions, one per consecutive track pair',
+          items: {
+            type: 'object',
+            properties: {
+              fromTrackId: { type: 'string' },
+              fromSectionId: { type: 'string' },
+              fromExitSec: { type: 'number', description: 'Exact timestamp (seconds) where you will cut/fade out of the source track' },
+              toTrackId: { type: 'string' },
+              toSectionId: { type: 'string' },
+              toEntrySec: { type: 'number', description: 'Exact timestamp (seconds) where you will cut/fade into the destination track' },
+              transitionType: { type: 'string', description: 'e.g. smooth_blend, hard_cut, energy_lift, etc.' },
+              justification: { type: 'string', description: 'Why this specific pair was chosen (score data, coherence reasoning)' }
+            },
+            required: ['fromTrackId', 'fromSectionId', 'fromExitSec', 'toTrackId', 'toSectionId', 'toEntrySec', 'transitionType', 'justification']
+          }
+        }
+      },
+      required: ['sessionId', 'transitions']
     }
   },
   {
@@ -124,7 +149,7 @@ const TOOL_DEFINITIONS = [
   }
 ] as const;
 
-export function buildSystemPrompt(lib: LibraryFile[], config: MedleyConfig, medleyDesign?: MedleyDesignPayload | null): string {
+export function buildSystemPrompt(lib: LibraryFile[], config: MedleyConfig, medleyDesign?: MedleyDesignPayload | null, sessionId?: string): string {
   const styleInstructions: Record<string, string> = {
     'dj-set': `STYLE: DJ Set Mode
 - Match BPM between tracks. Gradually increase/decrease tempo if needed.
@@ -167,6 +192,8 @@ ${JSON.stringify(medleyDesign, null, 2)}`
 Your mission: build a polished, professional medley from the provided music library using FFmpeg.
 
 ${styleInstructions[config.style] || styleInstructions['smooth-transitions']}
+
+${sessionId ? `# Current Session\nYour current session ID is **${sessionId}**. You must use this value when calling the set_design_plan tool.\n` : ''}
 
 ${medleyDesignBlock}
 
@@ -228,7 +255,8 @@ ${lib.map((f, i) => `${i + 1}. ID: ${f.id}
 - When selecting an entry or exit snippet for a track, always consider how it will sound coming *from* the previous track's exit and going *to* the next track's entry.
 - Opening and closing snippets have special importance for the listener's overall experience of the medley. Prioritize natural, inviting openings and satisfying, conclusive endings.
 - If you override top-ranked candidates, you must explicitly justify the choice in terms of improved inter-snippet coherence with neighbors.
-- NEVER invent arbitrary timestamps in the BUILD phase. Stick to the candidates and ranges justified in your DESIGN phase unless a command fails and you must adjust slightly.
+- **You MUST call set_design_plan at the end of DESIGN** with your final chosen transitions (including exact timestamps and justification) before issuing any execute_shell_command calls.
+- NEVER invent arbitrary timestamps in the BUILD phase. Stick to the candidates and ranges justified in your DESIGN phase (and locked via set_design_plan) unless a command fails.
 - Keep local facts, heuristic musical guesses, scoring/ranking, and AI reasoning clearly separate.
 - Do not claim a true chorus, true hook, key, lyric meaning, or song meaning unless that data was actually provided.
 - Treat hook, mood, finale, density, brightness, and emotional arc as heuristic/proxy labels unless verified by user notes or allowed clip listening.

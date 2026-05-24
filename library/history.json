@@ -1,0 +1,20 @@
+[
+  {
+    "id": "wnf8hf",
+    "completedAt": "2026-05-20T14:44:59.692Z",
+    "summary": "The medley is complete. It features a five-song progression starting with 'Patience (Tool Cover)' and 'pneuma session', building into 'Geek U.S.A. (Smashing Pumpkins cover)', 'Lucky (Radiohead)', and peaking with 'Noose Mastered'. The design focuses on a smooth tempo and energy increase, with BPMs ranging from 109 to 131. All snippets were normalized for consistent volume and blended with 5-second crossfades. The final evaluation scores were high (Overall: 90), indicating excellent transition quality and a well-structured emotional arc. No further refinement was needed.",
+    "finalAudioPath": "G:\\ai-medley--main\\workdir\\wnf8hf\\final_medley.mp3"
+  },
+  {
+    "id": "zaizeo",
+    "completedAt": "2026-05-20T14:12:50.358Z",
+    "summary": "The medley was successfully created in a single iteration. It begins with the full 'Patience' cover, transitions smoothly into a high-energy section of the 'Geek U.S.A.' cover, and concludes with the powerful final section of 'Noose Mastered'. The track order creates a rising energy arc, supported by a BPM progression from 109 to 131. All snippets were normalized, and 5-second crossfades were used to ensure seamless, professional-sounding transitions.",
+    "finalAudioPath": "G:\\ai-medley--main\\workdir\\zaizeo\\medley_iteration_1.mp3"
+  },
+  {
+    "id": "u6dcusk",
+    "completedAt": "2026-05-20T13:17:37.772Z",
+    "summary": "The medley was created by sequencing three songs in order of increasing BPM (109, 120, 131) to create a building energy arc.\nThe tracks are:\n1. Logan Black - Patience (Tool Cover)\n2. Logan Black - Geek U.S.A. (Smashing Pumpkins cover)\n3. Logan Black - Noose Mastered\n\nSnippets were extracted from each song, normalized to a consistent volume, and then crossfaded into each other with a 5-second duration. The final output is a single MP3 file, `final_medley.mp3`.\nThe medley was evaluated and scored high in all categories, with smooth transitions and a good emotional flow.",
+    "finalAudioPath": "G:\\ai-medley--main\\workdir\\u6dcusk\\final_medley.mp3"
+  }
+]

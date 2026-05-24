@@ -823,21 +823,51 @@ function buildStrategy(
   warnings: string[]
 ): MedleyOrderStrategy {
   const byId = new Map(tracks.map(track => [track.profile.trackId, track]));
+
+  // Use specific section pairs from the transition matrix when available
   const orderedTracks = orderedIds.map((trackId, index) => {
     const track = byId.get(trackId)!;
-    const score = bestSection(track, sectionKey) || bestSection(track, 'hookStrength');
-    const section = track.sections.find(item => item.sectionId === score?.sectionId) || track.sections[0];
-    return {
-      trackId,
-      selectedSectionIds: section ? [section.sectionId] : [],
-      entrySec: section?.startSec ?? 0,
-      exitSec: section?.endSec ?? Math.min(track.profile.durationSec, 45),
-      role: index === 0 ? 'opening' : index === orderedIds.length - 1 ? 'finale' : 'build'
-    };
+    const role = index === 0 ? 'opening' : index === orderedIds.length - 1 ? 'finale' : 'build';
+
+    const prevId = orderedIds[index - 1];
+    const nextId = orderedIds[index + 1];
+
+    const bestInbound = prevId
+      ? matrix.filter(m => m.fromTrackId === prevId && m.toTrackId === trackId)
+              .sort((a, b) => b.score - a.score)[0]
+      : undefined;
+
+    const bestOutbound = nextId
+      ? matrix.filter(m => m.fromTrackId === trackId && m.toTrackId === nextId)
+              .sort((a, b) => b.score - a.score)[0]
+      : undefined;
+
+    const entrySec = bestInbound?.toEntrySec
+      ?? track.sections.find(s => s.sectionId === (bestSection(track, 'entryQuality') || bestSection(track, sectionKey))?.sectionId)?.startSec
+      ?? 0;
+
+    const exitSec = bestOutbound?.fromExitSec
+      ?? track.sections.find(s => s.sectionId === (bestSection(track, 'exitQuality') || bestSection(track, sectionKey))?.sectionId)?.endSec
+      ?? Math.min(track.profile.durationSec, 45);
+
+    const selectedSectionIds = Array.from(new Set([
+      bestInbound?.toSectionId,
+      bestOutbound?.fromSectionId
+    ].filter(Boolean))) as string[];
+
+    if (!selectedSectionIds.length) {
+      const fallback = bestSection(track, sectionKey) || bestSection(track, 'hookStrength');
+      if (fallback) selectedSectionIds.push(fallback.sectionId);
+    }
+
+    return { trackId, selectedSectionIds, entrySec, exitSec, role };
   });
+
   const transitions = orderedIds.slice(0, -1).map((trackId, index) => {
     const nextId = orderedIds[index + 1];
-    return matrix.find(item => item.fromTrackId === trackId && item.toTrackId === nextId);
+    return matrix
+      .filter(item => item.fromTrackId === trackId && item.toTrackId === nextId)
+      .sort((a, b) => b.score - a.score)[0];
   }).filter(Boolean) as TransitionScore[];
   const strategyScore = average([
     ...transitions.map(item => item.score),

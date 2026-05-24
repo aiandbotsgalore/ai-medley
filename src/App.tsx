@@ -212,7 +212,7 @@ export default function App() {
     setIteration(null);
 
     try {
-      const systemInstruction = buildSystemPrompt(lib, config, design);
+      const systemInstruction = buildSystemPrompt(lib, config, design, sid);
       const session = createProviderSession(
         config,
         systemInstruction,
@@ -361,6 +361,20 @@ export default function App() {
                 signal
               });
               const data = await res.json();
+              toolRes = { functionResponse: { name: call.name, id: call.id, response: data } };
+            }
+            else if (call.name === 'set_design_plan') {
+              addLog(`   Locking design plan: ${(args.transitions || []).length} transitions`);
+              const res = await fetch('/api/session/design-plan', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sessionId: sid, plan: { transitions: args.transitions } }),
+                signal
+              });
+              const data = await res.json();
+              if (data.warnings?.length) {
+                for (const w of data.warnings) addLog(`  ⚠️ ${w}`);
+              }
               toolRes = { functionResponse: { name: call.name, id: call.id, response: data } };
             }
             else if (call.name === 'read_file') {
