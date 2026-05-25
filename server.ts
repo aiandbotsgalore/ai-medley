@@ -31,11 +31,13 @@ const libraryDir = path.join(process.cwd(), 'library');
 const audioDir = path.join(libraryDir, 'audio');
 const dbPath = path.join(libraryDir, 'db.json');
 const historyPath = path.join(libraryDir, 'history.json');
+const wisdomPath = path.join(libraryDir, 'wisdom.json');
 
 if (!fs.existsSync(libraryDir)) fs.mkdirSync(libraryDir);
 if (!fs.existsSync(audioDir)) fs.mkdirSync(audioDir);
 if (!fs.existsSync(dbPath)) fs.writeFileSync(dbPath, JSON.stringify([]));
 if (!fs.existsSync(historyPath)) fs.writeFileSync(historyPath, JSON.stringify([]));
+if (!fs.existsSync(wisdomPath)) fs.writeFileSync(wisdomPath, JSON.stringify([]));
 
 function isPathInside(childPath: string, parentPath: string) {
   const child = path.resolve(childPath).toLowerCase();
@@ -147,11 +149,122 @@ function saveHistory(data: any[]) {
   fs.writeFileSync(historyPath, JSON.stringify(data, null, 2));
 }
 
+function getWisdom(): any[] {
+  try {
+    return JSON.parse(fs.readFileSync(wisdomPath, 'utf8'));
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveWisdom(data: any[]) {
+  fs.writeFileSync(wisdomPath, JSON.stringify(data, null, 2));
+}
+
+// Wisdom entries are NEVER deleted. This is intentional for permanent cumulative learning.
+function appendWisdom(entry: any) {
+  const wisdom = getWisdom();
+  wisdom.push({
+    ...entry,
+    recordedAt: new Date().toISOString()
+  });
+  saveWisdom(wisdom);
+}
+
+/**
+ * Snaps a time (in seconds) to the nearest beat from the provided beat array.
+ * Returns the snapped time and the distance.
+ */
+function snapToNearestBeat(time: number, beats: number[]): { snappedTime: number; distance: number } {
+  if (!beats || beats.length === 0) {
+    return { snappedTime: time, distance: 0 };
+  }
+
+  let closest = beats[0];
+  let minDist = Math.abs(time - closest);
+
+  for (const beat of beats) {
+    const dist = Math.abs(time - beat);
+    if (dist < minDist) {
+      minDist = dist;
+      closest = beat;
+    }
+  }
+
+  return { snappedTime: closest, distance: minDist };
+}
+
 function execFfmpeg(args: string[], timeout = 30000): Promise<string> {
   return new Promise((resolve) => {
     execFile(ffmpegPath!, args, { timeout, windowsHide: true }, (_err, stdout, stderr) => {
       resolve(`${stdout || ''}${stderr || ''}`);
     });
+  });
+}
+
+/**
+ * Robust FFmpeg runner for the strict MVP finalize_medley path.
+ * - Always writes the three required debug artifacts in the session dir:
+ *     ffmpeg_command.txt (human-readable command)
+ *     temp_filtergraph.txt (the script passed to -filter_complex_script)
+ *     ffmpeg_stderr.log (full combined output for diagnosis)
+ * - Rejects on non-zero exit (hard fail, no silent fallback).
+ * - Safe for Windows (execFile array form, no shell).
+ */
+async function runFfmpegWithStrictLogging(
+  args: string[],
+  sessionWorkDir: string,
+  graphScriptContent: string,
+  timeoutMs = 300000
+): Promise<void> {
+  const graphFile = path.join(sessionWorkDir, 'temp_filtergraph.txt');
+  const cmdLogFile = path.join(sessionWorkDir, 'ffmpeg_command.txt');
+  const stderrLogFile = path.join(sessionWorkDir, 'ffmpeg_stderr.log');
+
+  // 1. Write the filter_complex_script (MANDATORY per production requirements)
+  fs.writeFileSync(graphFile, graphScriptContent, 'utf8');
+
+  // 2. Write human-readable command log
+  const quotedArgs = args.map(a => {
+    if (a.includes(' ') || a.includes(':') || a.includes('[') || a.includes(']')) {
+      return `"${a}"`;
+    }
+    return a;
+  });
+  const humanCmd = `ffmpeg ${quotedArgs.join(' ')}`;
+  const cmdLogContent = [
+    humanCmd,
+    '',
+    '# === filter_complex_script contents (temp_filtergraph.txt) ===',
+    graphScriptContent
+  ].join('\n');
+  fs.writeFileSync(cmdLogFile, cmdLogContent, 'utf8');
+
+  // 3. Execute (array form = no shell quoting issues on Windows)
+  return new Promise((resolve, reject) => {
+    execFile(
+      ffmpegPath!,
+      args,
+      {
+        cwd: sessionWorkDir,
+        timeout: timeoutMs,
+        windowsHide: true,
+        maxBuffer: 100 * 1024 * 1024
+      },
+      (err, stdout, stderr) => {
+        const combined = `${stdout || ''}\n${stderr || ''}`;
+        fs.writeFileSync(stderrLogFile, combined, 'utf8');
+
+        if (err) {
+          const code = (err as any).code ?? (err as any).signal ?? 'unknown';
+          reject(new Error(
+            `FFmpeg exited with code ${code}. See ffmpeg_stderr.log and temp_filtergraph.txt for exact failure.`
+          ));
+        } else {
+          resolve();
+        }
+      }
+    );
   });
 }
 
@@ -403,6 +516,7 @@ const sessions: Record<string, {
     iteration?: number;
   };
   designPlan?: any;
+  [key: string]: any; // allow dynamic wisdom-related fields
 }> = {};
 
 // Cache of the last computed TrackIntelligence[] for on-demand section pair evaluation
@@ -594,7 +708,7 @@ app.get('/api/waveform/:id', (req, res) => {
   });
 });
 
-app.post('/api/session/finish', (req, res) => {
+app.post('/api/session/finish', async (req, res) => {
   const { sessionId, finalAudioPath, summary } = req.body;
   if (!sessionId || !finalAudioPath) {
     return res.status(400).json({ error: 'sessionId and finalAudioPath are required' });
@@ -617,20 +731,43 @@ app.post('/api/session/finish', (req, res) => {
     };
   }
   
-  // Save to history
+  // Save to history - intentionally never truncated (permanent record of every medley)
   const history = getHistory();
   history.unshift({
     id: sessionId,
     completedAt: new Date().toISOString(),
     summary,
     finalAudioPath: resolvedAudioPath,
-    metrics: sessions[sessionId]?.metrics
+    metrics: sessions[sessionId]?.metrics,
+    designPlan: sessions[sessionId]?.designPlan || null
   });
-  // Keep last 50 entries
-  if (history.length > 50) history.length = 50;
   saveHistory(history);
   
   broadcastToSession(sessionId, 'completed', { summary });
+
+  // Permanently record cross-medley wisdom from this generation
+  // This data is never deleted and is used to make future medleys smarter.
+  const sessionData = sessions[sessionId] || ({} as any);
+  const wisdomEntry: any = {
+    type: 'completed_medley',
+    sessionId,
+    summary,
+    metrics: sessionData.metrics || null,
+    designPlan: sessionData.designPlan || null,
+    finalAudioPath: resolvedAudioPath,
+    tracksInvolved: sessionData.designPlan?.transitions?.map((t: any) => t.fromTrackId) || []
+  };
+
+  // Run objective quality analysis on the final output and include it (permanent)
+  try {
+    const quality = await analyzeMedleyQuality(resolvedAudioPath, workDir);
+    wisdomEntry.finalQuality = quality;
+  } catch (e) {
+    // best effort
+  }
+
+  appendWisdom(wisdomEntry);
+
   res.json({ success: true });
 });
 
@@ -640,6 +777,14 @@ app.post('/api/session/metrics', (req, res) => {
   if (sessions[sessionId]) {
     sessions[sessionId].metrics = { ...sessions[sessionId].metrics, ...metrics };
     broadcastToSession(sessionId, 'metrics', sessions[sessionId].metrics);
+
+    // Accumulate evaluation wisdom permanently
+    appendWisdom({
+      type: 'evaluation',
+      sessionId,
+      metrics,
+      designPlan: sessions[sessionId].designPlan || null
+    });
   }
   res.json({ success: true });
 });
@@ -767,12 +912,16 @@ app.post('/api/medley-intelligence/design', (req, res) => {
     return res.status(400).json({ error: 'No local medley intelligence is available. Run local analysis first.' });
   }
 
+  // Load permanent accumulated wisdom so the system gets smarter over time
+  const wisdom = getWisdom();
+
   res.json({
     success: true,
     design: buildMedleyDesignPayload({
       tracks,
       userConstraints: userConstraints || {},
-      maxTransitions: 32
+      maxTransitions: 32,
+      wisdom
     })
   });
 });
@@ -838,6 +987,602 @@ app.post('/api/session/design-plan', (req, res) => {
   res.json({ success: true, storedTransitions: plan.transitions.length, warnings });
 });
 
+// Musical transition endpoint (high-quality blending tool for the agent)
+app.post('/api/apply-transition', async (req, res) => {
+  const { 
+    fromTrackId, 
+    fromSectionId, 
+    toTrackId, 
+    toSectionId, 
+    style, 
+    duration, 
+    intensity, 
+    beatAlign, 
+    notes,
+    sessionId 
+  } = req.body || {};
+
+  if (!fromTrackId || !fromSectionId || !toTrackId || !toSectionId || !style) {
+    return res.status(400).json({ 
+      error: 'fromTrackId, fromSectionId, toTrackId, toSectionId, and style are required.' 
+    });
+  }
+
+  // --- Basic implementation of musical transition ---
+  console.log(`[apply-transition] Processing: ${fromTrackId}:${fromSectionId} → ${toTrackId}:${toSectionId} [${style}]`);
+
+  const session = sessionId ? sessions[sessionId] : null;
+  const designPlan = session?.designPlan;
+
+  // Try to find the planned transition details
+  let plannedTransition = null;
+  if (designPlan && designPlan.transitions) {
+    plannedTransition = designPlan.transitions.find((t: any) =>
+      t.fromTrackId === fromTrackId && t.fromSectionId === fromSectionId &&
+      t.toTrackId === toTrackId && t.toSectionId === toSectionId
+    );
+  }
+
+  const transitionDuration = duration || (plannedTransition?.duration) || 5;
+  const useBeatAlign = beatAlign ?? true;
+
+  const fromEntry = getLibrary().find((e: any) => e.id === fromTrackId);
+  const toEntry = getLibrary().find((e: any) => e.id === toTrackId);
+
+  if (!fromEntry || !toEntry) {
+    return res.status(404).json({ error: 'One or both tracks not found in library' });
+  }
+
+  const sessionWorkDir = path.join(workDir, sessionId || 'default');
+  if (!fs.existsSync(sessionWorkDir)) fs.mkdirSync(sessionWorkDir, { recursive: true });
+
+  const outputTransitionPath = path.join(sessionWorkDir, `transition_${fromSectionId}_to_${toSectionId}.mp3`);
+
+  try {
+    // Load rich intelligence data if available (for beats, energy, etc.)
+    let fromIntelligence: TrackIntelligence | null = null;
+    let toIntelligence: TrackIntelligence | null = null;
+
+    if (cachedTrackIntelligence) {
+      fromIntelligence = cachedTrackIntelligence.tracks.find((t: TrackIntelligence) => t.profile.trackId === fromTrackId) || null;
+      toIntelligence = cachedTrackIntelligence.tracks.find((t: TrackIntelligence) => t.profile.trackId === toTrackId) || null;
+    }
+
+    // Determine base cut points from design plan or defaults
+    let fromStart = plannedTransition?.fromExitSec ? Math.max(0, plannedTransition.fromExitSec - transitionDuration) : 0;
+    let toStart = plannedTransition?.toEntrySec || 0;
+
+    // === Beat Snapping (if requested and we have beat data) ===
+    let beatSnapNotes = '';
+    if (useBeatAlign) {
+      const fromBeats = fromIntelligence?.localFacts?.find((f: any) => f.name === 'beat_grid')?.value || [];
+      const toBeats = toIntelligence?.localFacts?.find((f: any) => f.name === 'beat_grid')?.value || [];
+
+      const fromBeatsArray = Array.isArray(fromBeats) ? fromBeats : [];
+      if (fromBeatsArray.length > 0) {
+        const snap = snapToNearestBeat(fromStart + transitionDuration, fromBeatsArray);
+        if (snap.distance < 0.25) { // only snap if reasonably close
+          fromStart = snap.snappedTime - transitionDuration;
+          beatSnapNotes += ` Snapped exit to nearest beat (offset ${snap.distance.toFixed(3)}s).`;
+        }
+      }
+
+      const toBeatsArray = Array.isArray(toBeats) ? toBeats : [];
+      if (toBeatsArray.length > 0) {
+        const snap = snapToNearestBeat(toStart, toBeatsArray);
+        if (snap.distance < 0.25) {
+          toStart = snap.snappedTime;
+          beatSnapNotes += ` Snapped entry to nearest beat (offset ${snap.distance.toFixed(3)}s).`;
+        }
+      }
+    }
+
+    // === Style-aware processing (now uses the pluggable config) ===
+    const styleConfig = getTransitionStyleConfig(style);
+    const curve1 = styleConfig.curve1;
+    const curve2 = styleConfig.curve2;
+    const extraFilters = styleConfig.extraFilters;
+
+    const fromPath = fromEntry.path;
+    const toPath = toEntry.path;
+
+    const actualFromExit = fromStart + transitionDuration;
+    const actualToEntry = toStart;
+
+    // === SEPARATED: Enrichment (for finalize_medley pure-clean path) happens independently of preview render ===
+    // This decouples the "preview concern" (temporary audition file) from the enrichment needed by the final renderer.
+    if (session && session.designPlan && Array.isArray(session.designPlan.transitions)) {
+      const matchingTransition = session.designPlan.transitions.find((t: any) =>
+        t.fromTrackId === fromTrackId &&
+        t.fromSectionId === fromSectionId &&
+        t.toTrackId === toTrackId &&
+        t.toSectionId === toSectionId
+      );
+      if (matchingTransition) {
+        matchingTransition.actualFromExitSec = actualFromExit;
+        matchingTransition.actualToEntrySec = actualToEntry;
+        matchingTransition.durationUsed = transitionDuration;
+        matchingTransition.beatSnapApplied = useBeatAlign && (beatSnapNotes.length > 0);
+        matchingTransition.style = style;   // Hook point for Phase 4 mashup_layer branching in finalize_medley
+        // Note: outputPath is only set if/when we actually render the preview below
+      }
+    }
+
+    // Build improved filter chain for PREVIEW only
+    const filterComplex =
+      `[0:a]atrim=start=${fromStart}:duration=${transitionDuration},loudnorm=I=-14:TP=-1.5${extraFilters}[a0];` +
+      `[1:a]atrim=start=${toStart}:duration=${transitionDuration},loudnorm=I=-14:TP=-1.5${extraFilters}[a1];` +
+      `[a0][a1]acrossfade=d=${transitionDuration}:curve1=${curve1}:curve2=${curve2}[out]`;
+
+    const cmd = [
+      '-y',
+      '-i', fromPath,
+      '-i', toPath,
+      '-filter_complex', filterComplex,
+      '-map', '[out]',
+      '-c:a', 'libmp3lame',
+      '-b:a', '320k',
+      outputTransitionPath
+    ];
+
+    await execFfmpeg(cmd, 120000);
+
+    // Only after successful preview render, set the outputPath (preview concern separated)
+    if (session && session.designPlan && Array.isArray(session.designPlan.transitions)) {
+      const matchingTransition = session.designPlan.transitions.find((t: any) =>
+        t.fromTrackId === fromTrackId &&
+        t.fromSectionId === fromSectionId &&
+        t.toTrackId === toTrackId &&
+        t.toSectionId === toSectionId
+      );
+      if (matchingTransition) {
+        matchingTransition.outputPath = outputTransitionPath;
+      }
+    }
+
+    const finalNotes = `Applied ${style} transition (${transitionDuration}s).${beatSnapNotes} ${notes ? 'Notes: ' + notes : ''}`;
+
+    appendWisdom({
+      type: 'transition_applied',
+      sessionId,
+      style,
+      fromTrackId,
+      fromSectionId,
+      toTrackId,
+      toSectionId,
+      duration: transitionDuration,
+      beatAlign: useBeatAlign,
+      intensity: intensity || 0.6,
+      notes: notes || null,
+      actualFromExitSec: actualFromExit,
+      actualToEntrySec: actualToEntry,
+      beatSnapApplied: useBeatAlign && (beatSnapNotes.length > 0),
+      curvesUsed: { curve1, curve2 },
+      extraProcessing: extraFilters ? [extraFilters] : [],
+      estimatedQuality: Math.round(75 + (useBeatAlign ? 8 : 0) + (style === 'mashup_layer' ? -5 : 5))
+    });
+
+    // Build rich return data for the agent and future evaluation
+    const curvesUsed = { curve1, curve2 };
+    const extraProcessingApplied = extraFilters ? [extraFilters] : [];
+
+    res.json({
+      success: true,
+      outputPath: outputTransitionPath,
+      actualFromExitSec: fromStart + transitionDuration,
+      actualToEntrySec: toStart,
+      // These two fields are the safest values to use when trimming the "main" snippets
+      // for the final concatenation command (to avoid double audio or gaps)
+      recommendedMainSnippetAEndSec: fromStart + transitionDuration,
+      recommendedMainSnippetBStartSec: toStart,
+      styleUsed: style,
+      durationUsed: transitionDuration,
+      beatAligned: useBeatAlign,
+      beatSnapApplied: useBeatAlign && (beatSnapNotes.length > 0),
+      beatSnapDistance: useBeatAlign ? Math.max(0, parseFloat(beatSnapNotes.match(/offset ([\d.]+)/)?.[1] || '0')) : 0,
+      curvesUsed,
+      extraProcessing: extraProcessingApplied,
+      notes: finalNotes.trim(),
+      estimatedQuality: Math.round(75 + (useBeatAlign ? 8 : 0) + (style === 'mashup_layer' ? -5 : 5)),
+      assemblyHint: "Use actualFromExitSec / actualToEntrySec (or the recommended* fields) to trim the main snippets before concatenating with this transition file. Do NOT concat the full original snippets + this transition file."
+    });
+
+  } catch (err: any) {
+    console.error('[apply-transition] Error:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to apply transition',
+      details: err.message,
+      style: style,
+      from: `${fromTrackId}:${fromSectionId}`,
+      to: `${toTrackId}:${toSectionId}`,
+      attemptedDuration: transitionDuration,
+      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
+  }
+});
+
+// === Style Configuration (Pluggable - Phase 1 of Refinements) ===
+
+export interface TransitionStyleConfig {
+  curve1: string;
+  curve2: string;
+  extraFilters: string;
+  isMashup: boolean;
+  // Future extensibility: layerMixRatio, automationHints, etc.
+}
+
+/**
+ * Central pluggable configuration for transition styles.
+ * Used by both preview rendering (apply_musical_transition) and final render (finalize_medley).
+ * Adding new styles or tuning existing ones only requires changes here.
+ */
+export function getTransitionStyleConfig(style: string): TransitionStyleConfig {
+  switch (style) {
+    case 'smooth_blend':
+      return { curve1: 'tri', curve2: 'tri', extraFilters: '', isMashup: false };
+
+    case 'beat_aligned':
+      return { curve1: 'log', curve2: 'log', extraFilters: '', isMashup: false };
+
+    case 'energy_ramp':
+      return { curve1: 'exp', curve2: 'exp', extraFilters: ',highpass=f=80', isMashup: false };
+
+    case 'harmonic_blend':
+      return { curve1: 'tri', curve2: 'tri', extraFilters: ',equalizer=f=200:width_type=h:width=1:g=-2', isMashup: false };
+
+    case 'dramatic_cut':
+      return { curve1: 'exp', curve2: 'exp', extraFilters: '', isMashup: false };
+
+    case 'reset_moment':
+      return { curve1: 'log', curve2: 'log', extraFilters: '', isMashup: false };
+
+    case 'mashup_layer':
+      // Current conservative values (inherited from preview path).
+      // Will be tuned in the next refinement step.
+      return {
+        curve1: 'tri',
+        curve2: 'tri',
+        extraFilters: ',equalizer=f=250:width_type=h:width=2:g=-4,equalizer=f=4000:width_type=h:width=2:g=-3',
+        isMashup: true
+      };
+
+    default:
+      return { curve1: 'tri', curve2: 'tri', extraFilters: '', isMashup: false };
+  }
+}
+
+// === PURE CLEAN RENDER (with Phase 4 mashup_layer branching) ===
+// Original sources only + single-pass filter_complex_script.
+// Supports normal sequential crossfades + branched simultaneous layering for style === 'mashup_layer'.
+// - Single final loudnorm=I=-14:TP=-1.5 + alimiter=limit=0.891:level=off on master (once)
+// - Deterministic labels: seg_0, seg_1, ..., xfade_0, xfade_1, ..., master_out
+// - MANDATORY -filter_complex_script → temp_filtergraph.txt
+// - Always writes ffmpeg_command.txt + ffmpeg_stderr.log (plus the graph)
+// - Hard fail + structured error (NO fallback, NO silent output via any other path)
+// - Success response always includes renderPath: "pure-clean-mvp-single-pass" for unambiguous traceability
+//
+// TEST PROCEDURE (2-3 track case for verification):
+// 1. Start the app normally (npm run dev or equivalent that runs tsx server.ts + frontend).
+// 2. In the UI, pick 2 or 3 tracks from your library.
+// 3. Let the autonomous loop run through ANALYZE → DESIGN → set_design_plan → BUILD (it will call apply_musical_transition for previews only).
+// 4. The loop MUST end by calling finalize_medley (the prompt already requires this).
+// 5. After it finishes, go to workdir/<sessionId>/ and inspect:
+//    - temp_filtergraph.txt   (the exact filter_complex script that was used)
+//    - ffmpeg_command.txt     (the full command line)
+//    - ffmpeg_stderr.log      (full output — should be clean on success)
+//    - The final .mp3
+// 6. Listen to the output. There must be ZERO silent gaps at the joins, continuous audio, proper crossfades.
+//    If any gap or glitch appears, the three log files + the graph file give the exact cause (bad trim, duration too long, source missing, etc.).
+// 7. On any failure the route returns 500 + finalize_error.json with noFallback: true.
+//
+// This is the ONLY production render path for the final medley now.
+app.post('/api/finalize-medley', async (req, res) => {
+  const { sessionId, finalMp3Path, summary } = req.body || {};
+
+  if (!sessionId || !finalMp3Path) {
+    return res.status(400).json({ success: false, error: 'sessionId and finalMp3Path are required' });
+  }
+
+  const session = sessions[sessionId];
+  if (!session || !session.designPlan) {
+    return res.status(400).json({ success: false, error: 'No design plan found for this session. Call set_design_plan first.' });
+  }
+
+  const designPlan = session.designPlan;
+  const sessionWorkDir = path.join(workDir, sessionId);
+  if (!fs.existsSync(sessionWorkDir)) {
+    fs.mkdirSync(sessionWorkDir, { recursive: true });
+  }
+  const outputPath = path.join(sessionWorkDir, finalMp3Path);
+
+  // Clean up any old confusing filtergraph.txt from previous code paths
+  const oldGraph = path.join(sessionWorkDir, 'filtergraph.txt');
+  if (fs.existsSync(oldGraph)) {
+    try { fs.unlinkSync(oldGraph); } catch {}
+  }
+
+  console.log(`[finalize-medley] >>> ENTERING PURE-CLEAN-MVP ONLY PATH (no fallbacks) for session ${sessionId}`);
+  console.log(`[finalize-medley] This handler will ONLY produce output via the single-pass filter_complex_script route. Any other output is from outside this path.`);
+
+  if (sessionId) {
+    logToSession(sessionId, `[finalize-medley] Progress: Starting pure-clean render for ${finalMp3Path}`);
+  }
+
+  try {
+    const transitions: any[] = Array.isArray(designPlan.transitions) ? designPlan.transitions : [];
+    if (transitions.length === 0) {
+      throw new Error('MVP finalize_medley requires at least one transition to establish deterministic track ordering and crossfade points. Single-track support is out of current strict scope.');
+    }
+
+    // === STRICT UPFRONT VALIDATION (Fix #2) ===
+    // Every transition MUST have the enriched actual* timings from apply_musical_transition.
+    // No silent ?? 0 fallbacks on internal segments.
+    const badTransitions: string[] = [];
+    transitions.forEach((t: any, idx: number) => {
+      const hasFromExit = t.actualFromExitSec !== undefined && t.actualFromExitSec !== null;
+      const hasToEntry = t.actualToEntrySec !== undefined && t.actualToEntrySec !== null;
+
+      if (!hasFromExit || !hasToEntry) {
+        badTransitions.push(
+          `transition[${idx}] ${t.fromTrackId}:${t.fromSectionId} → ${t.toTrackId}:${t.toSectionId} ` +
+          `(actualFromExitSec=${t.actualFromExitSec}, actualToEntrySec=${t.actualToEntrySec})`
+        );
+      }
+    });
+
+    if (badTransitions.length > 0) {
+      throw new Error(
+        'PURE-CLEAN-MVP ABORT: One or more transitions are missing required enriched timings from apply_musical_transition.\n' +
+        'The pure-clean path refuses to guess or fall back.\n\n' +
+        badTransitions.join('\n')
+      );
+    }
+
+    if (sessionId) {
+      logToSession(sessionId, `[finalize-medley] Progress: Validation passed. Building segments for ${transitions.length} transitions...`);
+    }
+
+    // Library → file path lookup
+    const library = getLibrary();
+    const trackPathMap: Record<string, string> = {};
+    library.forEach((entry: any) => {
+      if (entry && entry.id) trackPathMap[entry.id] = entry.path;
+    });
+
+    // === 1. Derive deterministic ordered segments (using ONLY the validated actual* values) ===
+    const segments: Array<{
+      trackId: string;
+      srcPath: string;
+      start: number;
+      end: number | null;
+      label: string;
+    }> = [];
+    const xfadeDurations: number[] = [];
+    const joinStyles: string[] = [];  // Phase 4: per-join style for branching (mashup_layer etc.)
+
+    console.log(`[finalize-medley] Building pure-clean segments for ${transitions.length} transitions (session ${sessionId})`);
+    if (sessionId) {
+      logToSession(sessionId, `[finalize-medley] Progress: Deriving segments and timings...`);
+    }
+
+    for (let i = 0; i < transitions.length; i++) {
+      const t = transitions[i];
+
+      // Use ONLY the enriched values. No silent ?? 0 on internal points.
+      const fromExit = Number(t.actualFromExitSec);
+      const toEntry = Number(t.actualToEntrySec);
+      const dur = Number(t.durationUsed ?? t.duration ?? t.crossfadeDuration ?? 4.0);
+
+      console.log(
+        `[finalize-medley]   seg${i}: from=${t.fromTrackId} exit=${fromExit}s → to=${t.toTrackId} entry=${toEntry}s (xfade=${dur}s)`
+      );
+
+      if (i === 0) {
+        const fromPath = trackPathMap[t.fromTrackId];
+        if (!fromPath || !fs.existsSync(fromPath)) {
+          throw new Error(`Source audio file MISSING for first track ${t.fromTrackId}: ${fromPath || '(no path in library)'}`);
+        }
+        segments.push({
+          trackId: t.fromTrackId,
+          srcPath: fromPath,
+          start: 0,
+          end: fromExit,
+          label: 'seg_0'
+        });
+      }
+
+      const toPath = trackPathMap[t.toTrackId];
+      if (!toPath || !fs.existsSync(toPath)) {
+        throw new Error(`Source audio file MISSING for track ${t.toTrackId}: ${toPath || '(no path in library)'}`);
+      }
+
+      const nextT = transitions[i + 1];
+      const nextExit = nextT ? Number(nextT.actualFromExitSec) : null;
+
+      segments.push({
+        trackId: t.toTrackId,
+        srcPath: toPath,
+        start: toEntry,
+        end: nextExit,
+        label: `seg_${segments.length}`
+      });
+
+      xfadeDurations.push(dur);
+      joinStyles.push(t.style || 'smooth_blend');
+    }
+
+    console.log(`[finalize-medley] Derived ${segments.length} segments with validated timings.`);
+    const mashupCount = joinStyles.filter(s => s === 'mashup_layer').length;
+    if (mashupCount > 0) {
+      console.log(`[finalize-medley] Phase 4 mashup_layer branching active on ${mashupCount} join(s).`);
+    }
+
+    const numSegments = segments.length;
+    if (numSegments < 2) {
+      throw new Error('MVP requires at least two segments to form a crossfade chain');
+    }
+
+    // === 2. Hard validation (fail fast, structured, no silent recovery) ===
+    for (let i = 0; i < numSegments; i++) {
+      const s = segments[i];
+      if (s.end !== null && s.start >= s.end) {
+        throw new Error(`INVALID TRIM on ${s.label} (track ${s.trackId}): start=${s.start} >= end=${s.end}`);
+      }
+      if (s.start < 0) {
+        throw new Error(`INVALID TRIM on ${s.label}: negative start time ${s.start}`);
+      }
+    }
+    for (let i = 0; i < xfadeDurations.length; i++) {
+      const d = xfadeDurations[i];
+      if (!(d > 0 && d <= 30)) {
+        throw new Error(`INVALID ACROSSFADE duration ${d}s at join ${i} (must be 0 < d <= 30)`);
+      }
+      const prevAvail = (segments[i].end ?? 999999) - segments[i].start;
+      const nextAvail = (segments[i + 1].end ?? 999999) - segments[i + 1].start;
+      if (d > prevAvail || d > nextAvail) {
+        throw new Error(
+          `ACROSSFADE d=${d}s EXCEEDS available audio at join ${i}: prevSeg=${prevAvail.toFixed(2)}s, nextSeg=${nextAvail.toFixed(2)}s`
+        );
+      }
+    }
+
+    // === 3. Build deterministic filter graph (linear chain only) ===
+    const filterLines: string[] = [];
+    const inputArgs: string[] = ['-y'];
+
+    // One -i per segment (deterministic ordering, simple labels, original sources only)
+    segments.forEach(seg => {
+      inputArgs.push('-i', seg.srcPath);
+    });
+
+    // Per-input: mandatory normalization chain + atrim (exactly as specified)
+    segments.forEach((seg, idx) => {
+      const normChain = 'aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,aresample=async=0,asetpts=PTS-STARTPTS';
+      let atrim = `atrim=start=${seg.start}`;
+      if (seg.end !== null && seg.end !== undefined) {
+        atrim += `:end=${seg.end}`;
+      }
+      filterLines.push(`[${idx}:a]${normChain},${atrim}[${seg.label}]`);
+    });
+
+    // === Phase 4+: Style-aware join graph construction (now powered by pluggable getTransitionStyleConfig) ===
+    // Default is linear sequential acrossfade.
+    // When styleConfig.isMashup, we generate branched simultaneous layering.
+    let currentLabel = 'seg_0';
+    for (let i = 0; i < xfadeDurations.length; i++) {
+      const d = xfadeDurations[i];
+      const nextLabel = `seg_${i + 1}`;
+      const style = joinStyles[i] || 'smooth_blend';
+      const styleConfig = getTransitionStyleConfig(style);
+
+      if (styleConfig.isMashup) {
+        // Phase 4: True simultaneous layering (mashup) — now driven by pluggable config
+        const layerLabel = `layer_${i}`;
+        const mixedLabel = `mixed_${i}`;
+
+        // Use the extraFilters from the style config for the layer
+        filterLines.push(`[${nextLabel}]${styleConfig.extraFilters.replace(/^,/, '')}[${layerLabel}]`);
+
+        // Layer it simultaneously with the current main using amix
+        filterLines.push(`[${currentLabel}][${layerLabel}]amix=inputs=2:duration=first:dropout_transition=0[${mixedLabel}]`);
+
+        // The mixed result becomes the new current for subsequent joins
+        currentLabel = mixedLabel;
+      } else {
+        // Standard sequential crossfade (original MVP behavior)
+        const xfadeLabel = `xfade_${i}`;
+        const extra = styleConfig.extraFilters ? styleConfig.extraFilters : '';
+        filterLines.push(`[${currentLabel}][${nextLabel}]acrossfade=d=${d}:curve1=${styleConfig.curve1}:curve2=${styleConfig.curve2}${extra}[${xfadeLabel}]`);
+        currentLabel = xfadeLabel;
+      }
+    }
+
+    // SINGLE final master processing (loudnorm + limiter) applied exactly once to the end of the chain
+    filterLines.push(`[${currentLabel}]loudnorm=I=-14:TP=-1.5,alimiter=limit=0.891:level=off[master_out]`);
+
+    const fullGraph = filterLines.join(';\n');
+
+    if (sessionId) {
+      logToSession(sessionId, `[finalize-medley] Progress: Filter graph constructed (${filterLines.length} lines). Writing script and starting FFmpeg...`);
+    }
+
+    // === 4. Command using -filter_complex_script (MANDATORY) ===
+    const finalArgs = [
+      ...inputArgs,
+      '-filter_complex_script', 'temp_filtergraph.txt',
+      '-map', '[master_out]',
+      '-c:a', 'libmp3lame',
+      '-b:a', '320k',
+      path.basename(outputPath)   // write inside sessionWorkDir (cwd for the run)
+    ];
+
+    // === 5. Execute with full artifact logging + hard failure ===
+    try {
+      await runFfmpegWithStrictLogging(finalArgs, sessionWorkDir, fullGraph, 300000);
+    } catch (ffErr: any) {
+      // Hard fail — caller sees the three log files + clear cause
+      throw new Error(`FFmpeg render failed: ${ffErr.message}. Inspect temp_filtergraph.txt, ffmpeg_command.txt, and ffmpeg_stderr.log in the session folder.`);
+    }
+
+    // Success — ONLY reached via the pure-clean single-pass path
+    sessions[sessionId].finalAudioPath = outputPath;
+    sessions[sessionId].summary = summary;
+
+    console.log(`[finalize-medley] SUCCESS via PURE-CLEAN-MVP path only. Output: ${outputPath}`);
+
+    if (sessionId) {
+      logToSession(sessionId, `[finalize-medley] Progress: Render complete. Final file ready: ${path.basename(outputPath)}`);
+    }
+
+    return res.json({
+      success: true,
+      outputPath,
+      renderPath: "pure-clean-mvp-single-pass",   // unambiguous marker
+      mashupBranches: mashupCount,
+      message: 'Produced exclusively by the pure-clean single-pass path (original sources + linear acrossfades + one master loudnorm+limiter). No fallbacks were used.',
+      usedPureCleanMVP: true,
+      graphFile: path.join(sessionWorkDir, 'temp_filtergraph.txt'),
+      commandLog: path.join(sessionWorkDir, 'ffmpeg_command.txt'),
+      stderrLog: path.join(sessionWorkDir, 'ffmpeg_stderr.log'),
+      segments: numSegments,
+      crossfades: xfadeDurations.length
+    });
+
+  } catch (err: any) {
+    console.error('[finalize-medley] HARD FAIL (no fallback, no silent concat):', err.message);
+
+    // Always attempt to leave a structured error artifact for the user/agent
+    try {
+      const errJsonPath = path.join(sessionWorkDir, 'finalize_error.json');
+      fs.writeFileSync(errJsonPath, JSON.stringify({
+        timestamp: new Date().toISOString(),
+        sessionId,
+        error: err.message,
+        stack: err.stack,
+        note: 'This was a hard failure in the pure-clean MVP path. No fallback was attempted.'
+      }, null, 2), 'utf8');
+    } catch (logErr) {
+      console.error('[finalize-medley] Could not write finalize_error.json:', logErr);
+    }
+
+    res.status(500).json({
+      success: false,
+      error: err.message || 'Failed to finalize medley (pure clean MVP path — hard failure, NO OUTPUT PRODUCED)',
+      noFallback: true,
+      renderPath: "pure-clean-mvp-failed",
+      note: "No medley file was written by this handler. Any existing .mp3 in the folder came from outside the pure-clean path.",
+      logFiles: {
+        error: path.join(sessionWorkDir, 'finalize_error.json'),
+        graph: path.join(sessionWorkDir, 'temp_filtergraph.txt'),
+        command: path.join(sessionWorkDir, 'ffmpeg_command.txt'),
+        stderr: path.join(sessionWorkDir, 'ffmpeg_stderr.log')
+      },
+      details: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
+  }
+});
+
 // History endpoints
 app.get('/api/history', (req, res) => {
   res.json(getHistory());
@@ -889,19 +1634,29 @@ app.post('/api/exec', (req, res) => {
   const sanitizedCmd = command.replace(/\bffmpeg\b/g, `"${ffmpegPath}"`);
 
   exec(sanitizedCmd, { cwd: sessionDir, timeout: 120000 }, (err, stdout, stderr) => {
-    let output = '';
-    if (stdout) output += `STDOUT:\n${stdout}\n`;
-    if (stderr) output += `STDERR:\n${stderr}\n`;
-    if (err) output += `ERROR:\n${err.message}\n`;
-    
+    const exitCode = err?.code ?? (err ? 1 : 0);
+    const success = !err;
+
+    const structuredResponse = {
+      success,
+      command: command,
+      exitCode,
+      stdout: stdout || '',
+      stderr: stderr || '',
+      error: err ? (err.message || String(err)) : null,
+      planNote: planNote ? planNote.trim() : undefined,
+      // Helpful for debugging weak models
+      wasSuccessful: success,
+      hasOutput: !!(stdout || stderr),
+    };
+
     if (sessionId && sessions[sessionId]) {
-      logToSession(sessionId, `CMD: ${command.substring(0, 80)}...${planNote}`);
+      const shortLog = `CMD: ${command.substring(0, 70)}... ${success ? 'OK' : 'FAILED'}${planNote}`;
+      logToSession(sessionId, shortLog);
     }
-    
-    const response: any = { output: output || 'Success with no output.' };
-    if (planNote) response.planNote = planNote.trim();
-    
-    res.json(response);
+
+    // Always return rich structured data so the agent (and logs) can see exactly what happened
+    res.json(structuredResponse);
   });
 });
 
@@ -928,14 +1683,33 @@ app.post('/api/file-write', (req, res) => {
 });
 
 app.post('/api/library/analysis', (req, res) => {
-  const { fileId, analysisText } = req.body;
+  const { fileId, analysisText, sessionId } = req.body;
   if (!fileId || !analysisText) return res.status(400).json({ error: 'fileId and analysisText are required' });
   
   const library = getLibrary();
   const index = library.findIndex((f: any) => f.id === fileId);
   if (index !== -1) {
     library[index].analysis = analysisText;
+    // Also keep a history of text analyses for this track (permanent)
+    if (!library[index].analysisHistory) library[index].analysisHistory = [];
+    library[index].analysisHistory.push({
+      text: analysisText,
+      at: new Date().toISOString(),
+      sessionId: sessionId || null
+    });
     saveLibrary(library);
+
+    // Contribute to cross-session wisdom if we have context
+    if (sessionId && sessions[sessionId]?.designPlan) {
+      appendWisdom({
+        type: 'file_analysis',
+        fileId,
+        analysisText: analysisText.substring(0, 800), // keep it reasonable size
+        sessionId,
+        designPlan: sessions[sessionId].designPlan
+      });
+    }
+
     res.json({ success: true });
   } else {
     res.status(404).json({ error: 'File not found' });

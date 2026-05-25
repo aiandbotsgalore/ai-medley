@@ -23,7 +23,9 @@ const DETAILED_DESIGN_INSTRUCTIONS =
 "4. Use recommendedStrategies heavily.\n\n" +
 "**Strict rules:**\n" +
 "- Always use exact timestamps from candidates.\n" +
-"- Never invent timestamps.\n";
+"- Never invent timestamps.\n" +
+"- **Use evaluate_section_pair for any transition you are uncertain about before committing.**\n" +
+"- **Call set_design_plan with your final ordered transition list BEFORE issuing any FFmpeg commands.** This locks in your timestamp decisions and validates scores.\n";
 
 const TOOL_DEFINITIONS = [
   {
@@ -60,12 +62,29 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'set_design_plan',
-    description: 'Lock DESIGN decisions.',
+    description: 'Lock in your DESIGN decisions before starting the BUILD phase. Call this exactly once at the end of DESIGN, after you have chosen your snippet sections and transition pairs. Provide the ordered list of transitions you plan to execute. The system validates each pair and warns you about low-score combinations. You MUST call this before any execute_shell_command calls.',
     parameters: {
       type: 'object',
       properties: {
-        sessionId: { type: 'string' },
-        transitions: { type: 'array' }
+        sessionId: { type: 'string', description: 'The current session ID (provided at session start)' },
+        transitions: {
+          type: 'array',
+          description: 'Ordered list of planned transitions, one per consecutive track pair',
+          items: {
+            type: 'object',
+            properties: {
+              fromTrackId: { type: 'string' },
+              fromSectionId: { type: 'string' },
+              fromExitSec: { type: 'number', description: 'Exact timestamp (seconds) where you will cut/fade out of the source track' },
+              toTrackId: { type: 'string' },
+              toSectionId: { type: 'string' },
+              toEntrySec: { type: 'number', description: 'Exact timestamp (seconds) where you will cut/fade into the destination track' },
+              transitionType: { type: 'string', description: 'e.g. smooth_blend, hard_cut, energy_lift, etc.' },
+              justification: { type: 'string', description: 'Why this specific pair was chosen (score data, coherence reasoning)' }
+            },
+            required: ['fromTrackId', 'fromSectionId', 'fromExitSec', 'toTrackId', 'toSectionId', 'toEntrySec', 'transitionType', 'justification']
+          }
+        }
       },
       required: ['sessionId', 'transitions']
     }
