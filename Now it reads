@@ -1,0 +1,1 @@
+console.log(`Hey! Medley server running on http://localhost:${PORT}`);
