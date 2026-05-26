@@ -739,8 +739,15 @@ export default function App() {
             }
             else if (call.name === 'listen_to_audio') {
               setCurrentPhase('EVALUATE — Analyzing Audio');
-              const entry = lib.find(f => f.path === args.filePath);
-              const displayName = entry?.originalName || String(args.filePath || 'audio-output').split(/[\\/]/).pop() || 'audio-output';
+              const argPath = String(args.filePath || '');
+              const argBasename = argPath.split(/[\\/]/).pop()?.toLowerCase() || '';
+              const entry = lib.find(f =>
+                f.path === argPath ||
+                f.path.replace(/\\/g, '/') === argPath.replace(/\\/g, '/') ||
+                (argBasename && f.path.split(/[\\/]/).pop()?.toLowerCase() === argBasename) ||
+                f.id === argBasename.replace(/\.[^.]+$/, '')
+              );
+              const displayName = entry?.originalName || argBasename || 'audio-output';
 
               addLog(`  🎧 Analyzing: ${displayName}`);
 
