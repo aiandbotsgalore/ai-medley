@@ -744,7 +744,8 @@ export default function App() {
               const entry = lib.find(f =>
                 f.path === argPath ||
                 f.path.replace(/\\/g, '/') === argPath.replace(/\\/g, '/') ||
-                (argBasename && f.path.split(/[\\/]/).pop()?.toLowerCase() === argBasename) ||
+                f.originalName?.toLowerCase() === argBasename ||
+                f.filename?.toLowerCase() === argBasename ||
                 f.id === argBasename.replace(/\.[^.]+$/, '')
               );
               const displayName = entry?.originalName || argBasename || 'audio-output';
@@ -1083,6 +1084,8 @@ export default function App() {
         setExecutionContext(deriveExecutionContext(currentPhase, lastToolThisTurn, result.text || null, iterations));
 
         if (toolResponses.length > 0) {
+          // Reset streak: a successful round-trip means the model is functioning
+          toolFailureStreak = 0;
           result = await sendWithRetry(toolResponses.map((toolResponse: any) => ({
             name: toolResponse.functionResponse.name,
             id: toolResponse.functionResponse.id,
