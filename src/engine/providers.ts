@@ -19,6 +19,7 @@ type ProviderToolResponse = {
 
 type ProviderSession = {
   send: (message: string | ProviderToolResponse[]) => Promise<ProviderResponse>;
+  getHistory: () => unknown[];
 };
 
 type AnalyzeAudioOptions = {
@@ -90,7 +91,8 @@ export function createProviderSession(
   config: MedleyConfig,
   systemInstruction: string,
   tools: unknown[],
-  temperature: number
+  temperature: number,
+  initialHistory?: unknown[]
 ): ProviderSession {
   if (config.provider === 'gemini') {
     const ai = new GoogleGenAI({ apiKey: config.geminiApiKey });
@@ -100,7 +102,8 @@ export function createProviderSession(
         systemInstruction: { parts: [{ text: systemInstruction }] },
         tools: [{ functionDeclarations: tools as never[] }],
         temperature
-      }
+      },
+      history: (initialHistory as any[]) ?? []
     });
 
     return {
@@ -114,15 +117,22 @@ export function createProviderSession(
             args: call.args
           }))
         };
+      },
+      getHistory() {
+        return chat.getHistory() as unknown[];
       }
     };
   }
 
   const messages: Array<Record<string, unknown>> = [
-    { role: 'system', content: systemInstruction }
+    { role: 'system', content: systemInstruction },
+    ...((initialHistory as Array<Record<string, unknown>>) ?? [])
   ];
 
   return {
+    getHistory() {
+      return messages.slice(1);
+    },
     async send(message) {
       if (typeof message === 'string') {
         messages.push({ role: 'user', content: message });
