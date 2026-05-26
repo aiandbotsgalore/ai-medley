@@ -549,6 +549,7 @@ export default function App() {
           const errText = String(err?.message || err);
           const isRateLimit = errText.includes('429') || errText.includes('RESOURCE_EXHAUSTED') || errText.includes('rate limit');
           const isPaymentError = err?.status === 402 || errText.includes('402') || errText.includes('insufficient_quota') || errText.includes('Out of credits');
+          const isModelUnsupported = errText.includes('No endpoints found') || errText.includes('no endpoints found');
 
           if (isRateLimit && retries < 5) {
             const delay = Math.pow(2, retries) * 2000 + Math.random() * 1000;
@@ -581,6 +582,18 @@ export default function App() {
               return sendWithRetry(msg, 0);
             }
 
+            throw err;
+          }
+
+          // Model doesn't exist or doesn't support tool calling on OpenRouter
+          if (isModelUnsupported) {
+            const currentModel = getCurrentModel();
+            addLog(`🚫 Model "${currentModel}" is not supported or doesn't support tool calling on OpenRouter.`);
+            addLog(`   Switching to next fallback model…`);
+            const switched = await switchToNextModel(`OpenRouter returned 404 — model "${currentModel}" has no compatible endpoints`);
+            if (switched) {
+              return sendWithRetry(msg, 0);
+            }
             throw err;
           }
 
