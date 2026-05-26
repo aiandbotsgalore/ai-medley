@@ -1442,6 +1442,35 @@ export default function App() {
                 </div>
               )}
 
+              {/* Checkpoint resume banner */}
+              {checkpoints.length > 0 && (
+                <div className="mt-8 w-full max-w-lg border border-[#00F0FF]/20 bg-[#00F0FF]/[0.03] rounded-xl p-4">
+                  <div className="text-[10px] font-mono uppercase tracking-widest text-[#00F0FF] font-bold mb-3">Interrupted Sessions</div>
+                  {checkpoints.map(cp => (
+                    <div key={cp.sessionId} className="flex items-center gap-3 py-2 border-t border-white/5 first:border-t-0">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[11px] text-white font-mono truncate">{cp.model}</div>
+                        <div className="text-[10px] text-[#555] font-mono">
+                          Iteration {cp.iterations} · {cp.currentPhase || 'Unknown phase'} · {new Date(cp.savedAt).toLocaleString()}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => resumeFromCheckpoint(cp)}
+                        className="shrink-0 px-3 py-1 text-[10px] font-mono uppercase tracking-wider border border-[#00F0FF]/50 text-[#00F0FF] rounded hover:bg-[#00F0FF]/10 transition-all"
+                      >
+                        Resume
+                      </button>
+                      <button
+                        onClick={() => discardCheckpoint(cp.sessionId)}
+                        className="shrink-0 px-3 py-1 text-[10px] font-mono uppercase tracking-wider border border-red-500/40 text-red-400 rounded hover:bg-red-500/10 transition-all"
+                      >
+                        Discard
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
               {/* Start button */}
               <button
                 onClick={startMedley}
