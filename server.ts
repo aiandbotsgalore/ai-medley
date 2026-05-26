@@ -43,9 +43,11 @@ const audioDir = path.join(libraryDir, 'audio');
 const dbPath = path.join(libraryDir, 'db.json');
 const historyPath = path.join(libraryDir, 'history.json');
 const wisdomPath = path.join(libraryDir, 'wisdom.json');
+const checkpointDir = path.join(libraryDir, 'checkpoints');
 
 if (!fs.existsSync(libraryDir)) fs.mkdirSync(libraryDir);
 if (!fs.existsSync(audioDir)) fs.mkdirSync(audioDir);
+if (!fs.existsSync(checkpointDir)) fs.mkdirSync(checkpointDir);
 if (!fs.existsSync(dbPath)) fs.writeFileSync(dbPath, JSON.stringify([]));
 if (!fs.existsSync(historyPath)) fs.writeFileSync(historyPath, JSON.stringify([]));
 if (!fs.existsSync(wisdomPath)) fs.writeFileSync(wisdomPath, JSON.stringify([]));
@@ -801,6 +803,41 @@ app.delete('/api/library/:id', (req, res) => {
   }
   res.json({ success: true });
 });
+
+// ── Checkpoint endpoints ──────────────────────────────────────────────────────
+
+app.post('/api/checkpoint', express.json({ limit: '50mb' }), (req: any, res: any) => {
+  const { sessionId } = req.body;
+  if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+  const filePath = path.join(checkpointDir, `${sessionId}.json`);
+  fs.writeFileSync(filePath, JSON.stringify({ ...req.body, savedAt: new Date().toISOString() }));
+  res.json({ ok: true });
+});
+
+app.get('/api/checkpoints', (_req: any, res: any) => {
+  const checkpoints = fs.readdirSync(checkpointDir)
+    .filter((f: string) => f.endsWith('.json'))
+    .map((f: string) => {
+      try { return JSON.parse(fs.readFileSync(path.join(checkpointDir, f), 'utf8')); }
+      catch { return null; }
+    })
+    .filter(Boolean);
+  res.json(checkpoints);
+});
+
+app.get('/api/checkpoint/:sessionId', (req: any, res: any) => {
+  const p = path.join(checkpointDir, `${req.params.sessionId}.json`);
+  if (!fs.existsSync(p)) return res.status(404).json({ error: 'not found' });
+  res.json(JSON.parse(fs.readFileSync(p, 'utf8')));
+});
+
+app.delete('/api/checkpoint/:sessionId', (req: any, res: any) => {
+  const p = path.join(checkpointDir, `${req.params.sessionId}.json`);
+  if (fs.existsSync(p)) fs.unlinkSync(p);
+  res.json({ ok: true });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 app.get('/api/audio-raw/:id', (req, res) => {
   const library = getLibrary();
