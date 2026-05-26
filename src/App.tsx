@@ -372,22 +372,26 @@ export default function App() {
   };
 
   // ── Autonomous Medley Loop ──
-  const runAutonomousLoop = async (lib: LibraryFile[], signal: AbortSignal, design: MedleyDesignPayload | null) => {
+  const runAutonomousLoop = async (lib: LibraryFile[], signal: AbortSignal, design: MedleyDesignPayload | null, resumeState?: CheckpointData) => {
     if (!hasProviderKey) {
       setErrorMessage(config.provider === 'gemini' ? 'Gemini API key is not set.' : 'OpenRouter API key is not set.');
       setStatus('error');
       return;
     }
 
-    const sid = Math.random().toString(36).substring(7);
+    const sid = resumeState?.sessionId ?? Math.random().toString(36).substring(7);
     setSessionId(sid);
     sessionIdRef.current = sid;
-    setLogs([]);
-    setSummary(null);
-    setMetrics(null);
-    setIteration(null);
-    setExecutionContext(null);
-    setRenderProgress(null);
+    if (!resumeState) {
+      setLogs([]);
+      setSummary(null);
+      setMetrics(null);
+      setIteration(null);
+      setExecutionContext(null);
+      setRenderProgress(null);
+    } else {
+      addLog(`🔁 Resuming session ${sid} from iteration ${resumeState.iterations}`);
+    }
 
     // === Real-Time Progress Stream (SSE) ===
     if (sseRef.current) {
@@ -449,7 +453,7 @@ export default function App() {
         ]
     ).filter((m, i, arr) => arr.indexOf(m) === i); // dedupe
 
-    let currentModelIndex = 0;
+    let currentModelIndex = resumeState?.currentModelIndex ?? 0;
     let toolFailureStreak = 0;
     const MAX_TOOL_FAILURE_STREAK = 3;
 
@@ -463,35 +467,36 @@ export default function App() {
     const LOCAL_REJECTION_THRESHOLD = 0.45;
     const LOCAL_AUTO_ACCEPT_THRESHOLD = 0.80;
 
-    let evaluateCallCount = 0;
-    let llmCallCount = 0;
-    let refinementPassCount = 0;
-    let expensiveLLMCalls = 0;   // generation / complex reasoning
-    let cheapLLMCalls = 0;       // classification / simple scoring
+    let evaluateCallCount = resumeState?.evaluateCallCount ?? 0;
+    let llmCallCount = resumeState?.llmCallCount ?? 0;
+    let refinementPassCount = resumeState?.refinementPassCount ?? 0;
+    let expensiveLLMCalls = resumeState?.expensiveLLMCalls ?? 0;   // generation / complex reasoning
+    let cheapLLMCalls = resumeState?.cheapLLMCalls ?? 0;           // classification / simple scoring
 
     // Phase 2 stats
-    let autoAcceptedCount = 0;
-    let autoRejectedCount = 0;
+    let autoAcceptedCount = resumeState?.autoAcceptedCount ?? 0;
+    let autoRejectedCount = resumeState?.autoRejectedCount ?? 0;
 
     // Simple in-session cache for section pair evaluations (fromSectionId + toSectionId)
-    const sectionPairCache = new Map<string, any>();
+    const sectionPairCache = new Map<string, any>(resumeState?.sectionPairCacheEntries ?? []);
 
     // Phase 1: Per-source-section Top-N=5 tracking (in-session)
-    const evaluationsPerFromSection = new Map<string, number>();
+    const evaluationsPerFromSection = new Map<string, number>(resumeState?.evaluationsPerFromSectionEntries ?? []);
 
     const getCurrentModel = () => fallbackModels[Math.min(currentModelIndex, fallbackModels.length - 1)];
 
-    const createSessionForModel = (model: string) => {
+    const createSessionForModel = (model: string, history?: unknown[]) => {
       const tempConfig = { ...config, model };
       return createProviderSession(
         tempConfig,
         buildSystemPrompt(lib, tempConfig, design, sid),
         tempConfig.provider === 'gemini' ? getToolDeclarations() : getOpenRouterTools(),
-        tempConfig.temperature
+        tempConfig.temperature,
+        history
       );
     };
 
-    let session = createSessionForModel(getCurrentModel());
+    let session = createSessionForModel(getCurrentModel(), resumeState?.chatHistory);
     setActiveModel(getCurrentModel());
 
     // Wire up manual force switch from header
@@ -600,16 +605,20 @@ export default function App() {
         }
       };
 
-      let result = await sendWithRetry('Begin the medley architect process. Analyze the library first, then design and build the medley.');
+      const initialMessage = resumeState
+        ? `Session resumed from checkpoint at iteration ${resumeState.iterations}. The conversation history above contains all previous work. Please assess the current state and continue immediately from where we left off.`
+        : 'Begin the medley architect process. Analyze the library first, then design and build the medley.';
+
+      let result = await sendWithRetry(initialMessage);
       llmCallCount++;
-      expensiveLLMCalls++; // initial kickoff is expensive
+      expensiveLLMCalls++;
 
       if (result.usage?.total_tokens) {
         addLog(`   [Tokens] Prompt: ${result.usage.prompt_tokens ?? '?'}, Completion: ${result.usage.completion_tokens ?? '?'}, Total: ${result.usage.total_tokens}`);
       }
 
       let loopFinished = false;
-      let iterations = 0;
+      let iterations = resumeState?.iterations ?? 0;
       const MAX_ITERATIONS = 50;
 
       // Fire-and-forget checkpoint save — called after each completed model round-trip.
@@ -1135,6 +1144,23 @@ export default function App() {
     setRenderProgress(null);
     abortRef.current?.abort();
     abortRef.current = null;
+    setTimeout(fetchCheckpoints, 600);
+  };
+
+  const resumeFromCheckpoint = async (checkpoint: CheckpointData) => {
+    if (status !== 'idle') return;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setStatus('running');
+    setCurrentPhase(checkpoint.currentPhase || '');
+    setMedleyDesign(checkpoint.design);
+    setIteration({ current: checkpoint.iterations, max: 50 });
+    await runAutonomousLoop(library, controller.signal, checkpoint.design, checkpoint);
+  };
+
+  const discardCheckpoint = async (sessionId: string) => {
+    await fetch(`/api/checkpoint/${sessionId}`, { method: 'DELETE' });
+    await fetchCheckpoints();
   };
 
   const loadFromHistory = (entry: HistoryEntry) => {
