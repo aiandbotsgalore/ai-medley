@@ -14,7 +14,7 @@ interface MetricsSidebarProps {
   sessionId: string | null;
 }
 
-function MetricBar({ label, value }: { label: string; value: number | undefined }) {
+function MetricBar({ label, value, isRunning }: { label: string; value: number | undefined; isRunning?: boolean }) {
   const pct = value ?? 0;
   const hasValue = value !== undefined && value > 0;
   const color = pct >= 80 ? '#00F0FF' : pct >= 50 ? '#F0C800' : '#F27D26';
@@ -23,17 +23,29 @@ function MetricBar({ label, value }: { label: string; value: number | undefined 
     <div>
       <div className="flex justify-between text-[10px] mb-1.5">
         <span className="text-[#888] font-medium">{label}</span>
-        <span className="font-mono" style={{ color: hasValue ? color : '#444' }}>{hasValue ? `${pct}%` : '—'}</span>
+        <span className="font-mono" style={{ color: hasValue ? color : '#444' }}>
+          {hasValue ? `${pct}%` : isRunning ? <span className="animate-pulse text-[#2A2A2A]">···</span> : '—'}
+        </span>
       </div>
       <div className="h-1.5 bg-[#1A1A1A] rounded-full overflow-hidden">
-        <div
-          className="h-full rounded-full transition-all duration-700 ease-out"
-          style={{
-            width: `${pct}%`,
-            background: hasValue ? `linear-gradient(90deg, ${color}88, ${color})` : '#222',
-            boxShadow: hasValue ? `0 0 8px ${color}40` : 'none'
-          }}
-        />
+        {isRunning && !hasValue ? (
+          <div
+            className="h-full rounded-full animate-pulse"
+            style={{
+              width: '45%',
+              background: 'linear-gradient(90deg, #1C1C1C, #2C2C2C, #1C1C1C)',
+            }}
+          />
+        ) : (
+          <div
+            className="h-full rounded-full transition-all duration-700 ease-out"
+            style={{
+              width: `${pct}%`,
+              background: hasValue ? `linear-gradient(90deg, ${color}88, ${color})` : '#222',
+              boxShadow: hasValue ? `0 0 8px ${color}40` : 'none'
+            }}
+          />
+        )}
       </div>
     </div>
   );
@@ -42,6 +54,7 @@ function MetricBar({ label, value }: { label: string; value: number | undefined 
 export default function MetricsSidebar({ metrics, summary, status, sessionId }: MetricsSidebarProps) {
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
+  const isRunning = status === 'running';
 
   const exportAudio = async () => {
     if (!sessionId || isExporting) return;
@@ -89,11 +102,19 @@ export default function MetricsSidebar({ metrics, summary, status, sessionId }: 
   return (
     <aside className="w-80 border-l border-[#1A1A1A] bg-[#090909] flex flex-col shrink-0">
       <div className="p-5 border-b border-[#1A1A1A]">
-        <div className="text-[10px] uppercase tracking-widest text-[#555] mb-5 font-semibold">Refinement Metrics</div>
+        <div className="flex items-center justify-between mb-5">
+          <div className="text-[10px] uppercase tracking-widest text-[#555] font-semibold">Refinement Metrics</div>
+          {isRunning && (
+            <div className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+              <span className="text-[9px] font-mono text-[#444] uppercase tracking-wide">Computing</span>
+            </div>
+          )}
+        </div>
         <div className="space-y-4">
-          <MetricBar label="EMOTIONAL ARC" value={metrics?.emotionalArc} />
-          <MetricBar label="TRANSITION SMOOTHNESS" value={metrics?.transitionSmoothness} />
-          <MetricBar label="PERFORMER IDENTITY" value={metrics?.performerIdentity} />
+          <MetricBar label="EMOTIONAL ARC" value={metrics?.emotionalArc} isRunning={isRunning} />
+          <MetricBar label="TRANSITION SMOOTHNESS" value={metrics?.transitionSmoothness} isRunning={isRunning} />
+          <MetricBar label="PERFORMER IDENTITY" value={metrics?.performerIdentity} isRunning={isRunning} />
         </div>
         {metrics?.overallScore !== undefined && metrics.overallScore > 0 && (
           <div className="mt-5 pt-4 border-t border-[#1A1A1A]">
@@ -114,6 +135,14 @@ export default function MetricsSidebar({ metrics, summary, status, sessionId }: 
           {summary ? (
             <div className="text-[12px] leading-relaxed text-[#999] italic">
               "{summary}"
+            </div>
+          ) : isRunning ? (
+            <div className="space-y-2">
+              <div className="h-2.5 bg-[#1A1A1A] rounded animate-pulse w-full" />
+              <div className="h-2.5 bg-[#1A1A1A] rounded animate-pulse w-4/5" />
+              <div className="h-2.5 bg-[#1A1A1A] rounded animate-pulse w-3/5" />
+              <div className="mt-3 h-2.5 bg-[#1A1A1A] rounded animate-pulse w-full" />
+              <div className="h-2.5 bg-[#1A1A1A] rounded animate-pulse w-2/3" />
             </div>
           ) : (
             <div className="text-[11px] text-[#333] font-mono italic">
