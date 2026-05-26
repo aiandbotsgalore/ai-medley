@@ -13,6 +13,27 @@ import MedleyMatchPanel from './components/MedleyMatchPanel';
 import type { MedleyDesignPayload } from './engine/medleyIntelligence';
 
 type AppStatus = 'idle' | 'uploading' | 'running' | 'completed' | 'error';
+
+type CheckpointData = {
+  sessionId: string;
+  savedAt: string;
+  provider: string;
+  model: string;
+  iterations: number;
+  currentModelIndex: number;
+  llmCallCount: number;
+  refinementPassCount: number;
+  evaluateCallCount: number;
+  expensiveLLMCalls: number;
+  cheapLLMCalls: number;
+  autoAcceptedCount: number;
+  autoRejectedCount: number;
+  currentPhase: string;
+  design: any | null;
+  chatHistory: unknown[];
+  sectionPairCacheEntries: [string, unknown][];
+  evaluationsPerFromSectionEntries: [string, number][];
+};
 const CONFIG_STORAGE_KEY = 'ai-medley-config-v1';
 const AUDIO_ANALYSIS_PROMPT = 'Analyze this audio file and provide BPM if discernible, musical key, genre or mood, energy level from 1 to 10, and a concise 2 to 3 sentence structural summary. If this is a medley output, also mention any obvious transition or loudness issues.';
 
@@ -129,13 +150,20 @@ export default function App() {
   const [showConfig, setShowConfig] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null);
   const [iteration, setIteration] = useState<{ current: number; max: number } | null>(null);
+  const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<'workshop' | 'history'>('workshop');
   const [medleyDesign, setMedleyDesign] = useState<MedleyDesignPayload | null>(null);
-  const [currentPhase, setCurrentPhase] = useState<string>(''); // ANALYZE | DESIGN | BUILD | EVALUATE | REFINE | FINISH
+  const [currentPhase, setCurrentPhaseState] = useState<string>(''); // ANALYZE | DESIGN | BUILD | EVALUATE | REFINE | FINISH
+  const currentPhaseRef = useRef<string>('');
+  const setCurrentPhase = useCallback((phase: string) => {
+    currentPhaseRef.current = phase;
+    setCurrentPhaseState(phase);
+  }, []);
   const [preAnalysisProgress, setPreAnalysisProgress] = useState<{ current: number; total: number } | null>(null);
   const [renderProgress, setRenderProgress] = useState<{ stage: string; percent: number; elapsedSeconds?: number; remainingSecondsEstimate?: number | null } | null>(null);
   const [activeModel, setActiveModel] = useState<string>('');
   const [executionContext, setExecutionContext] = useState<ExecutionContextSummary | null>(null);
+  const [checkpoints, setCheckpoints] = useState<CheckpointData[]>([]);
 
   // Used for manual "Force Model Switch" button from the header
   const forceModelSwitchRef = useRef<(() => void) | null>(null);
@@ -186,9 +214,18 @@ export default function App() {
     }
   }, []);
 
-  useEffect(() => { 
+  useEffect(() => {
     fetchLibrary();
   }, [fetchLibrary]);
+
+  const fetchCheckpoints = useCallback(async () => {
+    try {
+      const res = await fetch('/api/checkpoints');
+      if (res.ok) setCheckpoints(await res.json());
+    } catch {}
+  }, []);
+
+  useEffect(() => { fetchCheckpoints(); }, [fetchCheckpoints]);
 
   useEffect(() => {
     let cancelled = false;
@@ -396,14 +433,21 @@ export default function App() {
     };
 
     // === Model Fallback System (for free / unreliable models) ===
-    const fallbackModels = [
-      config.model, // start with whatever the user selected
-      'qwen/qwen3-coder:free',
-      'deepseek/deepseek-v4-flash:free',
-      'nousresearch/hermes-3-llama-3.1-405b:free',
-      'nvidia/nemotron-3-super-120b-a12b:free',
-      'meta-llama/llama-3.3-70b-instruct:free',
-    ].filter((m, i, arr) => arr.indexOf(m) === i); // dedupe
+    const fallbackModels = (config.provider === 'gemini'
+      ? [
+          config.model,
+          'gemini-2.5-flash',
+          'gemini-2.5-pro',
+        ]
+      : [
+          config.model,
+          'qwen/qwen3-coder:free',
+          'deepseek/deepseek-v4-flash:free',
+          'nousresearch/hermes-3-llama-3.1-405b:free',
+          'nvidia/nemotron-3-super-120b-a12b:free',
+          'meta-llama/llama-3.3-70b-instruct:free',
+        ]
+    ).filter((m, i, arr) => arr.indexOf(m) === i); // dedupe
 
     let currentModelIndex = 0;
     let toolFailureStreak = 0;
@@ -451,9 +495,10 @@ export default function App() {
     setActiveModel(getCurrentModel());
 
     // Wire up manual force switch from header
+    let forceModelSwitchPending = false;
     forceModelSwitchRef.current = () => {
       if (statusRef.current === 'running') {
-        toolFailureStreak = MAX_TOOL_FAILURE_STREAK;
+        forceModelSwitchPending = true;
         addLog('⚡ Manual model switch requested from header');
       }
     };
@@ -567,8 +612,44 @@ export default function App() {
       let iterations = 0;
       const MAX_ITERATIONS = 50;
 
+      // Fire-and-forget checkpoint save — called after each completed model round-trip.
+      // Closes over `iterations`, `session`, and all counters as live bindings.
+      const saveCheckpoint = () => {
+        const data: CheckpointData = {
+          sessionId: sid,
+          savedAt: new Date().toISOString(),
+          provider: config.provider,
+          model: getCurrentModel(),
+          iterations,
+          currentModelIndex,
+          llmCallCount,
+          refinementPassCount,
+          evaluateCallCount,
+          expensiveLLMCalls,
+          cheapLLMCalls,
+          autoAcceptedCount,
+          autoRejectedCount,
+          currentPhase: currentPhaseRef.current,
+          design,
+          chatHistory: session.getHistory(),
+          sectionPairCacheEntries: [...sectionPairCache.entries()],
+          evaluationsPerFromSectionEntries: [...evaluationsPerFromSection.entries()],
+        };
+        fetch('/api/checkpoint', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        }).catch(() => {});
+      };
+
       while (!loopFinished && iterations < MAX_ITERATIONS) {
         if (signal.aborted) break;
+
+        // === Immediate manual model switch (from SWITCH MODEL button) ===
+        if (forceModelSwitchPending) {
+          forceModelSwitchPending = false;
+          await switchToNextModel('Manual switch requested by user');
+        }
 
         // === Phase 1 Hard Limits (checked BEFORE incrementing) ===
         if (refinementPassCount >= MAX_REFINEMENT_PASSES) {
@@ -592,13 +673,33 @@ export default function App() {
         const functionCalls = result.functionCalls;
         if (!functionCalls || functionCalls.length === 0) {
           if (!result.text) {
-            result = await sendWithRetry('Please proceed with the next step.');
+            // Completely empty response — count as failure and nudge
+            toolFailureStreak++;
+            addLog(`⚠️ Model returned no tool calls and no text (streak: ${toolFailureStreak}/${MAX_TOOL_FAILURE_STREAK})`);
+            if (toolFailureStreak >= MAX_TOOL_FAILURE_STREAK) {
+              const switched = await switchToNextModel(`Model returned empty responses ${toolFailureStreak} times`);
+              if (!switched) break;
+            }
+            result = await sendWithRetry('Please proceed with the next step. You must call a tool.');
             llmCallCount++;
-            cheapLLMCalls++; // continuation nudge is relatively cheap
+            cheapLLMCalls++;
             if (result.usage?.total_tokens) {
               addLog(`   [Tokens] Prompt: ${result.usage.prompt_tokens ?? '?'}, Completion: ${result.usage.completion_tokens ?? '?'}, Total: ${result.usage.total_tokens}`);
             }
             continue;
+          }
+          // Text-only response with no tool call — this model may not support function calling.
+          // Count toward streak so repeated text-only outputs trigger a model switch.
+          toolFailureStreak++;
+          addLog(`⚠️ Model returned text without a tool call (streak: ${toolFailureStreak}/${MAX_TOOL_FAILURE_STREAK}). May not support function calling.`);
+          if (toolFailureStreak >= MAX_TOOL_FAILURE_STREAK) {
+            const switched = await switchToNextModel(`Model returned text-only responses ${toolFailureStreak} times — likely no tool/function-calling support`);
+            if (switched) {
+              result = await sendWithRetry('Please continue. You must use tool calls to make progress.');
+              llmCallCount++;
+              cheapLLMCalls++;
+              continue;
+            }
           }
           break;
         }
@@ -880,6 +981,7 @@ export default function App() {
                 body: JSON.stringify({ sessionId: sid, finalAudioPath: args.finalMp3Path, summary: args.summary }),
                 signal
               });
+              fetch(`/api/checkpoint/${sid}`, { method: 'DELETE' }).catch(() => {});
               setSummary(args.summary);
               setStatus('completed');
               loopFinished = true;
@@ -920,6 +1022,7 @@ export default function App() {
                 signal
               });
 
+              fetch(`/api/checkpoint/${sid}`, { method: 'DELETE' }).catch(() => {});
               setSummary(args.summary);
               setStatus('completed');
               loopFinished = true;
@@ -972,6 +1075,7 @@ export default function App() {
           if (result.usage?.total_tokens) {
             addLog(`   [Tokens] Prompt: ${result.usage.prompt_tokens ?? '?'}, Completion: ${result.usage.completion_tokens ?? '?'}, Total: ${result.usage.total_tokens}`);
           }
+          if (!loopFinished) saveCheckpoint();
         }
       }
 
@@ -987,6 +1091,7 @@ export default function App() {
     } catch (e: any) {
       if (e.name === 'AbortError') {
         setStatus('idle');
+        setRunStartedAt(null);
         setLogs([]);
         setMetrics(null);
         setSummary(null);
@@ -1120,6 +1225,7 @@ export default function App() {
     }
     abortRef.current = new AbortController();
     setStatus('running');
+    setRunStartedAt(Date.now());
     addLog('🔍 Checking system integrity...');
     
     let healthy = false;
@@ -1327,7 +1433,7 @@ export default function App() {
               )}
             </div>
           ) : (
-            <LogPanel status={status} logs={logs} iteration={iteration} />
+            <LogPanel status={status} logs={logs} iteration={iteration} runStartedAt={runStartedAt} />
           )}
         </section>
 
