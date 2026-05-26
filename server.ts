@@ -147,7 +147,14 @@ function getLibrary(): any[] {
 }
 
 function saveLibrary(data: any[]) {
-  fs.writeFileSync(dbPath, JSON.stringify(data, null, 2));
+  const tmpPath = dbPath + '.tmp';
+  try {
+    fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2));
+    fs.renameSync(tmpPath, dbPath);
+  } catch (e) {
+    console.error('[saveLibrary] Atomic write failed, falling back:', e);
+    fs.writeFileSync(dbPath, JSON.stringify(data, null, 2));
+  }
 }
 
 function getHistory(): any[] {
@@ -216,9 +223,15 @@ function snapToNearestBeat(time: number, beats: number[]): { snappedTime: number
 }
 
 function execFfmpeg(args: string[], timeout = 30000): Promise<string> {
-  return new Promise((resolve) => {
-    execFile(ffmpegPath!, args, { timeout, windowsHide: true }, (_err, stdout, stderr) => {
-      resolve(`${stdout || ''}${stderr || ''}`);
+  return new Promise((resolve, reject) => {
+    execFile(ffmpegPath!, args, { timeout, windowsHide: true }, (err, stdout, stderr) => {
+      const output = `${stdout || ''}${stderr || ''}`;
+      if (err) {
+        const e = new Error(`FFmpeg failed (exit ${(err as any).code ?? 'unknown'}): ${stderr?.slice(-400) || err.message}`);
+        (e as any).ffmpegOutput = output;
+        return reject(e);
+      }
+      resolve(output);
     });
   });
 }
@@ -405,7 +418,7 @@ function parseDuration(output: string) {
 
 async function queryTrackDuration(filePath: string): Promise<number> {
   try {
-    const output = await execFfmpeg(['-i', filePath]);
+    const output = await execFfmpeg(['-hide_banner', '-i', filePath, '-f', 'null', '-'], 15000);
     const duration = parseDuration(output);
     if (duration > 0) return duration;
     throw new Error('Parsed duration was 0');
@@ -675,6 +688,26 @@ for (const entry of getHistory()) {
   }
 }
 
+// Prune completed/errored sessions older than 24h from memory (persisted in history.json)
+const pruneOldSessions = () => {
+  const cutoff = Date.now() - (24 * 60 * 60 * 1000);
+  const history = getHistory();
+  for (const sid of Object.keys(sessions)) {
+    const session = sessions[sid];
+    if (session.status === 'completed' || session.status === 'error') {
+      const historyEntry = history.find((e: any) => e.id === sid);
+      if (historyEntry) {
+        const completedAt = new Date(historyEntry.completedAt).getTime();
+        if (completedAt < cutoff) {
+          delete sessions[sid];
+        }
+      }
+    }
+  }
+};
+pruneOldSessions();
+setInterval(pruneOldSessions, 60 * 60 * 1000);
+
 // SSE connections for real-time streaming
 const sseClients: Record<string, express.Response[]> = {};
 
@@ -700,6 +733,10 @@ function logToSession(sessionId: string, msg: string) {
   if (!sessions[sessionId]) return;
   const logEntry = `[${new Date().toISOString()}] ${msg}`;
   sessions[sessionId].logs.push(logEntry);
+  // Prevent unbounded memory growth — keep only the last 300 log entries per session
+  if (sessions[sessionId].logs.length > 300) {
+    sessions[sessionId].logs = sessions[sessionId].logs.slice(-300);
+  }
   broadcastToSession(sessionId, 'log', { message: logEntry });
   console.log(`[Session ${sessionId}] ${msg}`);
 }
@@ -1253,9 +1290,16 @@ app.post('/api/apply-transition', async (req, res) => {
       toIntelligence = cachedTrackIntelligence.tracks.find((t: TrackIntelligence) => t.profile.trackId === toTrackId) || null;
     }
 
-    // Determine base cut points from design plan or defaults
-    let fromStart = plannedTransition?.fromExitSec ? Math.max(0, plannedTransition.fromExitSec - transitionDuration) : 0;
-    let toStart = plannedTransition?.toEntrySec || 0;
+    // Determine base cut points: explicit design plan values → section timestamps → 0
+    const fromSection = fromIntelligence?.sections?.find((s: any) => s.sectionId === fromSectionId);
+    const toSection = toIntelligence?.sections?.find((s: any) => s.sectionId === toSectionId);
+
+    let fromStart = plannedTransition?.fromExitSec
+      ? Math.max(0, plannedTransition.fromExitSec - transitionDuration)
+      : (fromSection?.endSec != null ? Math.max(0, fromSection.endSec - transitionDuration) : 0);
+    let toStart = (plannedTransition?.toEntrySec != null)
+      ? plannedTransition.toEntrySec
+      : (toSection?.startSec ?? 0);
 
     // === Beat Snapping (if requested and we have beat data) ===
     let beatSnapNotes = '';
@@ -1696,19 +1740,26 @@ app.post('/api/finalize-medley', async (req, res) => {
           RENDER_CONFIG.MIN_TAIL_SEC,
           Math.min(RENDER_CONFIG.MAX_TAIL_SEC, RENDER_CONFIG.DEFAULT_TAIL_SEC)
         );
+        // Prefer section's actual endSec over the fixed tailLimit cap
+        let sectionEndSec: number | undefined;
+        if (cachedTrackIntelligence && t.toSectionId) {
+          const toTrackIntel = cachedTrackIntelligence.tracks.find((tr: any) => tr.profile.trackId === t.toTrackId);
+          const toSect = toTrackIntel?.sections?.find((s: any) => s.sectionId === t.toSectionId);
+          if (toSect?.endSec != null) sectionEndSec = toSect.endSec;
+        }
+        const effectiveTailEnd = sectionEndSec ?? (toEntry + tailLimit);
+
         if (toDuration !== undefined && toDuration > 0) {
-          // Cap at entry + tailLimit, but don't exceed the track's actual duration
-          const cappedEnd = Math.min(toDuration, toEntry + tailLimit);
+          const cappedEnd = Math.min(toDuration, effectiveTailEnd);
           nextExit = cappedEnd;
           console.log(
             `[finalize-medley] Adaptive tail: last segment ${t.toTrackId} capped at ${cappedEnd.toFixed(2)}s ` +
-            `(entry=${toEntry}s + tailLimit=${tailLimit}s, trackDuration=${toDuration.toFixed(2)}s)`
+            `(sectionEndSec=${sectionEndSec?.toFixed(2) ?? 'n/a'}, entry=${toEntry}s, tailLimit=${tailLimit}s, trackDuration=${toDuration.toFixed(2)}s)`
           );
         } else {
-          // No duration info — apply a hard tail cap from entry point
-          nextExit = toEntry + tailLimit;
+          nextExit = effectiveTailEnd;
           console.warn(
-            `[finalize-medley] Adaptive tail: no duration for ${t.toTrackId}, hard-capping at entry+${tailLimit}s = ${nextExit.toFixed(2)}s`
+            `[finalize-medley] Adaptive tail: no duration for ${t.toTrackId}, using effectiveTailEnd=${nextExit.toFixed(2)}s`
           );
         }
 
