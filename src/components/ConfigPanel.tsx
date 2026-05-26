@@ -24,8 +24,8 @@ export interface MedleyConfig {
 }
 
 export const DEFAULT_CONFIG: MedleyConfig = {
-  provider: 'gemini',
-  model: 'gemini-2.5-pro',
+  provider: 'openrouter',
+  model: 'openrouter/owl-alpha',
   geminiApiKey: '',
   openrouterApiKey: '',
   audioAnalysisMode: 'local',

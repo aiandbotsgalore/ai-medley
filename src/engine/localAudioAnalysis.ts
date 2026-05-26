@@ -139,9 +139,20 @@ function minMaxAverage(values: number[]) {
 }
 
 function execFfmpeg(args: string[], timeout = 30000): Promise<string> {
-  return new Promise(resolve => {
-    execFile(ffmpegPath!, args, { timeout, windowsHide: true }, (_err, stdout, stderr) => {
-      resolve(`${stdout || ''}${stderr || ''}`);
+  return new Promise((resolve, reject) => {
+    execFile(ffmpegPath!, args, { timeout, windowsHide: true }, (err, stdout, stderr) => {
+      const output = `${stdout || ''}${stderr || ''}`;
+      if (err) {
+        // Hard reject only on binary missing or process killed (timeout)
+        if ((err as any).code === 'ENOENT' || (err as any).killed) {
+          return reject(new Error(`FFmpeg binary error: ${err.message}`));
+        }
+        // For probe-style calls, FFmpeg exits non-zero but still prints Duration to stderr
+        // Resolve with output so parseDuration can still work
+        resolve(output);
+      } else {
+        resolve(output);
+      }
     });
   });
 }
@@ -676,6 +687,9 @@ export async function analyzeLocalAudioFile(input: {
   const { filePath, workDir } = input;
   const probeOutput = await execFfmpeg(['-hide_banner', '-i', filePath, '-f', 'null', '-'], 15000);
   const duration = parseDuration(probeOutput);
+  if (duration === 0) {
+    throw new Error(`Could not determine duration for ${filePath} — FFmpeg probe returned no Duration header. File may be corrupt or unsupported.`);
+  }
   const bitrate = extractNumber(probeOutput, /bitrate:\s*(\d+)\s*kb\/s/);
   const sampleRate = extractNumber(probeOutput, /(\d+)\s*Hz/);
   const volumeOutput = await execFfmpeg(['-hide_banner', '-i', filePath, '-af', 'volumedetect', '-f', 'null', '-'], 30000);

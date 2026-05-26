@@ -1,5 +1,59 @@
 [
   {
+    "id": "rovvkq",
+    "completedAt": "2026-05-26T16:07:59.522Z",
+    "summary": "3-track medley: Lucky (Radiohead) full track → GoodinGoodbye intro hook → Eden late climax + outro. Smooth transitions with reset_moment into high-energy lift, smooth_blend into climax, and internal Eden extension for satisfying closure. Estimated duration ~7.5 minutes.",
+    "finalAudioPath": "G:\\ai-medley--main\\workdir\\rovvkq\\G:\\ai-medley--main\\workdir\\rovvkq\\medley_final.mp3",
+    "metrics": {
+      "emotionalArc": 0.82,
+      "transitionSmoothness": 0.88,
+      "performerIdentity": 0.9,
+      "overallScore": 0.85,
+      "iteration": 1,
+      "phase": "design"
+    },
+    "designPlan": {
+      "transitions": [
+        {
+          "fromTrackId": "b555f3f2-d87e-4405-b295-7a1f3dbfc3f7",
+          "fromSectionId": "b555f3f2-d87e-4405-b295-7a1f3dbfc3f7_section_03",
+          "toTrackId": "7befaf89-6228-4d27-af82-21fee1d3d3c6",
+          "toSectionId": "7befaf89-6228-4d27-af82-21fee1d3d3c6_section_01",
+          "style": "reset_moment",
+          "duration": 5,
+          "fromExitSec": 239.4,
+          "toEntrySec": 0,
+          "actualFromExitSec": 5,
+          "actualToEntrySec": 0
+        },
+        {
+          "fromTrackId": "7befaf89-6228-4d27-af82-21fee1d3d3c6",
+          "fromSectionId": "7befaf89-6228-4d27-af82-21fee1d3d3c6_section_01",
+          "toTrackId": "a98a3836-fb4e-480e-a3d4-e015c63ade63",
+          "toSectionId": "a98a3836-fb4e-480e-a3d4-e015c63ade63_section_06",
+          "style": "smooth_blend",
+          "duration": 5,
+          "fromExitSec": 27.3,
+          "toEntrySec": 324.5,
+          "actualFromExitSec": 5,
+          "actualToEntrySec": 0
+        },
+        {
+          "fromTrackId": "a98a3836-fb4e-480e-a3d4-e015c63ade63",
+          "fromSectionId": "a98a3836-fb4e-480e-a3d4-e015c63ade63_section_06",
+          "toTrackId": "a98a3836-fb4e-480e-a3d4-e015c63ade63",
+          "toSectionId": "a98a3836-fb4e-480e-a3d4-e015c63ade63_section_07",
+          "style": "smooth_blend",
+          "duration": 5,
+          "fromExitSec": 342.5,
+          "toEntrySec": 378.6,
+          "actualFromExitSec": 5,
+          "actualToEntrySec": 0
+        }
+      ]
+    }
+  },
+  {
     "id": "amapor",
     "completedAt": "2026-05-25T00:19:46.275Z",
     "summary": "A smooth transitions medley featuring Logan Black's covers in this order: 1) Patience (section_02 - the bright, atmospheric hook), 2) Geek U.S.A. (section_01 intro + section_05 outro - building energy), 3) Noose (section_01 + section_02 - heavy groove with reset), 4) Invincible (section_01 + section_05 - powerful climax and finale). All transitions use 5-second smooth crossfades with beat alignment. Total duration: 4:45. Loudness: -12.68 LUFS.",

@@ -792,5 +792,265 @@
     "extraProcessing": [],
     "estimatedQuality": 88,
     "recordedAt": "2026-05-25T06:28:07.929Z"
+  },
+  {
+    "type": "transition_applied",
+    "sessionId": "ngpcb8",
+    "style": "smooth_blend",
+    "fromTrackId": "b555f3f2-d87e-4405-b295-7a1f3dbfc3f7",
+    "fromSectionId": "b555f3f2-d87e-4405-b295-7a1f3dbfc3f7_section_03",
+    "toTrackId": "dd74e907-a9b0-4a86-990f-ed755b0edad4",
+    "toSectionId": "dd74e907-a9b0-4a86-990f-ed755b0edad4_section_02",
+    "duration": 5,
+    "beatAlign": true,
+    "intensity": 0.6,
+    "notes": "Opening transition: Lucky outro into Noose breakdown. Strong beat alignment and harmonic compatibility.",
+    "actualFromExitSec": 5,
+    "actualToEntrySec": 0,
+    "beatSnapApplied": false,
+    "curvesUsed": {
+      "curve1": "tri",
+      "curve2": "tri"
+    },
+    "extraProcessing": [],
+    "estimatedQuality": 88,
+    "recordedAt": "2026-05-26T08:46:53.248Z"
+  },
+  {
+    "type": "transition_applied",
+    "sessionId": "ngpcb8",
+    "style": "reset_moment",
+    "fromTrackId": "dd74e907-a9b0-4a86-990f-ed755b0edad4",
+    "fromSectionId": "dd74e907-a9b0-4a86-990f-ed755b0edad4_section_06",
+    "toTrackId": "7befaf89-6228-4d27-af82-21fee1d3d3c6",
+    "toSectionId": "7befaf89-6228-4d27-af82-21fee1d3d3c6_section_01",
+    "duration": 5,
+    "beatAlign": true,
+    "intensity": 0.6,
+    "notes": "Middle transition: Noose outro reset into GoodinGoodbye intro. Tempo change handled with reset.",
+    "actualFromExitSec": 5,
+    "actualToEntrySec": 0,
+    "beatSnapApplied": false,
+    "curvesUsed": {
+      "curve1": "log",
+      "curve2": "log"
+    },
+    "extraProcessing": [],
+    "estimatedQuality": 88,
+    "recordedAt": "2026-05-26T08:46:53.666Z"
+  },
+  {
+    "type": "transition_applied",
+    "sessionId": "ngpcb8",
+    "style": "smooth_blend",
+    "fromTrackId": "7befaf89-6228-4d27-af82-21fee1d3d3c6",
+    "fromSectionId": "7befaf89-6228-4d27-af82-21fee1d3d3c6_section_01",
+    "toTrackId": "a98a3836-fb4e-480e-a3d4-e015c63ade63",
+    "toSectionId": "a98a3836-fb4e-480e-a3d4-e015c63ade63_section_06",
+    "duration": 5,
+    "beatAlign": true,
+    "intensity": 0.6,
+    "notes": "Final transition: GoodinGoodbye into Eden finale. Energy continuity with smooth blend.",
+    "actualFromExitSec": 5,
+    "actualToEntrySec": 0,
+    "beatSnapApplied": false,
+    "curvesUsed": {
+      "curve1": "tri",
+      "curve2": "tri"
+    },
+    "extraProcessing": [],
+    "estimatedQuality": 88,
+    "recordedAt": "2026-05-26T08:46:54.133Z"
+  },
+  {
+    "type": "transition_applied",
+    "sessionId": "rovvkq",
+    "style": "reset_moment",
+    "fromTrackId": "b555f3f2-d87e-4405-b295-7a1f3dbfc3f7",
+    "fromSectionId": "b555f3f2-d87e-4405-b295-7a1f3dbfc3f7_section_03",
+    "toTrackId": "7befaf89-6228-4d27-af82-21fee1d3d3c6",
+    "toSectionId": "7befaf89-6228-4d27-af82-21fee1d3d3c6_section_01",
+    "duration": 5,
+    "beatAlign": true,
+    "intensity": 0.6,
+    "notes": "Reset moment: Lucky outro (low energy, 129 BPM) → GoodinGoodbye intro (high energy, 177 BPM). Both F major compatible. Beat-aligned. The tempo jump is dramatic but the reset_moment style handles it as a deliberate energy lift.",
+    "actualFromExitSec": 5,
+    "actualToEntrySec": 0,
+    "beatSnapApplied": false,
+    "curvesUsed": {
+      "curve1": "log",
+      "curve2": "log"
+    },
+    "extraProcessing": [],
+    "estimatedQuality": 88,
+    "recordedAt": "2026-05-26T16:05:07.685Z"
+  },
+  {
+    "type": "transition_applied",
+    "sessionId": "rovvkq",
+    "style": "smooth_blend",
+    "fromTrackId": "7befaf89-6228-4d27-af82-21fee1d3d3c6",
+    "fromSectionId": "7befaf89-6228-4d27-af82-21fee1d3d3c6_section_01",
+    "toTrackId": "a98a3836-fb4e-480e-a3d4-e015c63ade63",
+    "toSectionId": "a98a3836-fb4e-480e-a3d4-e015c63ade63_section_06",
+    "duration": 5,
+    "beatAlign": true,
+    "intensity": 0.6,
+    "notes": "Smooth blend: GoodinGoodbye intro hook (high energy, 177 BPM) → Eden late hook section (high energy, 97 BPM). Energy continuity 0.957, tempo compatibility 0.757. Both at peak energy — this is the climax handoff.",
+    "actualFromExitSec": 5,
+    "actualToEntrySec": 0,
+    "beatSnapApplied": false,
+    "curvesUsed": {
+      "curve1": "tri",
+      "curve2": "tri"
+    },
+    "extraProcessing": [],
+    "estimatedQuality": 88,
+    "recordedAt": "2026-05-26T16:05:08.064Z"
+  },
+  {
+    "type": "transition_applied",
+    "sessionId": "rovvkq",
+    "style": "smooth_blend",
+    "fromTrackId": "a98a3836-fb4e-480e-a3d4-e015c63ade63",
+    "fromSectionId": "a98a3836-fb4e-480e-a3d4-e015c63ade63_section_06",
+    "toTrackId": "a98a3836-fb4e-480e-a3d4-e015c63ade63",
+    "toSectionId": "a98a3836-fb4e-480e-a3d4-e015c63ade63_section_07",
+    "duration": 5,
+    "beatAlign": true,
+    "intensity": 0.6,
+    "notes": "Internal Eden transition: section_06 (324.5-342.5s) → section_07 (378.6-432.6s). Same track, same tempo (97 BPM), perfect tempo compatibility. Energy continuity 0.941. This extends the finale with the outro section for satisfying closure.",
+    "actualFromExitSec": 5,
+    "actualToEntrySec": 0,
+    "beatSnapApplied": false,
+    "curvesUsed": {
+      "curve1": "tri",
+      "curve2": "tri"
+    },
+    "extraProcessing": [],
+    "estimatedQuality": 88,
+    "recordedAt": "2026-05-26T16:05:08.495Z"
+  },
+  {
+    "type": "evaluation",
+    "sessionId": "rovvkq",
+    "metrics": {
+      "emotionalArc": 0.82,
+      "transitionSmoothness": 0.88,
+      "performerIdentity": 0.9,
+      "overallScore": 0.85,
+      "iteration": 1,
+      "phase": "design"
+    },
+    "designPlan": {
+      "transitions": [
+        {
+          "fromTrackId": "b555f3f2-d87e-4405-b295-7a1f3dbfc3f7",
+          "fromSectionId": "b555f3f2-d87e-4405-b295-7a1f3dbfc3f7_section_03",
+          "toTrackId": "7befaf89-6228-4d27-af82-21fee1d3d3c6",
+          "toSectionId": "7befaf89-6228-4d27-af82-21fee1d3d3c6_section_01",
+          "style": "reset_moment",
+          "duration": 5,
+          "fromExitSec": 5,
+          "toEntrySec": 0
+        },
+        {
+          "fromTrackId": "7befaf89-6228-4d27-af82-21fee1d3d3c6",
+          "fromSectionId": "7befaf89-6228-4d27-af82-21fee1d3d3c6_section_01",
+          "toTrackId": "a98a3836-fb4e-480e-a3d4-e015c63ade63",
+          "toSectionId": "a98a3836-fb4e-480e-a3d4-e015c63ade63_section_06",
+          "style": "smooth_blend",
+          "duration": 5,
+          "fromExitSec": 5,
+          "toEntrySec": 0
+        },
+        {
+          "fromTrackId": "a98a3836-fb4e-480e-a3d4-e015c63ade63",
+          "fromSectionId": "a98a3836-fb4e-480e-a3d4-e015c63ade63_section_06",
+          "toTrackId": "a98a3836-fb4e-480e-a3d4-e015c63ade63",
+          "toSectionId": "a98a3836-fb4e-480e-a3d4-e015c63ade63_section_07",
+          "style": "smooth_blend",
+          "duration": 5,
+          "fromExitSec": 5,
+          "toEntrySec": 0
+        }
+      ]
+    },
+    "recordedAt": "2026-05-26T16:06:36.241Z"
+  },
+  {
+    "type": "render_success",
+    "sessionId": "rovvkq",
+    "renderDurationSec": 2,
+    "expectedMedleyDurationSec": 30,
+    "segmentCount": 4,
+    "crossfadeCount": 3,
+    "mashupBranches": 0,
+    "styleMix": {
+      "reset_moment": 1,
+      "smooth_blend": 2
+    },
+    "outputFile": "medley_final.mp3",
+    "recordedAt": "2026-05-26T16:07:59.435Z"
+  },
+  {
+    "type": "completed_medley",
+    "sessionId": "rovvkq",
+    "summary": "3-track medley: Lucky (Radiohead) full track → GoodinGoodbye intro hook → Eden late climax + outro. Smooth transitions with reset_moment into high-energy lift, smooth_blend into climax, and internal Eden extension for satisfying closure. Estimated duration ~7.5 minutes.",
+    "metrics": {
+      "emotionalArc": 0.82,
+      "transitionSmoothness": 0.88,
+      "performerIdentity": 0.9,
+      "overallScore": 0.85,
+      "iteration": 1,
+      "phase": "design"
+    },
+    "designPlan": {
+      "transitions": [
+        {
+          "fromTrackId": "b555f3f2-d87e-4405-b295-7a1f3dbfc3f7",
+          "fromSectionId": "b555f3f2-d87e-4405-b295-7a1f3dbfc3f7_section_03",
+          "toTrackId": "7befaf89-6228-4d27-af82-21fee1d3d3c6",
+          "toSectionId": "7befaf89-6228-4d27-af82-21fee1d3d3c6_section_01",
+          "style": "reset_moment",
+          "duration": 5,
+          "fromExitSec": 239.4,
+          "toEntrySec": 0,
+          "actualFromExitSec": 5,
+          "actualToEntrySec": 0
+        },
+        {
+          "fromTrackId": "7befaf89-6228-4d27-af82-21fee1d3d3c6",
+          "fromSectionId": "7befaf89-6228-4d27-af82-21fee1d3d3c6_section_01",
+          "toTrackId": "a98a3836-fb4e-480e-a3d4-e015c63ade63",
+          "toSectionId": "a98a3836-fb4e-480e-a3d4-e015c63ade63_section_06",
+          "style": "smooth_blend",
+          "duration": 5,
+          "fromExitSec": 27.3,
+          "toEntrySec": 324.5,
+          "actualFromExitSec": 5,
+          "actualToEntrySec": 0
+        },
+        {
+          "fromTrackId": "a98a3836-fb4e-480e-a3d4-e015c63ade63",
+          "fromSectionId": "a98a3836-fb4e-480e-a3d4-e015c63ade63_section_06",
+          "toTrackId": "a98a3836-fb4e-480e-a3d4-e015c63ade63",
+          "toSectionId": "a98a3836-fb4e-480e-a3d4-e015c63ade63_section_07",
+          "style": "smooth_blend",
+          "duration": 5,
+          "fromExitSec": 342.5,
+          "toEntrySec": 378.6,
+          "actualFromExitSec": 5,
+          "actualToEntrySec": 0
+        }
+      ]
+    },
+    "finalAudioPath": "G:\\ai-medley--main\\workdir\\rovvkq\\G:\\ai-medley--main\\workdir\\rovvkq\\medley_final.mp3",
+    "tracksInvolved": [
+      "b555f3f2-d87e-4405-b295-7a1f3dbfc3f7",
+      "7befaf89-6228-4d27-af82-21fee1d3d3c6",
+      "a98a3836-fb4e-480e-a3d4-e015c63ade63"
+    ],
+    "recordedAt": "2026-05-26T16:07:59.535Z"
   }
 ]

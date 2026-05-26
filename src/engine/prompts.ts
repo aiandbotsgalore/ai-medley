@@ -60,14 +60,17 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'set_design_plan',
-    description: 'Lock DESIGN decisions.',
+    description: 'Lock the final DESIGN plan. Call once you have evaluated enough section pairs and are ready to commit to a transition sequence. Provide all planned transitions in order.',
     parameters: {
       type: 'object',
       properties: {
-        sessionId: { type: 'string' },
-        transitions: { type: 'array' }
+        transitions: {
+          type: 'array',
+          description: 'Ordered array of transition objects. Each must include: fromTrackId, fromSectionId, toTrackId, toSectionId, style, duration, fromExitSec, toEntrySec.',
+          items: { type: 'object' }
+        }
       },
-      required: ['sessionId', 'transitions']
+      required: ['transitions']
     }
   },
   {
@@ -155,18 +158,6 @@ const TOOL_DEFINITIONS = [
     }
   },
   {
-    name: 'finish_medley',
-    description: 'Finish medley',
-    parameters: {
-      type: 'object',
-      properties: {
-        finalMp3Path: { type: 'string' },
-        summary: { type: 'string' }
-      },
-      required: ['finalMp3Path', 'summary']
-    }
-  },
-  {
     name: 'finalize_medley',
     description:
       "FINAL RENDER STEP. Uses a single-pass FFmpeg filtergraph (no concat). Uses actual transition timings and produces a clean output.",
@@ -221,7 +212,20 @@ When locking your final design via set_design_plan and choosing styles for apply
 ${DETAILED_DESIGN_INSTRUCTIONS}
 
 # Library
-${lib.map(f => `${f.id} - ${f.originalName}`).join('\n')}
+${lib.map(f => {
+    const lines = [`## ${f.id} — ${f.originalName}`];
+    if (f.analysis) {
+      lines.push(`### Cached Analysis\n${f.analysis}`);
+    }
+    if (f.medleyIntelligence) {
+      lines.push(`### Medley Intelligence\n${JSON.stringify(f.medleyIntelligence, null, 2)}`);
+    }
+    if (!f.analysis && !f.medleyIntelligence) {
+      lines.push(`[Not yet analyzed — call listen_to_audio to analyze this track]`);
+    }
+    return lines.join('\n');
+  }).join('\n\n---\n\n')}
+${lib.every(f => f.analysis && f.medleyIntelligence) ? '\n**All tracks are pre-analyzed. DO NOT call listen_to_audio — skip directly to DESIGN.**' : lib.some(f => !f.analysis) ? '\n**Some tracks need analysis. Call listen_to_audio only for tracks marked [Not yet analyzed].**' : ''}
 `;
 }
 

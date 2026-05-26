@@ -179,28 +179,38 @@ export default function App() {
 
   // Rich error logger - designed to make debugging failures (especially with free/weak models) much easier
   const logDetailedError = useCallback((context: string, error: any, extra?: any) => {
-    const timestamp = new Date().toLocaleTimeString();
     const errMessage = error?.message || String(error);
     const status = error?.status;
     const rawBody = error?.rawBody;
     const rawArguments = error?.rawArguments;
 
-    let logMessage = `❌ [${context}] ${errMessage}`;
+    addLog(`❌ [${context}] ${errMessage}${status ? ` (HTTP ${status})` : ''}`);
 
-    if (status) logMessage += ` | Status: ${status}`;
-    if (rawBody) logMessage += `\n   Raw response: ${typeof rawBody === 'string' ? rawBody.substring(0, 800) : JSON.stringify(rawBody)}`;
-    if (rawArguments) logMessage += `\n   Raw tool args: ${rawArguments}`;
-    if (extra) {
+    if (rawBody) {
       try {
-        const extraStr = typeof extra === 'string' ? extra : JSON.stringify(extra, null, 2);
-        logMessage += `\n   Extra context: ${extraStr.substring(0, 1200)}`;
-      } catch {}
+        const parsed = JSON.parse(typeof rawBody === 'string' ? rawBody : JSON.stringify(rawBody));
+        const apiMsg = parsed?.error?.message || parsed?.message || parsed?.error;
+        if (apiMsg) {
+          addLog(`   API message: ${String(apiMsg).substring(0, 500)}`);
+        } else {
+          addLog(`   Raw response: ${(typeof rawBody === 'string' ? rawBody : JSON.stringify(rawBody)).substring(0, 500)}`);
+        }
+      } catch {
+        addLog(`   Raw response: ${(typeof rawBody === 'string' ? rawBody : JSON.stringify(rawBody)).substring(0, 500)}`);
+      }
     }
 
-    // Also log full error to browser console for deeper inspection
-    console.error(`[DETAILED ERROR - ${context}]`, { error, extra, rawBody, rawArguments });
+    if (rawArguments) addLog(`   Raw tool args: ${String(rawArguments).substring(0, 300)}`);
 
-    addLog(logMessage);
+    if (extra && typeof extra === 'object') {
+      for (const [key, val] of Object.entries(extra)) {
+        if (val === undefined || val === null) continue;
+        const display = typeof val === 'object' ? JSON.stringify(val).substring(0, 300) : String(val);
+        addLog(`   ${key}: ${display}`);
+      }
+    }
+
+    console.error(`[DETAILED ERROR - ${context}]`, { error, extra, rawBody, rawArguments });
   }, [addLog]);
 
   const fetchLibrary = useCallback(async () => {
@@ -457,9 +467,7 @@ export default function App() {
     let toolFailureStreak = 0;
     const MAX_TOOL_FAILURE_STREAK = 3;
 
-    // === Phase 1 Hard Limits (Optimization + Stabilization) ===
     const MAX_EVALUATE_CALLS_PER_RUN = 25;
-    const MAX_REFINEMENT_PASSES = 3;
     const MAX_LLM_CALLS_PER_RUN = 40; // total, we track cheap vs expensive separately below
     const EARLY_TERMINATION_SCORE = 0.88; // will be calibrated; start conservative
     // Phase 2 thresholds (widened for current similar-track libraries)
@@ -539,12 +547,23 @@ export default function App() {
       return true;
     };
 
+    let _checkpointFn: (() => void) | null = null;
+
     try {
+
+      const withHeartbeat = <T,>(label: string, promise: Promise<T>, intervalMs = 8000): Promise<T> => {
+        const start = Date.now();
+        const timer = setInterval(() => {
+          const elapsed = Math.round((Date.now() - start) / 1000);
+          addLog(`   ⏳ ${label}... (${elapsed}s elapsed)`);
+        }, intervalMs);
+        return promise.finally(() => clearInterval(timer));
+      };
 
       const sendWithRetry = async (msg: any, retries = 0): Promise<any> => {
         if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
         try {
-          return await session.send(msg);
+          return await withHeartbeat(`Waiting for ${getCurrentModel()}`, session.send(msg), 10000);
         } catch (err: any) {
           const errText = String(err?.message || err);
           const isRateLimit = errText.includes('429') || errText.includes('RESOURCE_EXHAUSTED') || errText.includes('rate limit');
@@ -553,7 +572,7 @@ export default function App() {
 
           if (isRateLimit && retries < 5) {
             const delay = Math.pow(2, retries) * 2000 + Math.random() * 1000;
-            addLog(`⏳ Rate limited. Retrying in ${Math.round(delay / 1000)}s...`);
+            addLog(`⏳ Rate limited on ${getCurrentModel()} (attempt ${retries + 1}/5). Retrying in ${Math.round(delay / 1000)}s...`);
             await new Promise<void>((res, rej) => {
               const t = setTimeout(res, delay);
               signal.addEventListener('abort', () => { clearTimeout(t); rej(new DOMException('Aborted', 'AbortError')); }, { once: true });
@@ -618,9 +637,12 @@ export default function App() {
         }
       };
 
+      const allAnalyzed = lib.every(f => f.analysis && f.medleyIntelligence);
       const initialMessage = resumeState
         ? `Session resumed from checkpoint at iteration ${resumeState.iterations}. The conversation history above contains all previous work. Please assess the current state and continue immediately from where we left off.`
-        : 'Begin the medley architect process. Analyze the library first, then design and build the medley.';
+        : allAnalyzed
+          ? `All ${lib.length} tracks are pre-analyzed — the full analysis and medley intelligence data for every track is embedded in your system prompt above. DO NOT call listen_to_audio. Skip the ANALYZE phase entirely and proceed directly to DESIGN.`
+          : 'Begin the medley architect process. Analyze any tracks marked [Not yet analyzed] first, then design and build the medley.';
 
       let result = await sendWithRetry(initialMessage);
       llmCallCount++;
@@ -634,8 +656,6 @@ export default function App() {
       let iterations = resumeState?.iterations ?? 0;
       const MAX_ITERATIONS = 50;
 
-      // Fire-and-forget checkpoint save — called after each completed model round-trip.
-      // Closes over `iterations`, `session`, and all counters as live bindings.
       const saveCheckpoint = () => {
         const data: CheckpointData = {
           sessionId: sid,
@@ -663,6 +683,7 @@ export default function App() {
           body: JSON.stringify(data)
         }).catch(() => {});
       };
+      _checkpointFn = saveCheckpoint;
 
       while (!loopFinished && iterations < MAX_ITERATIONS) {
         if (signal.aborted) break;
@@ -673,13 +694,10 @@ export default function App() {
           await switchToNextModel('Manual switch requested by user');
         }
 
-        // === Phase 1 Hard Limits (checked BEFORE incrementing) ===
-        if (refinementPassCount >= MAX_REFINEMENT_PASSES) {
-          addLog(`   ⛔ Hard limit reached: maxRefinementPasses (${MAX_REFINEMENT_PASSES}). Stopping.`);
-          break;
-        }
         if (llmCallCount >= MAX_LLM_CALLS_PER_RUN) {
-          addLog(`   ⛔ Hard limit reached: maxLLMCallsPerRun (${MAX_LLM_CALLS_PER_RUN}). Stopping autonomous refinement.`);
+          addLog(`   ⛔ Hard limit reached: maxLLMCallsPerRun (${MAX_LLM_CALLS_PER_RUN}). The model used ${llmCallCount} LLM calls without finishing.`);
+          setStatus('error');
+          setErrorMessage(`LLM call limit (${MAX_LLM_CALLS_PER_RUN}) reached without producing a final medley.`);
           break;
         }
 
@@ -763,7 +781,13 @@ export default function App() {
               );
               const displayName = entry?.originalName || argBasename || 'audio-output';
 
-              addLog(`  🎧 Analyzing: ${displayName}`);
+              if (!entry) {
+                addLog(`⚠️ listen_to_audio: no library match for "${argBasename}"`);
+                addLog(`   Tried: exact path, normalized slashes, originalName, filename, UUID`);
+                addLog(`   Library (${lib.length} files): ${lib.map(f => f.originalName || f.filename || f.id).join(' | ')}`);
+              }
+
+              addLog(`  🎧 Analyzing: ${displayName}${entry ? '' : ' (no library entry — using raw path)'}`);
 
               const local = await getLocalAnalysis(
                 entry
@@ -791,11 +815,14 @@ export default function App() {
                   : `/api/audio-file?filePath=${encodeURIComponent(args.filePath)}&sessionId=${encodeURIComponent(sid)}`;
                 const audioResp = await fetch(audioUrl, { signal });
                 if (!audioResp.ok) {
+                  addLog(`❌ Audio fetch failed for "${displayName}" — HTTP ${audioResp.status}`);
+                  addLog(`   Path: ${args.filePath}`);
+                  addLog(`   Library entry: ${entry ? `found (ID: ${entry.id})` : 'none — model passed unrecognized path'}`);
                   toolRes = {
                     functionResponse: {
                       name: call.name,
                       id: call.id,
-                      response: { error: `Audio file not found or unreadable: ${args.filePath}` }
+                      response: { error: `Audio file not found or unreadable: ${args.filePath} (HTTP ${audioResp.status})` }
                     }
                   };
                 } else {
@@ -874,30 +901,41 @@ export default function App() {
                 }),
                 signal
               });
-              const data = await res.json();
 
-              // Store in in-session cache (even rejections for this run)
-              if (!data.error) {
-                sectionPairCache.set(cacheKey, data);
-              }
+              if (!res.ok) {
+                const errData = await res.json().catch(() => ({}));
+                const errMsg = errData.error || `HTTP ${res.status}`;
+                addLog(`❌ evaluate_section_pair failed: ${errMsg}`);
+                toolRes = { functionResponse: { name: call.name, id: call.id, response: { error: errMsg } } };
+              } else {
+                const data = await res.json();
 
-              if (data.locallyRejected) {
-                autoRejectedCount++;
-                addLog(`   🚫 Locally rejected (score ${data.localHeuristicScore?.toFixed(2) ?? 'low'}) — no LLM cost.`);
-              } else if (data.localHeuristicScore !== undefined) {
-                const score = data.localHeuristicScore;
-                if (score >= LOCAL_AUTO_ACCEPT_THRESHOLD) {
-                  autoAcceptedCount++;
-                  addLog(`   ✅ High local confidence (${score.toFixed(2)}) — auto-accepted locally (ambiguous-only routing).`);
-                } else if (score <= LOCAL_REJECTION_THRESHOLD) {
-                  autoRejectedCount++;
-                  addLog(`   🚫 Low local confidence (${score.toFixed(2)}) — auto-rejected locally.`);
-                } else {
-                  addLog(`   ⚖️ Ambiguous local score (${score.toFixed(2)}) — proceeding with full evaluation.`);
+                // Store in in-session cache (even rejections for this run)
+                if (!data.error) {
+                  sectionPairCache.set(cacheKey, data);
                 }
-              }
 
-              toolRes = { functionResponse: { name: call.name, id: call.id, response: data } };
+                // data.transition.score is the composite 0-1 score from TransitionScore
+                const localScore: number | undefined = data.transition?.score;
+
+                if (data.locallyRejected) {
+                  // Top-N client-side rejection (fabricated locally above, not from server)
+                  autoRejectedCount++;
+                  addLog(`   🚫 Locally rejected — no LLM cost.`);
+                } else if (localScore !== undefined) {
+                  if (localScore >= LOCAL_AUTO_ACCEPT_THRESHOLD) {
+                    autoAcceptedCount++;
+                    addLog(`   ✅ High local confidence (${localScore.toFixed(2)}) — auto-accepted.`);
+                  } else if (localScore <= LOCAL_REJECTION_THRESHOLD) {
+                    autoRejectedCount++;
+                    addLog(`   🚫 Low local confidence (${localScore.toFixed(2)}) — auto-rejected.`);
+                  } else {
+                    addLog(`   ⚖️ Ambiguous score (${localScore.toFixed(2)}) — proceeding with full evaluation.`);
+                  }
+                }
+
+                toolRes = { functionResponse: { name: call.name, id: call.id, response: data } };
+              }
             }
             else if (call.name === 'set_design_plan') {
               addLog(`   Locking design plan: ${(args.transitions || []).length} transitions`);
@@ -908,32 +946,48 @@ export default function App() {
                 signal
               });
               const data = await res.json();
-              if (data.warnings?.length) {
-                for (const w of data.warnings) addLog(`  ⚠️ ${w}`);
+              if (!res.ok) {
+                addLog(`  ❌ set_design_plan failed: ${data.error || res.statusText}`);
+                toolRes = { functionResponse: { name: call.name, id: call.id, response: { success: false, error: data.error || res.statusText } } };
+              } else {
+                if (data.warnings?.length) {
+                  for (const w of data.warnings) addLog(`  ⚠️ ${w}`);
+                }
+                toolRes = { functionResponse: { name: call.name, id: call.id, response: data } };
               }
-              toolRes = { functionResponse: { name: call.name, id: call.id, response: data } };
             }
             else if (call.name === 'apply_musical_transition') {
               addLog(`   Applying ${args.style} transition: ${args.fromSectionId} → ${args.toSectionId}`);
-              const res = await fetch('/api/apply-transition', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  fromTrackId: args.fromTrackId,
-                  fromSectionId: args.fromSectionId,
-                  toTrackId: args.toTrackId,
-                  toSectionId: args.toSectionId,
-                  style: args.style,
-                  duration: args.duration,
-                  intensity: args.intensity,
-                  beatAlign: args.beatAlign,
-                  notes: args.notes,
-                  sessionId: sid
+              const transStart = Date.now();
+              const res = await withHeartbeat(
+                `FFmpeg ${args.style} render (${args.fromSectionId} → ${args.toSectionId})`,
+                fetch('/api/apply-transition', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    fromTrackId: args.fromTrackId,
+                    fromSectionId: args.fromSectionId,
+                    toTrackId: args.toTrackId,
+                    toSectionId: args.toSectionId,
+                    style: args.style,
+                    duration: args.duration,
+                    intensity: args.intensity,
+                    beatAlign: args.beatAlign,
+                    notes: args.notes,
+                    sessionId: sid
+                  }),
+                  signal
                 }),
-                signal
-              });
+                6000
+              );
               const data = await res.json();
-              toolRes = { functionResponse: { name: call.name, id: call.id, response: data } };
+              if (!res.ok) {
+                addLog(`   ❌ Transition render failed (HTTP ${res.status}): ${data.error || res.statusText}${data.errorCategory ? ` [${data.errorCategory}]` : ''}`);
+                toolRes = { functionResponse: { name: call.name, id: call.id, response: { success: false, error: data.error || res.statusText, errorCategory: data.errorCategory } } };
+              } else {
+                addLog(`   ✓ Transition rendered in ${((Date.now() - transStart) / 1000).toFixed(1)}s`);
+                toolRes = { functionResponse: { name: call.name, id: call.id, response: data } };
+              }
             }
             else if (call.name === 'analyze_medley_quality') {
               addLog(`   Analyzing medley quality: ${args.filePath}`);
@@ -944,11 +998,21 @@ export default function App() {
                 signal
               });
               const data = await res.json();
-              toolRes = { functionResponse: { name: call.name, id: call.id, response: data } };
+              if (!res.ok) {
+                addLog(`  ❌ analyze_medley_quality failed: ${data.error || res.statusText}`);
+                toolRes = { functionResponse: { name: call.name, id: call.id, response: { success: false, error: data.error || res.statusText } } };
+              } else {
+                toolRes = { functionResponse: { name: call.name, id: call.id, response: data } };
+              }
             }
             else if (call.name === 'read_file') {
               const res = await fetch(`/api/file-read?filePath=${encodeURIComponent(args.filePath)}`, { signal });
-              toolRes = { functionResponse: { name: call.name, id: call.id, response: await res.json() } };
+              const data = await res.json();
+              if (!res.ok) {
+                toolRes = { functionResponse: { name: call.name, id: call.id, response: { success: false, error: data.error || res.statusText } } };
+              } else {
+                toolRes = { functionResponse: { name: call.name, id: call.id, response: data } };
+              }
             }
             else if (call.name === 'write_file') {
               const res = await fetch('/api/file-write', {
@@ -956,7 +1020,12 @@ export default function App() {
                 body: JSON.stringify({ filePath: args.filePath, content: args.content }),
                 signal
               });
-              toolRes = { functionResponse: { name: call.name, id: call.id, response: await res.json() } };
+              const data = await res.json();
+              if (!res.ok) {
+                toolRes = { functionResponse: { name: call.name, id: call.id, response: { success: false, error: data.error || res.statusText } } };
+              } else {
+                toolRes = { functionResponse: { name: call.name, id: call.id, response: data } };
+              }
             }
             else if (call.name === 'save_file_analysis') {
               addLog(`  📊 Saving analysis for ${args.fileId}`);
@@ -1020,25 +1089,30 @@ export default function App() {
             else if (call.name === 'finalize_medley') {
               setCurrentPhase('FINISH — Rendering Final Clean Medley');
               addLog(`  🚀 Calling finalize_medley for clean render: ${args.finalMp3Path}`);
+              const finalStart = Date.now();
 
-              const res = await fetch('/api/finalize-medley', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  sessionId: sid,
-                  finalMp3Path: args.finalMp3Path,
-                  summary: args.summary,
-                  useCleanRender: args.useCleanRender ?? true
+              const res = await withHeartbeat(
+                'FFmpeg final medley render',
+                fetch('/api/finalize-medley', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    sessionId: sid,
+                    finalMp3Path: args.finalMp3Path,
+                    summary: args.summary,
+                    useCleanRender: args.useCleanRender ?? true
+                  }),
+                  signal
                 }),
-                signal
-              });
-
+                6000
+              );
               const data = await res.json();
 
               if (!res.ok || !data.success) {
                 throw new Error(data.error || 'finalize_medley failed');
               }
 
+              addLog(`   ✓ Final render completed in ${((Date.now() - finalStart) / 1000).toFixed(1)}s`);
               addLog(`  ✅ Clean final medley rendered: ${data.outputPath}`);
 
               await fetch('/api/session/finish', {
@@ -1096,18 +1170,22 @@ export default function App() {
         const lastToolThisTurn = functionCalls.length > 0 ? functionCalls[functionCalls.length - 1].name : null;
         setExecutionContext(deriveExecutionContext(currentPhase, lastToolThisTurn, result.text || null, iterations));
 
-        if (toolResponses.length > 0) {
-          // Reset streak: a successful round-trip means the model is functioning
-          toolFailureStreak = 0;
+        const anySuccess = toolResponses.some((tr: any) => !tr.functionResponse?.response?.error);
+        if (toolResponses.length > 0 && !loopFinished) {
+          // Only reset streak if at least one tool call succeeded — prevents a model
+          // that always calls tools with bad arguments from never accumulating a streak
+          if (anySuccess) toolFailureStreak = 0;
           result = await sendWithRetry(toolResponses.map((toolResponse: any) => ({
             name: toolResponse.functionResponse.name,
             id: toolResponse.functionResponse.id,
             response: toolResponse.functionResponse.response
           })));
+          llmCallCount++;
+          expensiveLLMCalls++;
           if (result.usage?.total_tokens) {
             addLog(`   [Tokens] Prompt: ${result.usage.prompt_tokens ?? '?'}, Completion: ${result.usage.completion_tokens ?? '?'}, Total: ${result.usage.total_tokens}`);
           }
-          if (!loopFinished) saveCheckpoint();
+          saveCheckpoint();
         }
       }
 
@@ -1135,12 +1213,24 @@ export default function App() {
         return;
       }
 
-      logDetailedError('Autonomous Loop Crashed', e, {
-        lastKnownPhase: currentPhase,
-        model: config.model,
-        provider: config.provider,
-        sessionId: sid
-      });
+      try { _checkpointFn?.(); } catch {}
+
+      addLog(`💥 Loop crashed — Phase: ${currentPhaseRef.current || 'unknown'} | Model: ${config.model} | Provider: ${config.provider} | Session: ${sid}`);
+      addLog(`   Error: ${e.message || String(e)}${e.status ? ` (HTTP ${e.status})` : ''}`);
+      if (e.rawBody) {
+        try {
+          const parsed = JSON.parse(typeof e.rawBody === 'string' ? e.rawBody : JSON.stringify(e.rawBody));
+          const apiMsg = parsed?.error?.message || parsed?.message || parsed?.error;
+          if (apiMsg) {
+            addLog(`   API message: ${String(apiMsg).substring(0, 500)}`);
+          } else {
+            addLog(`   Raw response: ${(typeof e.rawBody === 'string' ? e.rawBody : JSON.stringify(e.rawBody)).substring(0, 500)}`);
+          }
+        } catch {
+          addLog(`   Raw response: ${String(e.rawBody).substring(0, 500)}`);
+        }
+      }
+      console.error('[Autonomous Loop Crashed]', { error: e, phase: currentPhaseRef.current, model: config.model, sessionId: sid });
 
       setStatus('error');
       setErrorMessage(e.message || 'Autonomous loop failed unexpectedly');
@@ -1204,7 +1294,7 @@ export default function App() {
     addLog(`🔬 Pre-analyzing ${unanalyzed.length} track(s) before session starts...`);
 
     // Bounded parallel queue — analyze up to 3 tracks concurrently
-    const CONCURRENCY = 3;
+    const CONCURRENCY = 1;  // was 3 — prevents db.json write race condition
     let completedCount = 0;
 
     const analyzeOne = async (entry: typeof unanalyzed[0]) => {
@@ -1218,16 +1308,20 @@ export default function App() {
         if (shouldUploadAudioForAnalysis(entry.originalName)) {
           addLog(`  ☁️ Cloud audio upload allowed for ${entry.originalName}`);
           const audioRes = await fetch(`/api/audio-raw/${entry.id}`, { signal });
-          const audioBlob = await audioRes.blob();
-          const cloudAnalysisText = await analyzeAudioWithProvider({
-            config,
-            file: new File([audioBlob], entry.originalName, { type: entry.mimeType }),
-            mimeType: entry.mimeType,
-            displayName: entry.originalName,
-            prompt: 'Analyze this audio track and provide BPM if discernible, musical key, mood or genre, energy level from 1 to 10, and a concise 2 to 3 sentence structural summary.',
-            signal
-          });
-          analysisText = `${local.analysisText}\n\nOptional cloud audio analysis:\n${cloudAnalysisText}`;
+          if (!audioRes.ok) {
+            addLog(`  ⚠️ Cloud audio fetch failed (HTTP ${audioRes.status}) for ${entry.originalName} — using local analysis only`);
+          } else {
+            const audioBlob = await audioRes.blob();
+            const cloudAnalysisText = await analyzeAudioWithProvider({
+              config,
+              file: new File([audioBlob], entry.originalName, { type: entry.mimeType }),
+              mimeType: entry.mimeType,
+              displayName: entry.originalName,
+              prompt: 'Analyze this audio track and provide BPM if discernible, musical key, mood or genre, energy level from 1 to 10, and a concise 2 to 3 sentence structural summary.',
+              signal
+            });
+            analysisText = `${local.analysisText}\n\nOptional cloud audio analysis:\n${cloudAnalysisText}`;
+          }
         }
 
         if (analysisText) {
@@ -1302,9 +1396,12 @@ export default function App() {
 
     addLog('✅ System online. Initializing Architect...');
     setCurrentPhase('ANALYZE — Library Analysis');
-    await preAnalyzeLibrary(library, abortRef.current.signal);
+    addLog('📚 Loading library from server...');
+    const freshLibForAnalysis: LibraryFile[] = await fetch('/api/library').then(r => r.json()).catch(() => library);
+    setLibrary(freshLibForAnalysis);
+    await preAnalyzeLibrary(freshLibForAnalysis, abortRef.current.signal);
     if (!abortRef.current || abortRef.current.signal.aborted) return;
-    const freshLib: LibraryFile[] = await fetch('/api/library').then(r => r.json()).catch(() => library);
+    const freshLib: LibraryFile[] = await fetch('/api/library').then(r => r.json()).catch(() => freshLibForAnalysis);
     let design: MedleyDesignPayload | null = null;
     try {
       setCurrentPhase('DESIGN — Building Structure');
