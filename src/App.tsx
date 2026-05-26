@@ -133,6 +133,7 @@ export default function App() {
   const [medleyDesign, setMedleyDesign] = useState<MedleyDesignPayload | null>(null);
   const [currentPhase, setCurrentPhase] = useState<string>(''); // ANALYZE | DESIGN | BUILD | EVALUATE | REFINE | FINISH
   const [preAnalysisProgress, setPreAnalysisProgress] = useState<{ current: number; total: number } | null>(null);
+  const [renderProgress, setRenderProgress] = useState<{ stage: string; percent: number; elapsedSeconds?: number; remainingSecondsEstimate?: number | null } | null>(null);
   const [activeModel, setActiveModel] = useState<string>('');
   const [executionContext, setExecutionContext] = useState<ExecutionContextSummary | null>(null);
 
@@ -141,6 +142,8 @@ export default function App() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const sseRef = useRef<EventSource | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
 
   const addLog = useCallback((msg: string) => {
     setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
@@ -341,11 +344,56 @@ export default function App() {
 
     const sid = Math.random().toString(36).substring(7);
     setSessionId(sid);
+    sessionIdRef.current = sid;
     setLogs([]);
     setSummary(null);
     setMetrics(null);
     setIteration(null);
     setExecutionContext(null);
+    setRenderProgress(null);
+
+    // === Real-Time Progress Stream (SSE) ===
+    if (sseRef.current) {
+      sseRef.current.close();
+    }
+    const sse = new EventSource(`/api/session/${sid}/stream`);
+    sseRef.current = sse;
+
+    sse.addEventListener('log', (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.message) {
+          addLog(`📡 ${data.message}`);
+        }
+      } catch (err) {}
+    });
+
+    sse.addEventListener('progress', (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        setRenderProgress(data);
+      } catch (err) {}
+    });
+
+    sse.addEventListener('completed', (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.summary) {
+          setSummary(data.summary);
+        }
+      } catch (err) {}
+    });
+
+    sse.addEventListener('metrics', (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data);
+        setMetrics(data);
+      } catch (err) {}
+    });
+
+    sse.onerror = (err) => {
+      console.warn('SSE connection error, attempting automatic reconnection...', err);
+    };
 
     // === Model Fallback System (for free / unreliable models) ===
     const fallbackModels = [
@@ -360,6 +408,32 @@ export default function App() {
     let currentModelIndex = 0;
     let toolFailureStreak = 0;
     const MAX_TOOL_FAILURE_STREAK = 3;
+
+    // === Phase 1 Hard Limits (Optimization + Stabilization) ===
+    const MAX_EVALUATE_CALLS_PER_RUN = 25;
+    const MAX_REFINEMENT_PASSES = 3;
+    const MAX_LLM_CALLS_PER_RUN = 40; // total, we track cheap vs expensive separately below
+    const EARLY_TERMINATION_SCORE = 0.88; // will be calibrated; start conservative
+    // Phase 2 thresholds (widened for current similar-track libraries)
+    // TODO: Recalibrate these once we have runs on more diverse libraries
+    const LOCAL_REJECTION_THRESHOLD = 0.45;
+    const LOCAL_AUTO_ACCEPT_THRESHOLD = 0.80;
+
+    let evaluateCallCount = 0;
+    let llmCallCount = 0;
+    let refinementPassCount = 0;
+    let expensiveLLMCalls = 0;   // generation / complex reasoning
+    let cheapLLMCalls = 0;       // classification / simple scoring
+
+    // Phase 2 stats
+    let autoAcceptedCount = 0;
+    let autoRejectedCount = 0;
+
+    // Simple in-session cache for section pair evaluations (fromSectionId + toSectionId)
+    const sectionPairCache = new Map<string, any>();
+
+    // Phase 1: Per-source-section Top-N=5 tracking (in-session)
+    const evaluationsPerFromSection = new Map<string, number>();
 
     const getCurrentModel = () => fallbackModels[Math.min(currentModelIndex, fallbackModels.length - 1)];
 
@@ -482,6 +556,8 @@ export default function App() {
       };
 
       let result = await sendWithRetry('Begin the medley architect process. Analyze the library first, then design and build the medley.');
+      llmCallCount++;
+      expensiveLLMCalls++; // initial kickoff is expensive
 
       if (result.usage?.total_tokens) {
         addLog(`   [Tokens] Prompt: ${result.usage.prompt_tokens ?? '?'}, Completion: ${result.usage.completion_tokens ?? '?'}, Total: ${result.usage.total_tokens}`);
@@ -493,7 +569,20 @@ export default function App() {
 
       while (!loopFinished && iterations < MAX_ITERATIONS) {
         if (signal.aborted) break;
+
+        // === Phase 1 Hard Limits (checked BEFORE incrementing) ===
+        if (refinementPassCount >= MAX_REFINEMENT_PASSES) {
+          addLog(`   ⛔ Hard limit reached: maxRefinementPasses (${MAX_REFINEMENT_PASSES}). Stopping.`);
+          break;
+        }
+        if (llmCallCount >= MAX_LLM_CALLS_PER_RUN) {
+          addLog(`   ⛔ Hard limit reached: maxLLMCallsPerRun (${MAX_LLM_CALLS_PER_RUN}). Stopping autonomous refinement.`);
+          break;
+        }
+
         iterations++;
+        refinementPassCount++;
+
         setIteration({ current: iterations, max: MAX_ITERATIONS });
         if (result.text) addLog(`🤖 ${result.text}`);
 
@@ -504,6 +593,8 @@ export default function App() {
         if (!functionCalls || functionCalls.length === 0) {
           if (!result.text) {
             result = await sendWithRetry('Please proceed with the next step.');
+            llmCallCount++;
+            cheapLLMCalls++; // continuation nudge is relatively cheap
             if (result.usage?.total_tokens) {
               addLog(`   [Tokens] Prompt: ${result.usage.prompt_tokens ?? '?'}, Completion: ${result.usage.completion_tokens ?? '?'}, Total: ${result.usage.total_tokens}`);
             }
@@ -606,6 +697,41 @@ export default function App() {
             }
             else if (call.name === 'evaluate_section_pair') {
               addLog(`  🔬 Evaluating pair: ${args.fromSectionId} → ${args.toSectionId}`);
+
+              // === Phase 1: In-session cache + hard limits + Top-N + local rejection ===
+              const cacheKey = `${args.fromSectionId}:${args.toSectionId}`;
+              if (sectionPairCache.has(cacheKey)) {
+                addLog(`   ♻️ Cache hit for pair ${args.fromSectionId} → ${args.toSectionId}`);
+                toolRes = { functionResponse: { name: call.name, id: call.id, response: sectionPairCache.get(cacheKey) } };
+                continue;
+              }
+
+              // Per-fromSection Top-N=5 tracking (Phase 1)
+              const fromKey = args.fromSectionId;
+              const currentCount = evaluationsPerFromSection.get(fromKey) || 0;
+              if (currentCount >= 5) {
+                addLog(`   ⛔ Top-N=5 limit reached for ${fromKey}. Rejecting additional candidates locally.`);
+                const rejectedResponse = { 
+                  success: true, 
+                  locallyRejected: true, 
+                  localHeuristicScore: 0.0,
+                  reason: 'Top-N=5 per source section reached' 
+                };
+                sectionPairCache.set(cacheKey, rejectedResponse);
+                toolRes = { functionResponse: { name: call.name, id: call.id, response: rejectedResponse } };
+                continue;
+              }
+              evaluationsPerFromSection.set(fromKey, currentCount + 1);
+
+              if (evaluateCallCount >= MAX_EVALUATE_CALLS_PER_RUN) {
+                addLog(`   ⛔ Hard limit reached: maxEvaluateCallsPerRun (${MAX_EVALUATE_CALLS_PER_RUN}). Rejecting further evaluations.`);
+                toolRes = { functionResponse: { name: call.name, id: call.id, response: { error: 'Evaluation limit reached for this run' } } };
+                continue;
+              }
+
+              evaluateCallCount++;
+              cheapLLMCalls++;
+
               const res = await fetch('/api/section-pair-evaluate', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -618,6 +744,28 @@ export default function App() {
                 signal
               });
               const data = await res.json();
+
+              // Store in in-session cache (even rejections for this run)
+              if (!data.error) {
+                sectionPairCache.set(cacheKey, data);
+              }
+
+              if (data.locallyRejected) {
+                autoRejectedCount++;
+                addLog(`   🚫 Locally rejected (score ${data.localHeuristicScore?.toFixed(2) ?? 'low'}) — no LLM cost.`);
+              } else if (data.localHeuristicScore !== undefined) {
+                const score = data.localHeuristicScore;
+                if (score >= LOCAL_AUTO_ACCEPT_THRESHOLD) {
+                  autoAcceptedCount++;
+                  addLog(`   ✅ High local confidence (${score.toFixed(2)}) — auto-accepted locally (ambiguous-only routing).`);
+                } else if (score <= LOCAL_REJECTION_THRESHOLD) {
+                  autoRejectedCount++;
+                  addLog(`   🚫 Low local confidence (${score.toFixed(2)}) — auto-rejected locally.`);
+                } else {
+                  addLog(`   ⚖️ Ambiguous local score (${score.toFixed(2)}) — proceeding with full evaluation.`);
+                }
+              }
+
               toolRes = { functionResponse: { name: call.name, id: call.id, response: data } };
             }
             else if (call.name === 'set_design_plan') {
@@ -710,6 +858,12 @@ export default function App() {
               setMetrics(newMetrics);
               const phaseLog = args.phase ? ` [${args.phase}]` : '';
               addLog(`  📈 Scores: Arc=${args.emotionalArc}% Trans=${args.transitionSmoothness}% Identity=${args.performerIdentity}% Overall=${args.overallScore}%${phaseLog}`);
+
+              // === Phase 1 Early Termination ===
+              if (typeof args.overallScore === 'number' && args.overallScore >= EARLY_TERMINATION_SCORE) {
+                addLog(`   ✅ Early termination: overallScore ${args.overallScore} >= ${EARLY_TERMINATION_SCORE}. Stopping refinement.`);
+                // Let the agent naturally call finalize_medley next
+              }
               // Also persist to server for SSE
               await fetch('/api/session/metrics', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -826,6 +980,10 @@ export default function App() {
         setStatus('error');
         setErrorMessage('Max iterations reached without completing the medley.');
       }
+
+      // Phase 1 + Phase 2 stats at end of run
+      addLog(`   [Phase 1/2 Final Stats] evaluateCalls=${evaluateCallCount}, llmCalls=${llmCallCount} (expensive=${expensiveLLMCalls}, cheap=${cheapLLMCalls}), refinementPasses=${refinementPassCount}, cachedPairs=${sectionPairCache.size}, autoAccepted=${autoAcceptedCount}, autoRejected=${autoRejectedCount}`);
+      addLog(`   Note: Auto-accept threshold = ${LOCAL_AUTO_ACCEPT_THRESHOLD}, auto-reject threshold = ${LOCAL_REJECTION_THRESHOLD}. Recalibrate when using more diverse libraries.`);
     } catch (e: any) {
       if (e.name === 'AbortError') {
         setStatus('idle');
@@ -833,6 +991,7 @@ export default function App() {
         setMetrics(null);
         setSummary(null);
         setSessionId(null);
+        sessionIdRef.current = null;
         setErrorMessage(null);
         setIteration(null);
         setExecutionContext(null);
@@ -848,10 +1007,27 @@ export default function App() {
 
       setStatus('error');
       setErrorMessage(e.message || 'Autonomous loop failed unexpectedly');
+    } finally {
+      if (sseRef.current) {
+        sseRef.current.close();
+        sseRef.current = null;
+      }
+      setRenderProgress(null);
     }
   };
 
   const handleCancel = () => {
+    const activeSid = sessionIdRef.current;
+    if (activeSid) {
+      fetch(`/api/session/${activeSid}/cancel`, { method: 'POST' }).catch(err => {
+        console.error('Failed to cancel active render process:', err);
+      });
+    }
+    if (sseRef.current) {
+      sseRef.current.close();
+      sseRef.current = null;
+    }
+    setRenderProgress(null);
     abortRef.current?.abort();
     abortRef.current = null;
   };
@@ -873,13 +1049,12 @@ export default function App() {
     setCurrentPhase('ANALYZE — Pre-analyzing Library');
     addLog(`🔬 Pre-analyzing ${unanalyzed.length} track(s) before session starts...`);
 
-    for (let i = 0; i < unanalyzed.length; i++) {
-      if (signal.aborted) {
-        setPreAnalysisProgress(null);
-        return;
-      }
+    // Bounded parallel queue — analyze up to 3 tracks concurrently
+    const CONCURRENCY = 3;
+    let completedCount = 0;
 
-      const entry = unanalyzed[i];
+    const analyzeOne = async (entry: typeof unanalyzed[0]) => {
+      if (signal.aborted) return;
       addLog(`  📡 Analyzing: ${entry.originalName}`);
 
       try {
@@ -912,15 +1087,22 @@ export default function App() {
           addLog(`  ✅ Analyzed: ${entry.originalName}`);
         }
       } catch (e: any) {
-        if (e.name === 'AbortError') {
-          setPreAnalysisProgress(null);
-          return;
-        }
+        if (e.name === 'AbortError') return;
         addLog(`  ⚠️ Pre-analysis failed for ${entry.originalName}: ${e.message}`);
       }
 
-      // Update progress after each track (success or failure)
-      setPreAnalysisProgress({ current: i + 1, total: unanalyzed.length });
+      completedCount++;
+      setPreAnalysisProgress({ current: completedCount, total: unanalyzed.length });
+    };
+
+    // Process in waves of CONCURRENCY
+    for (let i = 0; i < unanalyzed.length; i += CONCURRENCY) {
+      if (signal.aborted) {
+        setPreAnalysisProgress(null);
+        return;
+      }
+      const wave = unanalyzed.slice(i, i + CONCURRENCY);
+      await Promise.all(wave.map(analyzeOne));
     }
 
     await fetchLibrary();
@@ -1019,7 +1201,7 @@ export default function App() {
 
           {/* Persistent Activity Status Bar */}
           {status === 'running' && (
-            <div className="shrink-0 border-b border-[#1A1A1A] bg-[#0A0A0A] px-5 py-2.5 flex items-center justify-between text-[11px] font-mono">
+            <div className="shrink-0 border-b border-[#1A1A1A] bg-[#0A0A0A] px-5 py-2.5 flex items-center justify-between text-[11px] font-mono animate-fade-in">
               <div className="flex items-center gap-3 min-w-0">
                 <span className="uppercase tracking-[1.5px] text-[#00F0FF] font-bold shrink-0">CURRENT PHASE</span>
                 <span className="text-white font-medium truncate">
@@ -1029,27 +1211,61 @@ export default function App() {
                 </span>
               </div>
 
-              {/* Pre-analysis progress bar */}
-              {preAnalysisProgress && (
-                <div className="flex items-center gap-3 ml-4 min-w-[220px]">
-                  <div className="flex-1 h-1.5 bg-[#1A1A1A] rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-gradient-to-r from-[#00F0FF] to-[#0080FF] transition-all duration-200"
-                      style={{ width: `${(preAnalysisProgress.current / preAnalysisProgress.total) * 100}%` }}
-                    />
+              <div className="flex items-center gap-3">
+                {/* Pre-analysis progress bar */}
+                {preAnalysisProgress && (
+                  <div className="flex items-center gap-3 ml-4 min-w-[220px]">
+                    <div className="flex-1 h-1.5 bg-[#1A1A1A] rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-[#00F0FF] to-[#0080FF] transition-all duration-200"
+                        style={{ width: `${(preAnalysisProgress.current / preAnalysisProgress.total) * 100}%` }}
+                      />
+                    </div>
+                    <div className="text-[#888] tabular-nums w-12 text-right">
+                      {Math.round((preAnalysisProgress.current / preAnalysisProgress.total) * 100)}%
+                    </div>
                   </div>
-                  <div className="text-[#888] tabular-nums w-12 text-right">
-                    {Math.round((preAnalysisProgress.current / preAnalysisProgress.total) * 100)}%
-                  </div>
-                </div>
-              )}
+                )}
 
-              {/* Main loop iteration */}
-              {iteration && !preAnalysisProgress && (
-                <div className="text-[#666] shrink-0">
-                  Iteration <span className="text-white font-medium">{iteration.current}</span> / {iteration.max}
-                </div>
-              )}
+                {/* Render progress bar */}
+                {renderProgress && renderProgress.percent < 100 && (
+                  <div className="flex items-center gap-3 ml-4 min-w-[260px] animate-pulse">
+                    <span className="text-[#FF00F0] text-[9px] uppercase tracking-wider font-bold">
+                      [FFMPEG ENCODING]
+                    </span>
+                    <div className="flex-1 h-1.5 bg-[#1A1A1A] rounded-full overflow-hidden relative">
+                      <div
+                        className="h-full bg-gradient-to-r from-[#FF00F0] to-[#00F0FF] transition-all duration-200"
+                        style={{ width: `${renderProgress.percent}%` }}
+                      />
+                    </div>
+                    <div className="text-white tabular-nums font-bold w-10 text-right">
+                      {renderProgress.percent}%
+                    </div>
+                    {renderProgress.remainingSecondsEstimate !== undefined && renderProgress.remainingSecondsEstimate !== null && (
+                      <span className="text-[#666] text-[9px] shrink-0">
+                        ~{renderProgress.remainingSecondsEstimate}s left
+                      </span>
+                    )}
+                  </div>
+                )}
+
+                {/* Main loop iteration */}
+                {iteration && !preAnalysisProgress && !renderProgress && (
+                  <div className="text-[#666] shrink-0">
+                    Iteration <span className="text-white font-medium">{iteration.current}</span> / {iteration.max}
+                  </div>
+                )}
+
+                {/* Cancel Button in Status Bar */}
+                <button
+                  onClick={handleCancel}
+                  className="ml-4 px-3 py-1 rounded-md border border-red-500/40 bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 font-mono text-[10px] uppercase tracking-wider transition-all flex items-center gap-1.5 shrink-0"
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping" />
+                  Cancel Render
+                </button>
+              </div>
             </div>
           )}
 

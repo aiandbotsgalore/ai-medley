@@ -7,3 +7,8 @@ coverage/
 .env*
 !.env.example
 .aider*
+workdir/
+library/audio/
+repomix-output.txt
+repomix.config.json
+repo-context.txt

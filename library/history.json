@@ -1,5 +1,145 @@
 [
   {
+    "id": "amapor",
+    "completedAt": "2026-05-25T00:19:46.275Z",
+    "summary": "A smooth transitions medley featuring Logan Black's covers in this order: 1) Patience (section_02 - the bright, atmospheric hook), 2) Geek U.S.A. (section_01 intro + section_05 outro - building energy), 3) Noose (section_01 + section_02 - heavy groove with reset), 4) Invincible (section_01 + section_05 - powerful climax and finale). All transitions use 5-second smooth crossfades with beat alignment. Total duration: 4:45. Loudness: -12.68 LUFS.",
+    "finalAudioPath": "G:\\ai-medley--main\\workdir\\amapor\\medley_final.mp3",
+    "metrics": {
+      "emotionalArc": 0.85,
+      "transitionSmoothness": 0.88,
+      "performerIdentity": 0.9,
+      "overallScore": 0.87,
+      "iteration": 1,
+      "phase": "complete"
+    },
+    "designPlan": {
+      "transitions": [
+        {
+          "fromTrackId": "b73248f8-4365-4163-aae8-066f2f09c64c",
+          "fromSectionId": "b73248f8-4365-4163-aae8-066f2f09c64c_section_02",
+          "toTrackId": "a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af",
+          "toSectionId": "a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af_section_01",
+          "fromExitSec": 52.5,
+          "toEntrySec": 0,
+          "transitionType": "smooth_blend",
+          "style": "smooth-transitions",
+          "duration": 5,
+          "intensity": 0.7,
+          "beatAlign": true,
+          "actualFromExitSec": 52.5,
+          "actualToEntrySec": 0,
+          "outputPath": "G:\\ai-medley--main\\workdir\\amapor\\transition_b73248f8-4365-4163-aae8-066f2f09c64c_section_02_to_a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af_section_01.mp3",
+          "durationUsed": 5,
+          "beatSnapApplied": false
+        },
+        {
+          "fromTrackId": "a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af",
+          "fromSectionId": "a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af_section_05",
+          "toTrackId": "92af5988-71e6-4e27-b4d4-28a39ec94940",
+          "toSectionId": "92af5988-71e6-4e27-b4d4-28a39ec94940_section_01",
+          "fromExitSec": 322.3,
+          "toEntrySec": 0,
+          "transitionType": "reset_moment",
+          "style": "smooth-transitions",
+          "duration": 5,
+          "intensity": 0.8,
+          "beatAlign": true,
+          "actualFromExitSec": 322.3,
+          "actualToEntrySec": 0,
+          "outputPath": "G:\\ai-medley--main\\workdir\\amapor\\transition_a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af_section_05_to_92af5988-71e6-4e27-b4d4-28a39ec94940_section_01.mp3",
+          "durationUsed": 5,
+          "beatSnapApplied": false
+        },
+        {
+          "fromTrackId": "92af5988-71e6-4e27-b4d4-28a39ec94940",
+          "fromSectionId": "92af5988-71e6-4e27-b4d4-28a39ec94940_section_02",
+          "toTrackId": "ced92c24-3dac-4e54-bd9c-059b234a0402",
+          "toSectionId": "ced92c24-3dac-4e54-bd9c-059b234a0402_section_01",
+          "fromExitSec": 93.7,
+          "toEntrySec": 0,
+          "transitionType": "reset_moment",
+          "style": "smooth-transitions",
+          "duration": 5,
+          "intensity": 0.8,
+          "beatAlign": true,
+          "actualFromExitSec": 93.7,
+          "actualToEntrySec": 0,
+          "outputPath": "G:\\ai-medley--main\\workdir\\amapor\\transition_92af5988-71e6-4e27-b4d4-28a39ec94940_section_02_to_ced92c24-3dac-4e54-bd9c-059b234a0402_section_01.mp3",
+          "durationUsed": 5,
+          "beatSnapApplied": false
+        }
+      ]
+    }
+  },
+  {
+    "id": "qvgnr",
+    "completedAt": "2026-05-24T20:45:32.286Z",
+    "summary": "Professional medley built with smooth transitions between 6 tracks. Duration: ~10:56. Quality: -14.18 LUFS, -0.89 dB true peak, 5.7 LRA.\n\nTRACK ORDER & TRANSITIONS:\n1. Patience (Tool Cover) - Opening hook [0:00-0:52]\n2. → Pneuma Session - Atmospheric intro [0:52-1:40] (smooth blend, score 0.85)\n3. → Edin (Smashing Pumpkins Cover) - Chorus → Reset [1:40-2:07] (smooth blend, score 0.812)\n4. → Lucky (Radiohead) - Intro → Chorus [2:07-3:34] (smooth blend, score 0.864)\n5. → Noose - Reset section [3:34-4:01] (smooth blend, score 0.897 - HIGHEST in matrix!)\n6. → Geek U.S.A. (Smashing Pumpkins Cover) - Full track finale [4:01-10:56] (smooth blend, score 0.879)\n\nKEY DESIGN DECISIONS:\n- Used highest-scoring transition pairs from the matrix (all scores ≥ 0.812)\n- Prioritized beat alignment (1.0) and harmonic compatibility (0.92) between tracks\n- Created energy arc: bright opener → atmospheric build → high energy → reset → powerful finale\n- All transitions use 5-second smooth blends with beat alignment\n\nQUALITY METRICS:\n- Integrated Loudness: -14.18 LUFS (target: -14)\n- True Peak: -0.89 dB (within -1 dB target)\n- Loudness Range: 5.7 LU (good dynamic range)\n- Sample Rate: 48kHz, 320kbps MP3",
+    "finalAudioPath": "G:\\ai-medley--main\\workdir\\qvgnr\\final_medley_limited.mp3",
+    "metrics": {
+      "emotionalArc": 82,
+      "transitionSmoothness": 88,
+      "performerIdentity": 90,
+      "overallScore": 85,
+      "iteration": 1,
+      "phase": "EVALUATE — Final medley quality verified. All metrics within professional standards."
+    },
+    "designPlan": {
+      "transitions": [
+        {
+          "fromTrackId": "b73248f8-4365-4163-aae8-066f2f09c64c",
+          "fromSectionId": "b73248f8-4365-4163-aae8-066f2f09c64c_section_02",
+          "fromExitSec": 52.5,
+          "toTrackId": "b04f13b3-16b3-4d44-9732-65a169b47a7f",
+          "toSectionId": "b04f13b3-16b3-4d44-9732-65a169b47a7f_section_01",
+          "toEntrySec": 0,
+          "transitionType": "smooth_blend",
+          "justification": "Score 0.85 - Excellent smooth blend with tempo compatibility 0.943, beat alignment 1.0, harmonic compatibility 0.82. Exit strength 0.748 → Entry strength 0.985. This creates a natural flow from the bright Patience cover into the atmospheric Pneuma intro."
+        },
+        {
+          "fromTrackId": "b04f13b3-16b3-4d44-9732-65a169b47a7f",
+          "fromSectionId": "b04f13b3-16b3-4d44-9732-65a169b47a7f_section_01",
+          "fromExitSec": 88.4,
+          "toTrackId": "e46e5b72-c8ab-43a0-92c3-978917507fc0",
+          "toSectionId": "e46e5b72-c8ab-43a0-92c3-978917507fc0_section_02",
+          "toEntrySec": 90.1,
+          "transitionType": "smooth_blend",
+          "justification": "Score 0.812 - Good smooth blend with tempo 0.714, beat 1.0, harmonic 0.92. Energy continuity 0.942. The Pneuma intro flows naturally into Edin's high-energy chorus section."
+        },
+        {
+          "fromTrackId": "e46e5b72-c8ab-43a0-92c3-978917507fc0",
+          "fromSectionId": "e46e5b72-c8ab-43a0-92c3-978917507fc0_section_04",
+          "fromExitSec": 276.8,
+          "toTrackId": "09ffc54c-b8bc-4305-9a85-d28ab4798f88",
+          "toSectionId": "09ffc54c-b8bc-4305-9a85-d28ab4798f88_section_01",
+          "toEntrySec": 0,
+          "transitionType": "smooth_blend",
+          "justification": "Score 0.864 - Excellent blend with tempo 0.8, beat 1.0, harmonic 0.92. Reset moment quality 0.86. The Edin breakdown/reset section creates perfect breathing room before Lucky's inviting intro."
+        },
+        {
+          "fromTrackId": "09ffc54c-b8bc-4305-9a85-d28ab4798f88",
+          "fromSectionId": "09ffc54c-b8bc-4305-9a85-d28ab4798f88_section_03",
+          "fromExitSec": 176.3,
+          "toTrackId": "92af5988-71e6-4e27-b4d4-28a39ec94940",
+          "toSectionId": "92af5988-71e6-4e27-b4d4-28a39ec94940_section_02",
+          "toEntrySec": 66.2,
+          "transitionType": "smooth_blend",
+          "justification": "Score 0.897 - HIGHEST scoring transition in matrix! Tempo 0.943, beat 1.0, harmonic 0.92. Energy continuity 0.933. This is the smoothest possible handoff in the entire library."
+        },
+        {
+          "fromTrackId": "92af5988-71e6-4e27-b4d4-28a39ec94940",
+          "fromSectionId": "92af5988-71e6-4e27-b4d4-28a39ec94940_section_02",
+          "fromExitSec": 93.7,
+          "toTrackId": "a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af",
+          "toSectionId": "a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af_section_01",
+          "toEntrySec": 0,
+          "transitionType": "smooth_blend",
+          "justification": "Score 0.879 - Excellent finale transition. Tempo 0.943, beat 1.0, harmonic 0.92. Entry strength 0.993 (best entry candidate in library). Noose's reset section flows perfectly into Geek U.S.A.'s strong intro for a powerful finale."
+        }
+      ]
+    }
+  },
+  {
     "id": "wnf8hf",
     "completedAt": "2026-05-20T14:44:59.692Z",
     "summary": "The medley is complete. It features a five-song progression starting with 'Patience (Tool Cover)' and 'pneuma session', building into 'Geek U.S.A. (Smashing Pumpkins cover)', 'Lucky (Radiohead)', and peaking with 'Noose Mastered'. The design focuses on a smooth tempo and energy increase, with BPMs ranging from 109 to 131. All snippets were normalized for consistent volume and blended with 5-second crossfades. The final evaluation scores were high (Overall: 90), indicating excellent transition quality and a well-structured emotional arc. No further refinement was needed.",

@@ -5,7 +5,9 @@ import type { ProviderId } from './ConfigPanel';
 interface HeaderProps {
   status: 'idle' | 'uploading' | 'running' | 'completed' | 'error';
   provider: ProviderId;
+  currentModel?: string;
   onConfigClick: () => void;
+  onForceModelSwitch?: () => void;
   onCancel?: () => void;
 }
 
@@ -17,7 +19,14 @@ const statusLabels: Record<string, string> = {
   error: 'System Error'
 };
 
-export default function Header({ status, provider, onConfigClick, onCancel }: HeaderProps) {
+export default function Header({ 
+  status, 
+  provider, 
+  currentModel, 
+  onForceModelSwitch, 
+  onConfigClick, 
+  onCancel 
+}: HeaderProps) {
   const isActive = status === 'running' || status === 'uploading';
   return (
     <header className="h-16 border-b border-[#1E1E1E] flex items-center justify-between px-6 bg-[#0C0C0C] shrink-0 relative overflow-hidden">
@@ -40,18 +49,42 @@ export default function Header({ status, provider, onConfigClick, onCancel }: He
         </div>
       </div>
       <div className="flex items-center gap-5 relative z-10">
+        {/* Current Model Indicator */}
+        {currentModel && (
+          <div 
+            className="flex items-center gap-2 px-3 py-1 rounded-md bg-[#111] border border-[#333] text-[10px] font-mono"
+            title={currentModel}
+          >
+            <span className="text-[#666]">MODEL</span>
+            <span className="text-[#00F0FF] max-w-[260px] truncate">{currentModel}</span>
+          </div>
+        )}
+
         <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-full bg-[#111] border border-[#222]">
           <div className={`w-2 h-2 rounded-full transition-colors duration-300 ${isActive ? 'bg-[#00F0FF] shadow-[0_0_8px_#00F0FF] animate-pulse' : status === 'completed' ? 'bg-emerald-400' : status === 'error' ? 'bg-red-400' : 'bg-[#444]'}`} />
           <span className={`text-[10px] font-mono uppercase tracking-widest transition-colors ${isActive ? 'text-[#00F0FF]' : 'text-[#666]'}`}>
             {statusLabels[status] || 'Unknown'}
           </span>
         </div>
+
         <button
           onClick={onConfigClick}
           className="w-8 h-8 rounded-lg border border-[#333] bg-[#111] flex items-center justify-center text-[#888] hover:text-white hover:border-[#00F0FF]/50 hover:bg-[#00F0FF]/5 transition-all duration-200"
         >
           <Settings className="w-4 h-4" />
         </button>
+
+        {/* Manual Model Switch Button (only when running) */}
+        {status === 'running' && onForceModelSwitch && (
+          <button
+            onClick={onForceModelSwitch}
+            title="Force switch to next fallback model"
+            className="px-3 py-1 text-[10px] font-mono border border-[#444] bg-[#111] hover:bg-[#222] hover:border-[#00F0FF]/60 rounded text-[#888] hover:text-[#00F0FF] transition-all"
+          >
+            SWITCH MODEL
+          </button>
+        )}
+
         {status === 'running' && (
           <button
             onClick={() => onCancel?.()}

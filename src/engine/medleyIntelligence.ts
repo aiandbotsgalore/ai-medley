@@ -656,6 +656,23 @@ function bestSection(track: TrackIntelligence, key: keyof SectionScore['scores']
   return [...track.sectionScores].sort((a, b) => b.scores[key] - a.scores[key])[0] || track.sectionScores[0];
 }
 
+// Simple historical success scorer from permanent wisdom
+function historicalSuccessBonus(fromTrackId: string, toTrackId: string, wisdom: any[]): number {
+  if (!wisdom.length) return 0;
+  const relevant = wisdom.filter(w => 
+    w.type === 'completed_medley' && 
+    w.designPlan?.transitions?.some((t: any) => t.fromTrackId === fromTrackId && t.toTrackId === toTrackId)
+  );
+  if (!relevant.length) return 0;
+
+  // Average the overallScore from those past medleys
+  const scores = relevant.map(w => w.metrics?.overallScore || 70).filter(Boolean);
+  if (!scores.length) return 0.05; // small bonus just for having history
+
+  const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
+  return clamp01((avg - 60) / 80) * 0.25; // up to +0.25 boost for historically good combinations
+}
+
 function transitionTypeFromScores(scores: TransitionScore['scores']): TransitionScore['transitionType'] {
   const candidates: Array<[TransitionScore['transitionType'], number]> = [
     ['smooth_blend', scores.smoothBlend],
@@ -752,28 +769,44 @@ function computeSectionPairTransition(
 export function buildTransitionMatrix(tracks: TrackIntelligence[]): TransitionScore[] {
   const matrix: TransitionScore[] = [];
   const MAX_PAIRS_PER_TRACK_COMBO = 8;
+  const TOP_N_FOR_LOCAL_PRUNING = 5; // Phase 2: Use fast local scorer for pre-filtering
 
   for (const from of tracks) {
     for (const to of tracks) {
       if (from.profile.trackId === to.profile.trackId) continue;
 
-      // Get the top exit candidates from the "from" track and top entry candidates from the "to" track
       const exitCands = from.rankedExitCandidates.slice(0, 5);
       const entryCands = to.rankedEntryCandidates.slice(0, 5);
 
-      const pairResults: Array<{ ts: TransitionScore; rawScore: number }> = [];
+      // === Phase 2: Top-N pre-filtering using fast local scorer ===
+      const scoredCandidates: Array<{ fromScore: SectionScore; toScore: SectionScore; localScore: number }> = [];
 
       for (const fromScore of exitCands) {
         for (const toScore of entryCands) {
-          const pairData = computeSectionPairTransition(from, to, fromScore, toScore);
-          if (pairData) {
-            const ts: TransitionScore = {
-              fromTrackId: from.profile.trackId,
-              toTrackId: to.profile.trackId,
-              ...pairData
-            };
-            pairResults.push({ ts, rawScore: pairData.score });
+          const local = scoreSectionPairLocal(from, to, fromScore.sectionId, toScore.sectionId);
+          if (local) {
+            scoredCandidates.push({ fromScore, toScore, localScore: local.score });
           }
+        }
+      }
+
+      // Keep only top N by local score (Phase 2 filtering)
+      const topCandidates = scoredCandidates
+        .sort((a, b) => b.localScore - a.localScore)
+        .slice(0, TOP_N_FOR_LOCAL_PRUNING);
+
+      const pairResults: Array<{ ts: TransitionScore; rawScore: number }> = [];
+
+      for (const cand of topCandidates) {
+        // Only do the heavier compute on the pruned top N
+        const pairData = computeSectionPairTransition(from, to, cand.fromScore, cand.toScore);
+        if (pairData) {
+          const ts: TransitionScore = {
+            fromTrackId: from.profile.trackId,
+            toTrackId: to.profile.trackId,
+            ...pairData
+          };
+          pairResults.push({ ts, rawScore: pairData.score });
         }
       }
 
@@ -820,7 +853,8 @@ function buildStrategy(
   matrix: TransitionScore[],
   sectionKey: keyof SectionScore['scores'],
   tradeoffs: string[],
-  warnings: string[]
+  warnings: string[],
+  wisdom: any[] = []
 ): MedleyOrderStrategy {
   const byId = new Map(tracks.map(track => [track.profile.trackId, track]));
 
@@ -876,7 +910,7 @@ function buildStrategy(
       const section = source?.sectionScores.find(item => item.sectionId === track.selectedSectionIds[0]);
       return section?.scores[sectionKey] ?? source?.profile.confidence ?? 0.4;
     })
-  ]);
+  ]) + historicalSuccessBonus(orderedIds[0], orderedIds[orderedIds.length-1], wisdom || []); // light cross-medley wisdom boost
 
   return {
     strategyId,
@@ -891,7 +925,7 @@ function buildStrategy(
   };
 }
 
-export function buildOrderStrategies(tracks: TrackIntelligence[], matrix: TransitionScore[]): MedleyOrderStrategy[] {
+export function buildOrderStrategies(tracks: TrackIntelligence[], matrix: TransitionScore[], wisdom: any[] = []): MedleyOrderStrategy[] {
   if (!tracks.length) return [];
   const byEnergy = [...tracks].sort((a, b) => a.profile.averageEnergy - b.profile.averageEnergy);
   const byHook = [...tracks].sort((a, b) => (bestSection(b, 'hookStrength')?.scores.hookStrength ?? 0) - (bestSection(a, 'hookStrength')?.scores.hookStrength ?? 0));
@@ -908,12 +942,12 @@ export function buildOrderStrategies(tracks: TrackIntelligence[], matrix: Transi
     .map(track => track.profile.trackId);
 
   return [
-    buildStrategy('smoothest_order', 'Smoothest Order', smoothOrder, tracks, matrix, 'transitionUsability', ['May sacrifice peak drama for blend quality.'], ['Key is not locally confirmed.']),
-    buildStrategy('best_emotional_arc_proxy', 'Best Emotional Arc Proxy', liftOrder, tracks, matrix, 'buildUsefulness', ['Emotional role is inferred from energy, brightness, density, and dynamics only.'], ['Not a lyric or meaning analysis.']),
-    buildStrategy('highest_intensity', 'Highest Intensity', intensityOrder, tracks, matrix, 'hookStrength', ['Can feel relentless if every section is loud.'], ['Intensity is based on local energy proxies.']),
-    buildStrategy('surprise_contrast', 'Most Surprising Creative Contrast', contrastOrder, tracks, matrix, 'contrastValue', ['More creative risk and less guaranteed smoothness.'], ['Surprise is heuristic.']),
-    buildStrategy('live_showcase', 'Best Live Performance Showcase', liftOrder, tracks, matrix, 'finalePotential', ['Optimizes performance arc over technical smoothness.'], ['Vocal intensity is not confirmed unless cloud listening or user notes are provided.']),
-    buildStrategy('shortest_strong_medley', 'Shortest Strong Medley', shortestOrder, tracks, matrix, 'hookStrength', ['Leaves out lower-ranked material.'], ['Short strategy prioritizes hook proxies.'])
+    buildStrategy('smoothest_order', 'Smoothest Order', smoothOrder, tracks, matrix, 'transitionUsability', ['May sacrifice peak drama for blend quality.'], ['Key is not locally confirmed.'], wisdom),
+    buildStrategy('best_emotional_arc_proxy', 'Best Emotional Arc Proxy', liftOrder, tracks, matrix, 'buildUsefulness', ['Emotional role is inferred from energy, brightness, density, and dynamics only.'], ['Not a lyric or meaning analysis.'], wisdom),
+    buildStrategy('highest_intensity', 'Highest Intensity', intensityOrder, tracks, matrix, 'hookStrength', ['Can feel relentless if every section is loud.'], ['Intensity is based on local energy proxies.'], wisdom),
+    buildStrategy('surprise_contrast', 'Most Surprising Creative Contrast', contrastOrder, tracks, matrix, 'contrastValue', ['More creative risk and less guaranteed smoothness.'], ['Surprise is heuristic.'], wisdom),
+    buildStrategy('live_showcase', 'Best Live Performance Showcase', liftOrder, tracks, matrix, 'finalePotential', ['Optimizes performance arc over technical smoothness.'], ['Vocal intensity is not confirmed unless cloud listening or user notes are provided.'], wisdom),
+    buildStrategy('shortest_strong_medley', 'Shortest Strong Medley', shortestOrder, tracks, matrix, 'hookStrength', ['Leaves out lower-ranked material.'], ['Short strategy prioritizes hook proxies.'], wisdom)
   ].sort((a, b) => b.score - a.score);
 }
 
@@ -921,9 +955,10 @@ export function buildMedleyDesignPayload(input: {
   tracks: TrackIntelligence[];
   userConstraints?: Record<string, unknown>;
   maxTransitions?: number;
+  wisdom?: any[];   // permanent accumulated cross-medley learning (never deleted)
 }): MedleyDesignPayload {
   const transitionMatrix = buildTransitionMatrix(input.tracks);
-  const strategies = buildOrderStrategies(input.tracks, transitionMatrix);
+  const strategies = buildOrderStrategies(input.tracks, transitionMatrix, input.wisdom || []);
   const warnings = Array.from(new Set([
     ...input.tracks.flatMap(track => track.warnings),
     'local_facts_and_heuristic_guesses_are_separate_layers',
@@ -1044,5 +1079,99 @@ export function evaluateSectionPair(
     fromTrackId: fromTrack.profile.trackId,
     toTrackId: toTrack.profile.trackId,
     ...pairData
+  };
+}
+
+/**
+ * PHASE 2: Lightweight local heuristic scorer.
+ * Fast, deterministic, no LLM.
+ * Used for Top-N pre-filtering and ambiguous-only LLM routing.
+ */
+export function scoreSectionPairLocal(
+  fromTrack: TrackIntelligence,
+  toTrack: TrackIntelligence,
+  fromSectionId: string,
+  toSectionId: string
+): { score: number; confidence: number; components: Record<string, number>; reason: string } | null {
+  const fromScore = fromTrack.sectionScores.find(s => s.sectionId === fromSectionId);
+  const toScore = toTrack.sectionScores.find(s => s.sectionId === toSectionId);
+  if (!fromScore || !toScore) return null;
+
+  const fromSection = fromTrack.sections.find(s => s.sectionId === fromSectionId);
+  const toSection = toTrack.sections.find(s => s.sectionId === toSectionId);
+  if (!fromSection || !toSection) return null;
+
+  const components: Record<string, number> = {};
+
+  // Tempo
+  const tempo = scoreTempoCompatibility(fromTrack.profile.tempoEstimate, toTrack.profile.tempoEstimate);
+  components.tempo = tempo.score;
+
+  // Harmonic
+  const harmonic = scoreHarmonicCompatibility(fromTrack.profile, toTrack.profile);
+  components.harmonic = harmonic.score;
+
+  // Energy continuity (prefer smooth flow for most cases)
+  const energyDiff = toScore.scores.energyRole - fromScore.scores.energyRole;
+  const energyContinuity = clamp01(1 - Math.abs(energyDiff));
+  components.energyContinuity = energyContinuity;
+
+  // Duration compatibility (avoid very short or very mismatched sections)
+  const fromDur = fromSection.endSec - fromSection.startSec;
+  const toDur = toSection.endSec - toSection.startSec;
+  const durRatio = Math.min(fromDur, toDur) / Math.max(fromDur, toDur);
+  components.durationCompatibility = clamp01(durRatio);
+
+  // Beat alignment (from section scores if present)
+  const beatAlign = clamp01(
+    ((fromScore.scores.beatAlignment ?? 0.4) + (toScore.scores.beatAlignment ?? 0.4)) / 2 +
+    (fromTrack.profile.tempoConfidence + toTrack.profile.tempoConfidence) / 4
+  );
+  components.beatAlignment = clamp01(beatAlign);
+
+  // Brightness / density compatibility (spectral character)
+  const brightnessCompat = clamp01(1 - Math.abs(fromTrack.profile.brightnessProxy - toTrack.profile.brightnessProxy));
+  const densityCompat = clamp01(1 - Math.abs(fromTrack.profile.sonicDensityProxy - toTrack.profile.sonicDensityProxy));
+  components.spectralCompatibility = clamp01((brightnessCompat + densityCompat) / 2);
+
+  // Intro / outro suitability (small bonus if from is good exit and to is good entry)
+  const boundaryQuality = clamp01((fromScore.scores.exitQuality + toScore.scores.entryQuality) / 2);
+  components.boundaryQuality = boundaryQuality;
+
+  // Phase 2 tuned composite — more decisive (push toward extremes)
+  let score =
+    components.tempo * 0.28 +
+    components.harmonic * 0.26 +
+    components.beatAlignment * 0.16 +
+    components.energyContinuity * 0.14 +
+    components.spectralCompatibility * 0.08 +
+    components.boundaryQuality * 0.08;
+
+  // Strong bonus when top signals agree (makes good pairs score higher)
+  if (components.tempo >= 0.82 && components.harmonic >= 0.78) {
+    score = Math.min(1.0, score * 1.18 + 0.06);
+  }
+
+  // Strong penalty when key signals are weak (makes bad pairs score lower)
+  if (components.tempo <= 0.55 || components.harmonic <= 0.50) {
+    score = score * 0.68;
+  }
+
+  // Extra penalty for very poor tempo or harmonic match
+  if (components.tempo < 0.40 || components.harmonic < 0.40) {
+    score = score * 0.55;
+  }
+
+  const confidence = clamp01(
+    (fromTrack.profile.confidence + toTrack.profile.confidence + tempo.confidence + harmonic.confidence) / 4
+  );
+
+  const reason = `local: tempo ${components.tempo.toFixed(2)}, harm ${components.harmonic.toFixed(2)}, energy ${components.energyContinuity.toFixed(2)}, beat ${components.beatAlignment.toFixed(2)}`;
+
+  return {
+    score: round(clamp01(score)),
+    confidence: round(confidence),
+    components: Object.fromEntries(Object.entries(components).map(([k, v]) => [k, round(v)])),
+    reason
   };
 }

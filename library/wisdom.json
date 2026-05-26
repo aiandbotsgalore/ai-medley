@@ -1,0 +1,796 @@
+[
+  {
+    "type": "transition_applied",
+    "sessionId": "qvgnr",
+    "style": "smooth_blend",
+    "fromTrackId": "b73248f8-4365-4163-aae8-066f2f09c64c",
+    "fromSectionId": "b73248f8-4365-4163-aae8-066f2f09c64c_section_02",
+    "toTrackId": "b04f13b3-16b3-4d44-9732-65a169b47a7f",
+    "toSectionId": "b04f13b3-16b3-4d44-9732-65a169b47a7f_section_01",
+    "duration": 5,
+    "beatAlign": true,
+    "intensity": 0.6,
+    "notes": "Opening transition from Patience cover into Pneuma session. Maintain energy flow from bright opener to atmospheric intro.",
+    "actualFromExitSec": 52.5,
+    "actualToEntrySec": 0,
+    "beatSnapApplied": false,
+    "curvesUsed": {
+      "curve1": "tri",
+      "curve2": "tri"
+    },
+    "extraProcessing": [],
+    "estimatedQuality": 88,
+    "recordedAt": "2026-05-24T20:35:23.627Z"
+  },
+  {
+    "type": "transition_applied",
+    "sessionId": "qvgnr",
+    "style": "smooth_blend",
+    "fromTrackId": "b04f13b3-16b3-4d44-9732-65a169b47a7f",
+    "fromSectionId": "b04f13b3-16b3-4d44-9732-65a169b47a7f_section_01",
+    "toTrackId": "e46e5b72-c8ab-43a0-92c3-978917507fc0",
+    "toSectionId": "e46e5b72-c8ab-43a0-92c3-978917507fc0_section_02",
+    "duration": 5,
+    "beatAlign": true,
+    "intensity": 0.6,
+    "notes": "Transition from Pneuma atmospheric intro into Edin high-energy chorus. Build energy naturally.",
+    "actualFromExitSec": 88.4,
+    "actualToEntrySec": 90.1,
+    "beatSnapApplied": false,
+    "curvesUsed": {
+      "curve1": "tri",
+      "curve2": "tri"
+    },
+    "extraProcessing": [],
+    "estimatedQuality": 88,
+    "recordedAt": "2026-05-24T20:35:34.708Z"
+  },
+  {
+    "type": "transition_applied",
+    "sessionId": "qvgnr",
+    "style": "smooth_blend",
+    "fromTrackId": "e46e5b72-c8ab-43a0-92c3-978917507fc0",
+    "fromSectionId": "e46e5b72-c8ab-43a0-92c3-978917507fc0_section_04",
+    "toTrackId": "09ffc54c-b8bc-4305-9a85-d28ab4798f88",
+    "toSectionId": "09ffc54c-b8bc-4305-9a85-d28ab4798f88_section_01",
+    "duration": 5,
+    "beatAlign": true,
+    "intensity": 0.6,
+    "notes": "Transition from Edin breakdown/reset into Lucky intro. Create breathing room before new energy.",
+    "actualFromExitSec": 276.8,
+    "actualToEntrySec": 0,
+    "beatSnapApplied": false,
+    "curvesUsed": {
+      "curve1": "tri",
+      "curve2": "tri"
+    },
+    "extraProcessing": [],
+    "estimatedQuality": 88,
+    "recordedAt": "2026-05-24T20:35:50.999Z"
+  },
+  {
+    "type": "transition_applied",
+    "sessionId": "qvgnr",
+    "style": "smooth_blend",
+    "fromTrackId": "09ffc54c-b8bc-4305-9a85-d28ab4798f88",
+    "fromSectionId": "09ffc54c-b8bc-4305-9a85-d28ab4798f88_section_03",
+    "toTrackId": "92af5988-71e6-4e27-b4d4-28a39ec94940",
+    "toSectionId": "92af5988-71e6-4e27-b4d4-28a39ec94940_section_02",
+    "duration": 5,
+    "beatAlign": true,
+    "intensity": 0.6,
+    "notes": "HIGHEST SCORING TRANSITION (0.897). Lucky into Noose reset section. Perfect harmonic and beat compatibility.",
+    "actualFromExitSec": 176.3,
+    "actualToEntrySec": 66.2,
+    "beatSnapApplied": false,
+    "curvesUsed": {
+      "curve1": "tri",
+      "curve2": "tri"
+    },
+    "extraProcessing": [],
+    "estimatedQuality": 88,
+    "recordedAt": "2026-05-24T20:36:07.035Z"
+  },
+  {
+    "type": "transition_applied",
+    "sessionId": "qvgnr",
+    "style": "smooth_blend",
+    "fromTrackId": "92af5988-71e6-4e27-b4d4-28a39ec94940",
+    "fromSectionId": "92af5988-71e6-4e27-b4d4-28a39ec94940_section_02",
+    "toTrackId": "a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af",
+    "toSectionId": "a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af_section_01",
+    "duration": 5,
+    "beatAlign": true,
+    "intensity": 0.6,
+    "notes": "FINALE TRANSITION. Noose reset into Geek U.S.A. strong intro. Build to powerful conclusion.",
+    "actualFromExitSec": 93.7,
+    "actualToEntrySec": 0,
+    "beatSnapApplied": false,
+    "curvesUsed": {
+      "curve1": "tri",
+      "curve2": "tri"
+    },
+    "extraProcessing": [],
+    "estimatedQuality": 88,
+    "recordedAt": "2026-05-24T20:36:30.178Z"
+  },
+  {
+    "type": "evaluation",
+    "sessionId": "qvgnr",
+    "metrics": {
+      "emotionalArc": 82,
+      "transitionSmoothness": 88,
+      "performerIdentity": 90,
+      "overallScore": 85,
+      "iteration": 1,
+      "phase": "EVALUATE — Final medley quality verified. All metrics within professional standards."
+    },
+    "designPlan": {
+      "transitions": [
+        {
+          "fromTrackId": "b73248f8-4365-4163-aae8-066f2f09c64c",
+          "fromSectionId": "b73248f8-4365-4163-aae8-066f2f09c64c_section_02",
+          "fromExitSec": 52.5,
+          "toTrackId": "b04f13b3-16b3-4d44-9732-65a169b47a7f",
+          "toSectionId": "b04f13b3-16b3-4d44-9732-65a169b47a7f_section_01",
+          "toEntrySec": 0,
+          "transitionType": "smooth_blend",
+          "justification": "Score 0.85 - Excellent smooth blend with tempo compatibility 0.943, beat alignment 1.0, harmonic compatibility 0.82. Exit strength 0.748 → Entry strength 0.985. This creates a natural flow from the bright Patience cover into the atmospheric Pneuma intro."
+        },
+        {
+          "fromTrackId": "b04f13b3-16b3-4d44-9732-65a169b47a7f",
+          "fromSectionId": "b04f13b3-16b3-4d44-9732-65a169b47a7f_section_01",
+          "fromExitSec": 88.4,
+          "toTrackId": "e46e5b72-c8ab-43a0-92c3-978917507fc0",
+          "toSectionId": "e46e5b72-c8ab-43a0-92c3-978917507fc0_section_02",
+          "toEntrySec": 90.1,
+          "transitionType": "smooth_blend",
+          "justification": "Score 0.812 - Good smooth blend with tempo 0.714, beat 1.0, harmonic 0.92. Energy continuity 0.942. The Pneuma intro flows naturally into Edin's high-energy chorus section."
+        },
+        {
+          "fromTrackId": "e46e5b72-c8ab-43a0-92c3-978917507fc0",
+          "fromSectionId": "e46e5b72-c8ab-43a0-92c3-978917507fc0_section_04",
+          "fromExitSec": 276.8,
+          "toTrackId": "09ffc54c-b8bc-4305-9a85-d28ab4798f88",
+          "toSectionId": "09ffc54c-b8bc-4305-9a85-d28ab4798f88_section_01",
+          "toEntrySec": 0,
+          "transitionType": "smooth_blend",
+          "justification": "Score 0.864 - Excellent blend with tempo 0.8, beat 1.0, harmonic 0.92. Reset moment quality 0.86. The Edin breakdown/reset section creates perfect breathing room before Lucky's inviting intro."
+        },
+        {
+          "fromTrackId": "09ffc54c-b8bc-4305-9a85-d28ab4798f88",
+          "fromSectionId": "09ffc54c-b8bc-4305-9a85-d28ab4798f88_section_03",
+          "fromExitSec": 176.3,
+          "toTrackId": "92af5988-71e6-4e27-b4d4-28a39ec94940",
+          "toSectionId": "92af5988-71e6-4e27-b4d4-28a39ec94940_section_02",
+          "toEntrySec": 66.2,
+          "transitionType": "smooth_blend",
+          "justification": "Score 0.897 - HIGHEST scoring transition in matrix! Tempo 0.943, beat 1.0, harmonic 0.92. Energy continuity 0.933. This is the smoothest possible handoff in the entire library."
+        },
+        {
+          "fromTrackId": "92af5988-71e6-4e27-b4d4-28a39ec94940",
+          "fromSectionId": "92af5988-71e6-4e27-b4d4-28a39ec94940_section_02",
+          "fromExitSec": 93.7,
+          "toTrackId": "a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af",
+          "toSectionId": "a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af_section_01",
+          "toEntrySec": 0,
+          "transitionType": "smooth_blend",
+          "justification": "Score 0.879 - Excellent finale transition. Tempo 0.943, beat 1.0, harmonic 0.92. Entry strength 0.993 (best entry candidate in library). Noose's reset section flows perfectly into Geek U.S.A.'s strong intro for a powerful finale."
+        }
+      ]
+    },
+    "recordedAt": "2026-05-24T20:44:49.502Z"
+  },
+  {
+    "type": "completed_medley",
+    "sessionId": "qvgnr",
+    "summary": "Professional medley built with smooth transitions between 6 tracks. Duration: ~10:56. Quality: -14.18 LUFS, -0.89 dB true peak, 5.7 LRA.\n\nTRACK ORDER & TRANSITIONS:\n1. Patience (Tool Cover) - Opening hook [0:00-0:52]\n2. → Pneuma Session - Atmospheric intro [0:52-1:40] (smooth blend, score 0.85)\n3. → Edin (Smashing Pumpkins Cover) - Chorus → Reset [1:40-2:07] (smooth blend, score 0.812)\n4. → Lucky (Radiohead) - Intro → Chorus [2:07-3:34] (smooth blend, score 0.864)\n5. → Noose - Reset section [3:34-4:01] (smooth blend, score 0.897 - HIGHEST in matrix!)\n6. → Geek U.S.A. (Smashing Pumpkins Cover) - Full track finale [4:01-10:56] (smooth blend, score 0.879)\n\nKEY DESIGN DECISIONS:\n- Used highest-scoring transition pairs from the matrix (all scores ≥ 0.812)\n- Prioritized beat alignment (1.0) and harmonic compatibility (0.92) between tracks\n- Created energy arc: bright opener → atmospheric build → high energy → reset → powerful finale\n- All transitions use 5-second smooth blends with beat alignment\n\nQUALITY METRICS:\n- Integrated Loudness: -14.18 LUFS (target: -14)\n- True Peak: -0.89 dB (within -1 dB target)\n- Loudness Range: 5.7 LU (good dynamic range)\n- Sample Rate: 48kHz, 320kbps MP3",
+    "metrics": {
+      "emotionalArc": 82,
+      "transitionSmoothness": 88,
+      "performerIdentity": 90,
+      "overallScore": 85,
+      "iteration": 1,
+      "phase": "EVALUATE — Final medley quality verified. All metrics within professional standards."
+    },
+    "designPlan": {
+      "transitions": [
+        {
+          "fromTrackId": "b73248f8-4365-4163-aae8-066f2f09c64c",
+          "fromSectionId": "b73248f8-4365-4163-aae8-066f2f09c64c_section_02",
+          "fromExitSec": 52.5,
+          "toTrackId": "b04f13b3-16b3-4d44-9732-65a169b47a7f",
+          "toSectionId": "b04f13b3-16b3-4d44-9732-65a169b47a7f_section_01",
+          "toEntrySec": 0,
+          "transitionType": "smooth_blend",
+          "justification": "Score 0.85 - Excellent smooth blend with tempo compatibility 0.943, beat alignment 1.0, harmonic compatibility 0.82. Exit strength 0.748 → Entry strength 0.985. This creates a natural flow from the bright Patience cover into the atmospheric Pneuma intro."
+        },
+        {
+          "fromTrackId": "b04f13b3-16b3-4d44-9732-65a169b47a7f",
+          "fromSectionId": "b04f13b3-16b3-4d44-9732-65a169b47a7f_section_01",
+          "fromExitSec": 88.4,
+          "toTrackId": "e46e5b72-c8ab-43a0-92c3-978917507fc0",
+          "toSectionId": "e46e5b72-c8ab-43a0-92c3-978917507fc0_section_02",
+          "toEntrySec": 90.1,
+          "transitionType": "smooth_blend",
+          "justification": "Score 0.812 - Good smooth blend with tempo 0.714, beat 1.0, harmonic 0.92. Energy continuity 0.942. The Pneuma intro flows naturally into Edin's high-energy chorus section."
+        },
+        {
+          "fromTrackId": "e46e5b72-c8ab-43a0-92c3-978917507fc0",
+          "fromSectionId": "e46e5b72-c8ab-43a0-92c3-978917507fc0_section_04",
+          "fromExitSec": 276.8,
+          "toTrackId": "09ffc54c-b8bc-4305-9a85-d28ab4798f88",
+          "toSectionId": "09ffc54c-b8bc-4305-9a85-d28ab4798f88_section_01",
+          "toEntrySec": 0,
+          "transitionType": "smooth_blend",
+          "justification": "Score 0.864 - Excellent blend with tempo 0.8, beat 1.0, harmonic 0.92. Reset moment quality 0.86. The Edin breakdown/reset section creates perfect breathing room before Lucky's inviting intro."
+        },
+        {
+          "fromTrackId": "09ffc54c-b8bc-4305-9a85-d28ab4798f88",
+          "fromSectionId": "09ffc54c-b8bc-4305-9a85-d28ab4798f88_section_03",
+          "fromExitSec": 176.3,
+          "toTrackId": "92af5988-71e6-4e27-b4d4-28a39ec94940",
+          "toSectionId": "92af5988-71e6-4e27-b4d4-28a39ec94940_section_02",
+          "toEntrySec": 66.2,
+          "transitionType": "smooth_blend",
+          "justification": "Score 0.897 - HIGHEST scoring transition in matrix! Tempo 0.943, beat 1.0, harmonic 0.92. Energy continuity 0.933. This is the smoothest possible handoff in the entire library."
+        },
+        {
+          "fromTrackId": "92af5988-71e6-4e27-b4d4-28a39ec94940",
+          "fromSectionId": "92af5988-71e6-4e27-b4d4-28a39ec94940_section_02",
+          "fromExitSec": 93.7,
+          "toTrackId": "a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af",
+          "toSectionId": "a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af_section_01",
+          "toEntrySec": 0,
+          "transitionType": "smooth_blend",
+          "justification": "Score 0.879 - Excellent finale transition. Tempo 0.943, beat 1.0, harmonic 0.92. Entry strength 0.993 (best entry candidate in library). Noose's reset section flows perfectly into Geek U.S.A.'s strong intro for a powerful finale."
+        }
+      ]
+    },
+    "finalAudioPath": "G:\\ai-medley--main\\workdir\\qvgnr\\final_medley_limited.mp3",
+    "tracksInvolved": [
+      "b73248f8-4365-4163-aae8-066f2f09c64c",
+      "b04f13b3-16b3-4d44-9732-65a169b47a7f",
+      "e46e5b72-c8ab-43a0-92c3-978917507fc0",
+      "09ffc54c-b8bc-4305-9a85-d28ab4798f88",
+      "92af5988-71e6-4e27-b4d4-28a39ec94940"
+    ],
+    "finalQuality": {
+      "integratedLUFS": -14.18,
+      "loudnessRange": 5.7,
+      "truePeak": -0.89,
+      "overallQualityNote": "Loudness in a comfortable modern range.",
+      "rawOutput": "Input #0, mp3, from 'G:\\ai-medley--main\\workdir\\qvgnr\\final_medley_limited.mp3':\r\n  Metadata:\r\n    encoder         : Lavf60.16.100\r\n  Duration: 00:10:55.94, start: 0.023021, bitrate: 320 kb/s\r\n  Stream #0:0: Audio: mp3, 48000 Hz, stereo, fltp, 320 kb/s\r\n    Metadata:\r\n      encoder         : Lavc60.31\r\nStream mapping:\r\n  Stream #0:0 -> #0:0 (mp3 (mp3float) -> pcm_s16le (native))\r\nPress [q] to stop, [?] for help\r\nOutput #0, null, to 'pipe:':\r\n  Metadata:\r\n    encoder         : Lavf60.16.100\r\n  Stream #0:0: Audio: pcm_s16le, 192000 Hz, stereo, s16, 6144 kb/s\r\n    Metadata:\r\n      encoder         : Lavc60.31.102 pcm_s16le\r\nsize=       0kB time=00:00:00.00 bitrate=N/A speed=   0x    \rsize=N/A time=00:00:21.20 bitrate=N/A speed=41.1x    \rsize=N/A time=00:00:43.00 bitrate=N/A speed=42.3x    \rsize=N/A time=00:01:04.90 bitrate=N/A speed=42.7x    \rsize=N/A time=00:01:26.90 bitrate=N/A speed=  43x    \rsize=N/A time=00:01:48.80 bitrate=N/A speed=43.1x    \rsize=N/A time=00:02:10.70 bitrate=N/A speed=43.2x    \rsize=N/A time=00:02:32.60 bitrate=N/A speed=43.3x    \rsize=N/A time=00:02:54.50 bitrate=N/A speed=43.3x    \rsize=N/A time=00:03:16.80 bitrate=N/A speed=43.5x    \rsize=N/A time=00:03:39.00 bitrate=N/A speed=43.5x    \rsize=N/A time=00:04:01.20 bitrate=N/A speed=43.6x    \rsize=N/A time=00:04:23.30 bitrate=N/A speed=43.7x    \rsize=N/A time=00:04:45.20 bitrate=N/A speed=43.7x    \rsize=N/A time=00:05:07.30 bitrate=N/A speed=43.7x    \rsize=N/A time=00:05:29.40 bitrate=N/A speed=43.7x    \rsize=N/A time=00:05:51.40 bitrate=N/A speed=43.7x    \rsize=N/A time=00:06:13.40 bitrate=N/A speed=43.7x    \rsize=N/A time=00:06:35.20 bitrate=N/A speed=43.7x    \rsize=N/A time=00:06:57.00 bitrate=N/A speed=43.7x    \rsize=N/A time=00:07:18.90 bitrate=N/A speed=43.7x    \rsize=N/A time=00:07:40.90 bitrate=N/A speed=43.7x    \rsize=N/A time=00:08:02.90 bitrate=N/A speed=43.7x    \rsize=N/A time=00:08:24.90 bitrate=N/A speed=43.7x    \rsize=N/A time=00:08:46.80 bitrate=N/A speed=43.7x    \rsize=N/A time=00:09:08.70 bitrate=N/A speed=43.7x    \rsize=N/A time=00:09:30.40 bitrate=N/A speed=43.7x    \rsize=N/A time=00:09:52.30 bitrate=N/A speed=43.7x    \rsize=N/A time=00:10:14.10 bitrate=N/A speed=43.7x    \rsize=N/A time=00:10:36.10 bitrate=N/A speed=43.7x    \r[out#0/null @ 0000028291351a00] video:0kB audio:491925kB subtitle:0kB other streams:0kB global headers:0kB muxing overhead: unknown\r\nsize=N/A time=00:10:53.00 bitrate=N/A speed=43.6x    \r\n[Parsed_loudnorm_0 @ 000002829138dc40] \r\n{\r\n\t\"input_i\" : \"-14.18\",\r\n\t\"input_tp\" : \"-0.89\",\r\n\t\"input_lra\" : \"5.70\",\r\n\t\"input_thresh\" : \"-24.32\",\r\n\t\"output_i\" : \"-24.09\",\r\n\t\"output_tp\" : \"-8.84\",\r\n\t\"output_lra\" : \"5.60\",\r\n\t\"output_thresh\" : \"-34.20\",\r\n\t\"normalization_type\" : \"dynamic\",\r\n\t\"target_offset\" : \"0.09\"\r\n}\r\n"
+    },
+    "recordedAt": "2026-05-24T20:45:47.637Z"
+  },
+  {
+    "type": "transition_applied",
+    "sessionId": "amapor",
+    "style": "smooth-transitions",
+    "fromTrackId": "b73248f8-4365-4163-aae8-066f2f09c64c",
+    "fromSectionId": "b73248f8-4365-4163-aae8-066f2f09c64c_section_02",
+    "toTrackId": "a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af",
+    "toSectionId": "a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af_section_01",
+    "duration": 5,
+    "beatAlign": true,
+    "intensity": 0.7,
+    "notes": null,
+    "actualFromExitSec": 52.5,
+    "actualToEntrySec": 0,
+    "beatSnapApplied": false,
+    "curvesUsed": {
+      "curve1": "tri",
+      "curve2": "tri"
+    },
+    "extraProcessing": [],
+    "estimatedQuality": 88,
+    "recordedAt": "2026-05-25T00:14:49.285Z"
+  },
+  {
+    "type": "transition_applied",
+    "sessionId": "amapor",
+    "style": "smooth-transitions",
+    "fromTrackId": "a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af",
+    "fromSectionId": "a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af_section_05",
+    "toTrackId": "92af5988-71e6-4e27-b4d4-28a39ec94940",
+    "toSectionId": "92af5988-71e6-4e27-b4d4-28a39ec94940_section_01",
+    "duration": 5,
+    "beatAlign": true,
+    "intensity": 0.8,
+    "notes": null,
+    "actualFromExitSec": 322.3,
+    "actualToEntrySec": 0,
+    "beatSnapApplied": false,
+    "curvesUsed": {
+      "curve1": "tri",
+      "curve2": "tri"
+    },
+    "extraProcessing": [],
+    "estimatedQuality": 88,
+    "recordedAt": "2026-05-25T00:14:50.290Z"
+  },
+  {
+    "type": "transition_applied",
+    "sessionId": "amapor",
+    "style": "smooth-transitions",
+    "fromTrackId": "92af5988-71e6-4e27-b4d4-28a39ec94940",
+    "fromSectionId": "92af5988-71e6-4e27-b4d4-28a39ec94940_section_02",
+    "toTrackId": "ced92c24-3dac-4e54-bd9c-059b234a0402",
+    "toSectionId": "ced92c24-3dac-4e54-bd9c-059b234a0402_section_01",
+    "duration": 5,
+    "beatAlign": true,
+    "intensity": 0.8,
+    "notes": null,
+    "actualFromExitSec": 93.7,
+    "actualToEntrySec": 0,
+    "beatSnapApplied": false,
+    "curvesUsed": {
+      "curve1": "tri",
+      "curve2": "tri"
+    },
+    "extraProcessing": [],
+    "estimatedQuality": 88,
+    "recordedAt": "2026-05-25T00:14:50.836Z"
+  },
+  {
+    "type": "transition_applied",
+    "sessionId": "amapor",
+    "style": "smooth-transitions",
+    "fromTrackId": "a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af",
+    "fromSectionId": "a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af_section_01",
+    "toTrackId": "a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af",
+    "toSectionId": "a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af_section_05",
+    "duration": 5,
+    "beatAlign": true,
+    "intensity": 0.6,
+    "notes": null,
+    "actualFromExitSec": 5,
+    "actualToEntrySec": 0,
+    "beatSnapApplied": false,
+    "curvesUsed": {
+      "curve1": "tri",
+      "curve2": "tri"
+    },
+    "extraProcessing": [],
+    "estimatedQuality": 88,
+    "recordedAt": "2026-05-25T00:16:06.851Z"
+  },
+  {
+    "type": "transition_applied",
+    "sessionId": "amapor",
+    "style": "smooth-transitions",
+    "fromTrackId": "92af5988-71e6-4e27-b4d4-28a39ec94940",
+    "fromSectionId": "92af5988-71e6-4e27-b4d4-28a39ec94940_section_01",
+    "toTrackId": "92af5988-71e6-4e27-b4d4-28a39ec94940",
+    "toSectionId": "92af5988-71e6-4e27-b4d4-28a39ec94940_section_02",
+    "duration": 5,
+    "beatAlign": true,
+    "intensity": 0.6,
+    "notes": null,
+    "actualFromExitSec": 5,
+    "actualToEntrySec": 0,
+    "beatSnapApplied": false,
+    "curvesUsed": {
+      "curve1": "tri",
+      "curve2": "tri"
+    },
+    "extraProcessing": [],
+    "estimatedQuality": 88,
+    "recordedAt": "2026-05-25T00:16:07.241Z"
+  },
+  {
+    "type": "transition_applied",
+    "sessionId": "amapor",
+    "style": "smooth-transitions",
+    "fromTrackId": "ced92c24-3dac-4e54-bd9c-059b234a0402",
+    "fromSectionId": "ced92c24-3dac-4e54-bd9c-059b234a0402_section_01",
+    "toTrackId": "ced92c24-3dac-4e54-bd9c-059b234a0402",
+    "toSectionId": "ced92c24-3dac-4e54-bd9c-059b234a0402_section_05",
+    "duration": 5,
+    "beatAlign": true,
+    "intensity": 0.7,
+    "notes": null,
+    "actualFromExitSec": 5,
+    "actualToEntrySec": 0,
+    "beatSnapApplied": false,
+    "curvesUsed": {
+      "curve1": "tri",
+      "curve2": "tri"
+    },
+    "extraProcessing": [],
+    "estimatedQuality": 88,
+    "recordedAt": "2026-05-25T00:16:07.665Z"
+  },
+  {
+    "type": "evaluation",
+    "sessionId": "amapor",
+    "metrics": {
+      "emotionalArc": 0.85,
+      "transitionSmoothness": 0.88,
+      "performerIdentity": 0.9,
+      "overallScore": 0.87,
+      "iteration": 1,
+      "phase": "complete"
+    },
+    "designPlan": {
+      "transitions": [
+        {
+          "fromTrackId": "b73248f8-4365-4163-aae8-066f2f09c64c",
+          "fromSectionId": "b73248f8-4365-4163-aae8-066f2f09c64c_section_02",
+          "toTrackId": "a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af",
+          "toSectionId": "a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af_section_01",
+          "fromExitSec": 52.5,
+          "toEntrySec": 0,
+          "transitionType": "smooth_blend",
+          "style": "smooth-transitions",
+          "duration": 5,
+          "intensity": 0.7,
+          "beatAlign": true,
+          "actualFromExitSec": 52.5,
+          "actualToEntrySec": 0,
+          "outputPath": "G:\\ai-medley--main\\workdir\\amapor\\transition_b73248f8-4365-4163-aae8-066f2f09c64c_section_02_to_a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af_section_01.mp3",
+          "durationUsed": 5,
+          "beatSnapApplied": false
+        },
+        {
+          "fromTrackId": "a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af",
+          "fromSectionId": "a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af_section_05",
+          "toTrackId": "92af5988-71e6-4e27-b4d4-28a39ec94940",
+          "toSectionId": "92af5988-71e6-4e27-b4d4-28a39ec94940_section_01",
+          "fromExitSec": 322.3,
+          "toEntrySec": 0,
+          "transitionType": "reset_moment",
+          "style": "smooth-transitions",
+          "duration": 5,
+          "intensity": 0.8,
+          "beatAlign": true,
+          "actualFromExitSec": 322.3,
+          "actualToEntrySec": 0,
+          "outputPath": "G:\\ai-medley--main\\workdir\\amapor\\transition_a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af_section_05_to_92af5988-71e6-4e27-b4d4-28a39ec94940_section_01.mp3",
+          "durationUsed": 5,
+          "beatSnapApplied": false
+        },
+        {
+          "fromTrackId": "92af5988-71e6-4e27-b4d4-28a39ec94940",
+          "fromSectionId": "92af5988-71e6-4e27-b4d4-28a39ec94940_section_02",
+          "toTrackId": "ced92c24-3dac-4e54-bd9c-059b234a0402",
+          "toSectionId": "ced92c24-3dac-4e54-bd9c-059b234a0402_section_01",
+          "fromExitSec": 93.7,
+          "toEntrySec": 0,
+          "transitionType": "reset_moment",
+          "style": "smooth-transitions",
+          "duration": 5,
+          "intensity": 0.8,
+          "beatAlign": true,
+          "actualFromExitSec": 93.7,
+          "actualToEntrySec": 0,
+          "outputPath": "G:\\ai-medley--main\\workdir\\amapor\\transition_92af5988-71e6-4e27-b4d4-28a39ec94940_section_02_to_ced92c24-3dac-4e54-bd9c-059b234a0402_section_01.mp3",
+          "durationUsed": 5,
+          "beatSnapApplied": false
+        }
+      ]
+    },
+    "recordedAt": "2026-05-25T00:19:46.224Z"
+  },
+  {
+    "type": "completed_medley",
+    "sessionId": "amapor",
+    "summary": "A smooth transitions medley featuring Logan Black's covers in this order: 1) Patience (section_02 - the bright, atmospheric hook), 2) Geek U.S.A. (section_01 intro + section_05 outro - building energy), 3) Noose (section_01 + section_02 - heavy groove with reset), 4) Invincible (section_01 + section_05 - powerful climax and finale). All transitions use 5-second smooth crossfades with beat alignment. Total duration: 4:45. Loudness: -12.68 LUFS.",
+    "metrics": {
+      "emotionalArc": 0.85,
+      "transitionSmoothness": 0.88,
+      "performerIdentity": 0.9,
+      "overallScore": 0.87,
+      "iteration": 1,
+      "phase": "complete"
+    },
+    "designPlan": {
+      "transitions": [
+        {
+          "fromTrackId": "b73248f8-4365-4163-aae8-066f2f09c64c",
+          "fromSectionId": "b73248f8-4365-4163-aae8-066f2f09c64c_section_02",
+          "toTrackId": "a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af",
+          "toSectionId": "a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af_section_01",
+          "fromExitSec": 52.5,
+          "toEntrySec": 0,
+          "transitionType": "smooth_blend",
+          "style": "smooth-transitions",
+          "duration": 5,
+          "intensity": 0.7,
+          "beatAlign": true,
+          "actualFromExitSec": 52.5,
+          "actualToEntrySec": 0,
+          "outputPath": "G:\\ai-medley--main\\workdir\\amapor\\transition_b73248f8-4365-4163-aae8-066f2f09c64c_section_02_to_a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af_section_01.mp3",
+          "durationUsed": 5,
+          "beatSnapApplied": false
+        },
+        {
+          "fromTrackId": "a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af",
+          "fromSectionId": "a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af_section_05",
+          "toTrackId": "92af5988-71e6-4e27-b4d4-28a39ec94940",
+          "toSectionId": "92af5988-71e6-4e27-b4d4-28a39ec94940_section_01",
+          "fromExitSec": 322.3,
+          "toEntrySec": 0,
+          "transitionType": "reset_moment",
+          "style": "smooth-transitions",
+          "duration": 5,
+          "intensity": 0.8,
+          "beatAlign": true,
+          "actualFromExitSec": 322.3,
+          "actualToEntrySec": 0,
+          "outputPath": "G:\\ai-medley--main\\workdir\\amapor\\transition_a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af_section_05_to_92af5988-71e6-4e27-b4d4-28a39ec94940_section_01.mp3",
+          "durationUsed": 5,
+          "beatSnapApplied": false
+        },
+        {
+          "fromTrackId": "92af5988-71e6-4e27-b4d4-28a39ec94940",
+          "fromSectionId": "92af5988-71e6-4e27-b4d4-28a39ec94940_section_02",
+          "toTrackId": "ced92c24-3dac-4e54-bd9c-059b234a0402",
+          "toSectionId": "ced92c24-3dac-4e54-bd9c-059b234a0402_section_01",
+          "fromExitSec": 93.7,
+          "toEntrySec": 0,
+          "transitionType": "reset_moment",
+          "style": "smooth-transitions",
+          "duration": 5,
+          "intensity": 0.8,
+          "beatAlign": true,
+          "actualFromExitSec": 93.7,
+          "actualToEntrySec": 0,
+          "outputPath": "G:\\ai-medley--main\\workdir\\amapor\\transition_92af5988-71e6-4e27-b4d4-28a39ec94940_section_02_to_ced92c24-3dac-4e54-bd9c-059b234a0402_section_01.mp3",
+          "durationUsed": 5,
+          "beatSnapApplied": false
+        }
+      ]
+    },
+    "finalAudioPath": "G:\\ai-medley--main\\workdir\\amapor\\medley_final.mp3",
+    "tracksInvolved": [
+      "b73248f8-4365-4163-aae8-066f2f09c64c",
+      "a6770f0c-b0f3-4129-b1cd-6fe1fec7f2af",
+      "92af5988-71e6-4e27-b4d4-28a39ec94940"
+    ],
+    "finalQuality": {
+      "integratedLUFS": -12.68,
+      "loudnessRange": 5.2,
+      "truePeak": -1.25,
+      "overallQualityNote": "Loudness in a comfortable modern range.",
+      "rawOutput": "Input #0, mp3, from 'G:\\ai-medley--main\\workdir\\amapor\\medley_final.mp3':\r\n  Metadata:\r\n    encoded_by      : REAPER\r\n    date            : 2026-05-11\r\n    time_reference  : 5644800\r\n    encoder         : Lavf60.16.100\r\n  Duration: 00:04:45.72, start: 0.023021, bitrate: 320 kb/s\r\n  Stream #0:0: Audio: mp3, 48000 Hz, stereo, fltp, 320 kb/s\r\n    Metadata:\r\n      encoder         : Lavc60.31\r\nStream mapping:\r\n  Stream #0:0 -> #0:0 (mp3 (mp3float) -> pcm_s16le (native))\r\nPress [q] to stop, [?] for help\r\nOutput #0, null, to 'pipe:':\r\n  Metadata:\r\n    encoded_by      : REAPER\r\n    date            : 2026-05-11\r\n    time_reference  : 5644800\r\n    encoder         : Lavf60.16.100\r\n  Stream #0:0: Audio: pcm_s16le, 192000 Hz, stereo, s16, 6144 kb/s\r\n    Metadata:\r\n      encoder         : Lavc60.31.102 pcm_s16le\r\nsize=       0kB time=00:00:00.00 bitrate=N/A speed=   0x    \rsize=N/A time=00:00:20.10 bitrate=N/A speed=  39x    \rsize=N/A time=00:00:41.90 bitrate=N/A speed=41.2x    \rsize=N/A time=00:01:03.60 bitrate=N/A speed=41.9x    \rsize=N/A time=00:01:20.00 bitrate=N/A speed=39.6x    \rsize=N/A time=00:01:40.60 bitrate=N/A speed=39.9x    \rsize=N/A time=00:02:01.50 bitrate=N/A speed=40.2x    \rsize=N/A time=00:02:22.10 bitrate=N/A speed=40.3x    \rsize=N/A time=00:02:43.00 bitrate=N/A speed=40.5x    \rsize=N/A time=00:03:03.50 bitrate=N/A speed=40.5x    \rsize=N/A time=00:03:22.70 bitrate=N/A speed=40.3x    \rsize=N/A time=00:03:42.20 bitrate=N/A speed=40.2x    \rsize=N/A time=00:04:02.30 bitrate=N/A speed=40.2x    \rsize=N/A time=00:04:23.00 bitrate=N/A speed=40.3x    \rsize=N/A time=00:04:42.70 bitrate=N/A speed=40.2x    \r[out#0/null @ 00000275b3661b80] video:0kB audio:214270kB subtitle:0kB other streams:0kB global headers:0kB muxing overhead: unknown\r\nsize=N/A time=00:04:42.80 bitrate=N/A speed=40.2x    \r\n[Parsed_loudnorm_0 @ 00000275b368f940] \r\n{\r\n\t\"input_i\" : \"-12.68\",\r\n\t\"input_tp\" : \"-1.25\",\r\n\t\"input_lra\" : \"5.20\",\r\n\t\"input_thresh\" : \"-22.89\",\r\n\t\"output_i\" : \"-23.65\",\r\n\t\"output_tp\" : \"-10.80\",\r\n\t\"output_lra\" : \"4.90\",\r\n\t\"output_thresh\" : \"-33.81\",\r\n\t\"normalization_type\" : \"dynamic\",\r\n\t\"target_offset\" : \"-0.35\"\r\n}\r\n"
+    },
+    "recordedAt": "2026-05-25T00:19:53.356Z"
+  },
+  {
+    "type": "transition_applied",
+    "sessionId": "71mizb",
+    "style": "mashup_layer",
+    "fromTrackId": "b555f3f2-d87e-4405-b295-7a1f3dbfc3f7",
+    "fromSectionId": "b555f3f2-d87e-4405-b295-7a1f3dbfc3f7_section_02",
+    "toTrackId": "dd74e907-a9b0-4a86-990f-ed755b0edad4",
+    "toSectionId": "dd74e907-a9b0-4a86-990f-ed755b0edad4_section_02",
+    "duration": 8,
+    "beatAlign": true,
+    "intensity": 0.7,
+    "notes": "Testing mashup layer for creative overlap between Lucky and Noose sections",
+    "actualFromExitSec": 8,
+    "actualToEntrySec": 0,
+    "beatSnapApplied": false,
+    "curvesUsed": {
+      "curve1": "tri",
+      "curve2": "tri"
+    },
+    "extraProcessing": [
+      ",equalizer=f=250:width_type=h:width=2:g=-4,equalizer=f=4000:width_type=h:width=2:g=-3"
+    ],
+    "estimatedQuality": 78,
+    "recordedAt": "2026-05-25T04:45:43.365Z"
+  },
+  {
+    "type": "transition_applied",
+    "sessionId": "71mizb",
+    "style": "reset_moment",
+    "fromTrackId": "dd74e907-a9b0-4a86-990f-ed755b0edad4",
+    "fromSectionId": "dd74e907-a9b0-4a86-990f-ed755b0edad4_section_02",
+    "toTrackId": "7befaf89-6228-4d27-af82-21fee1d3d3c6",
+    "toSectionId": "7befaf89-6228-4d27-af82-21fee1d3d3c6_section_01",
+    "duration": 5,
+    "beatAlign": true,
+    "intensity": 0.6,
+    "notes": "Reset moment transition from Noose to GoodinGoodbye - tempo change requires clean break",
+    "actualFromExitSec": 5,
+    "actualToEntrySec": 0,
+    "beatSnapApplied": false,
+    "curvesUsed": {
+      "curve1": "log",
+      "curve2": "log"
+    },
+    "extraProcessing": [],
+    "estimatedQuality": 88,
+    "recordedAt": "2026-05-25T04:46:02.755Z"
+  },
+  {
+    "type": "transition_applied",
+    "sessionId": "71mizb",
+    "style": "smooth_blend",
+    "fromTrackId": "7befaf89-6228-4d27-af82-21fee1d3d3c6",
+    "fromSectionId": "7befaf89-6228-4d27-af82-21fee1d3d3c6_section_01",
+    "toTrackId": "a98a3836-fb4e-480e-a3d4-e015c63ade63",
+    "toSectionId": "a98a3836-fb4e-480e-a3d4-e015c63ade63_section_06",
+    "duration": 5,
+    "beatAlign": true,
+    "intensity": 0.5,
+    "notes": "Smooth blend from GoodinGoodbye to Eden finale section",
+    "actualFromExitSec": 5,
+    "actualToEntrySec": 0,
+    "beatSnapApplied": false,
+    "curvesUsed": {
+      "curve1": "tri",
+      "curve2": "tri"
+    },
+    "extraProcessing": [],
+    "estimatedQuality": 88,
+    "recordedAt": "2026-05-25T04:46:20.172Z"
+  },
+  {
+    "type": "evaluation",
+    "sessionId": "71mizb",
+    "metrics": {
+      "emotionalArc": 75,
+      "transitionSmoothness": 85,
+      "performerIdentity": 90,
+      "overallScore": 82,
+      "iteration": 1,
+      "phase": "BUILD"
+    },
+    "designPlan": {
+      "transitions": [
+        {
+          "fromTrackId": "b555f3f2-d87e-4405-b295-7a1f3dbfc3f7",
+          "fromSectionId": "b555f3f2-d87e-4405-b295-7a1f3dbfc3f7_section_02",
+          "fromExitSec": 176.3,
+          "toTrackId": "dd74e907-a9b0-4a86-990f-ed755b0edad4",
+          "toSectionId": "dd74e907-a9b0-4a86-990f-ed755b0edad4_section_02",
+          "toEntrySec": 66.2,
+          "transitionType": "mashup_layer",
+          "justification": "Highest scoring transition (0.903) with excellent smooth blend (0.935), beat alignment (1.0), and harmonic compatibility (0.92). Using mashup_layer for creative overlap between Lucky's melodic section and Noose's darker energy - creates interesting textural tension. Tempo compatibility 0.971 with both tracks around 129-130 BPM."
+        },
+        {
+          "fromTrackId": "dd74e907-a9b0-4a86-990f-ed755b0edad4",
+          "fromSectionId": "dd74e907-a9b0-4a86-990f-ed755b0edad4_section_02",
+          "fromExitSec": 93.7,
+          "toTrackId": "7befaf89-6228-4d27-af82-21fee1d3d3c6",
+          "toSectionId": "7befaf89-6228-4d27-af82-21fee1d3d3d3c6_section_01",
+          "toEntrySec": 0,
+          "transitionType": "reset_moment",
+          "justification": "Reset moment (score 0.719) handles the tempo jump from 130 BPM (Noose) to 177 BPM (GoodinGoodbye). Clean break allows the fast-paced energy of GoodinGoodbye to hit with full impact. High reset moment score (0.808) and entry strength (0.965)."
+        },
+        {
+          "fromTrackId": "7befaf89-6228-4d27-af82-21fee1d3d3c6",
+          "fromSectionId": "7befaf89-6228-4d27-af82-21fee1d3d3c6_section_01",
+          "fromExitSec": 27.3,
+          "toTrackId": "a98a3836-fb4e-480e-a3d4-e015c63ade63",
+          "toSectionId": "a98a3836-fb4e-480e-a3d4-e015c63ade63_section_06",
+          "toEntrySec": 324.5,
+          "transitionType": "smooth_blend",
+          "justification": "Smooth blend (score 0.732) from GoodinGoodbye's intro to Eden's finale section. Energy continuity 0.957 with compatible brightness (0.927) and density (0.957). Provides satisfying closure with Eden's high-energy finale candidate (finale potential 0.947)."
+        }
+      ]
+    },
+    "recordedAt": "2026-05-25T04:48:34.467Z"
+  },
+  {
+    "type": "transition_applied",
+    "sessionId": "10cp4a",
+    "style": "mashup_layer",
+    "fromTrackId": "b555f3f2-d87e-4405-b295-7a1f3dbfc3f7",
+    "fromSectionId": "b555f3f2-d87e-4405-b295-7a1f3dbfc3f7_section_02",
+    "toTrackId": "dd74e907-a9b0-4a86-990f-ed755b0edad4",
+    "toSectionId": "dd74e907-a9b0-4a86-990f-ed755b0edad4_section_02",
+    "duration": 5,
+    "beatAlign": true,
+    "intensity": 0.7,
+    "notes": "Layer Track D section_02 tail over Track B section_02 head. Both ~130 BPM, F major. Exploit perfect beat alignment for rhythmic lock during overlap.",
+    "actualFromExitSec": 176.3,
+    "actualToEntrySec": 66.2,
+    "beatSnapApplied": false,
+    "curvesUsed": {
+      "curve1": "tri",
+      "curve2": "tri"
+    },
+    "extraProcessing": [
+      ",equalizer=f=250:width_type=h:width=2:g=-4,equalizer=f=4000:width_type=h:width=2:g=-3"
+    ],
+    "estimatedQuality": 78,
+    "recordedAt": "2026-05-25T06:23:01.484Z"
+  },
+  {
+    "type": "transition_applied",
+    "sessionId": "10cp4a",
+    "style": "reset_moment",
+    "fromTrackId": "dd74e907-a9b0-4a86-990f-ed755b0edad4",
+    "fromSectionId": "dd74e907-a9b0-4a86-990f-ed755b0edad4_section_02",
+    "toTrackId": "7befaf89-6228-4d27-af82-21fee1d3d3c6",
+    "toSectionId": "7befaf89-6228-4d27-af82-21fee1d3d3c6_section_01",
+    "duration": 5,
+    "beatAlign": true,
+    "intensity": 0.5,
+    "notes": "Reset moment to handle tempo gap (130 to 177 BPM). Use low-energy reset zone at end of Track B section_02 to create breathing room before Track C explosive entry.",
+    "actualFromExitSec": 93.7,
+    "actualToEntrySec": 0,
+    "beatSnapApplied": false,
+    "curvesUsed": {
+      "curve1": "log",
+      "curve2": "log"
+    },
+    "extraProcessing": [],
+    "estimatedQuality": 88,
+    "recordedAt": "2026-05-25T06:23:01.967Z"
+  },
+  {
+    "type": "transition_applied",
+    "sessionId": "10cp4a",
+    "style": "smooth_blend",
+    "fromTrackId": "7befaf89-6228-4d27-af82-21fee1d3d3c6",
+    "fromSectionId": "7befaf89-6228-4d27-af82-21fee1d3d3c6_section_01",
+    "toTrackId": "a98a3836-fb4e-480e-a3d4-e015c63ade63",
+    "toSectionId": "a98a3836-fb4e-480e-a3d4-e015c63ade63_section_06",
+    "duration": 5,
+    "beatAlign": true,
+    "intensity": 0.6,
+    "notes": "Smooth blend from Track C high-energy burst into Track A finale. Energy continuity is high (0.957). Both sections are beat-aligned with strong groove.",
+    "actualFromExitSec": 5,
+    "actualToEntrySec": 0,
+    "beatSnapApplied": false,
+    "curvesUsed": {
+      "curve1": "tri",
+      "curve2": "tri"
+    },
+    "extraProcessing": [],
+    "estimatedQuality": 88,
+    "recordedAt": "2026-05-25T06:23:02.373Z"
+  },
+  {
+    "type": "transition_applied",
+    "sessionId": "10cp4a",
+    "style": "smooth_blend",
+    "fromTrackId": "7befaf89-6228-4d27-af82-21fee1d3d3c6",
+    "fromSectionId": "7befaf89-6228-4d27-af82-21fee1d3d3c6_section_01",
+    "toTrackId": "a98a3836-fb4e-480e-a3d4-e015c63ade63",
+    "toSectionId": "a98a3836-fb4e-480e-a3d4-e015c63ade63_section_06",
+    "duration": 5,
+    "beatAlign": true,
+    "intensity": 0.6,
+    "notes": "Smooth blend from Track C section_01 high-energy burst into Track A section_06 finale. Energy continuity 0.957, beat aligned, strong groove 0.905.",
+    "actualFromExitSec": 5,
+    "actualToEntrySec": 0,
+    "beatSnapApplied": false,
+    "curvesUsed": {
+      "curve1": "tri",
+      "curve2": "tri"
+    },
+    "extraProcessing": [],
+    "estimatedQuality": 88,
+    "recordedAt": "2026-05-25T06:27:20.045Z"
+  },
+  {
+    "type": "transition_applied",
+    "sessionId": "10cp4a",
+    "style": "smooth_blend",
+    "fromTrackId": "7befaf89-6228-4d27-af82-21fee1d3d3c6",
+    "fromSectionId": "7befaf89-6228-4d27-af82-21fee1d3d3c6_section_01",
+    "toTrackId": "a98a3836-fb4e-480e-a3d4-e015c63ade63",
+    "toSectionId": "a98a3836-fb4e-480e-a3d4-e015c63ade63_section_06",
+    "duration": 5,
+    "beatAlign": true,
+    "intensity": 0.8,
+    "notes": "CRITICAL: Blend the TAIL of Track C section_01 (near end at 27.3s) with the HEAD of Track A section_06 (at 324.5s). The crossfade should use the last 5s of C section_01 and first 5s of A section_06.",
+    "actualFromExitSec": 5,
+    "actualToEntrySec": 0,
+    "beatSnapApplied": false,
+    "curvesUsed": {
+      "curve1": "tri",
+      "curve2": "tri"
+    },
+    "extraProcessing": [],
+    "estimatedQuality": 88,
+    "recordedAt": "2026-05-25T06:28:07.929Z"
+  }
+]

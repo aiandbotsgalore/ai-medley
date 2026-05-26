@@ -140,9 +140,9 @@ export default function MedleyMatchPanel({ design }: { design: MedleyDesignPaylo
             <Waves className="w-3.5 h-3.5" /> Top Transitions
           </div>
           <div className="space-y-2">
-            {topTransitions.map(transition => (
+            {topTransitions.map((transition, index) => (
               <TopTransition
-                key={`${transition.fromTrackId}-${transition.toTrackId}-${transition.transitionType}`}
+                key={`${transition.fromTrackId}-${transition.toTrackId}-${transition.transitionType}-${index}`}
                 transition={transition}
               />
             ))}

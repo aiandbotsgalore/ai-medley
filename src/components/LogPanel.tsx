@@ -54,10 +54,10 @@ export default function LogPanel({ status, logs, iteration }: LogPanelProps) {
               ) : (
                 <Sparkles className="w-4 h-4 text-[#00F0FF]" />
               )}
-              <span className="text-[#00F0FF]">Autonomous Construction</span>
+              <span className="text-[#00F0FF]">Autonomous Medley Architect</span>
               {iteration && (
                 <span className="ml-auto text-[10px] font-mono text-[#444]">
-                  {iteration.current}<span className="text-[#2A2A2A]">/{iteration.max}</span>
+                  Iteration {iteration.current}<span className="text-[#2A2A2A]">/{iteration.max}</span>
                 </span>
               )}
             </>

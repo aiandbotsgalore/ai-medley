@@ -23,9 +23,7 @@ const DETAILED_DESIGN_INSTRUCTIONS =
 "4. Use recommendedStrategies heavily.\n\n" +
 "**Strict rules:**\n" +
 "- Always use exact timestamps from candidates.\n" +
-"- Never invent timestamps.\n" +
-"- **Use evaluate_section_pair for any transition you are uncertain about before committing.**\n" +
-"- **Call set_design_plan with your final ordered transition list BEFORE issuing any FFmpeg commands.** This locks in your timestamp decisions and validates scores.\n";
+"- Never invent timestamps.\n";
 
 const TOOL_DEFINITIONS = [
   {
@@ -48,43 +46,26 @@ const TOOL_DEFINITIONS = [
   },
   {
     name: 'evaluate_section_pair',
-    description: 'Evaluate the musical compatibility of a specific exit section from one track blending into a specific entry section from another track. Use this during DESIGN when you want to compare alternative section pairs beyond what the pre-computed transitionMatrixSummary provides, or to verify a specific pair before committing to it. Returns a full TransitionScore with per-dimension scores (smoothBlend, harmonicCompatibility, beatAlignment, energyContour, riskLevel, etc.).',
+    description: 'Evaluate compatibility between two sections.',
     parameters: {
       type: 'object',
       properties: {
-        fromTrackId: { type: 'string', description: 'The trackId of the source track (the one being exited)' },
-        fromSectionId: { type: 'string', description: 'The sectionId of the exit section in the source track (e.g. "track01_section_03")' },
-        toTrackId: { type: 'string', description: 'The trackId of the destination track (the one being entered)' },
-        toSectionId: { type: 'string', description: 'The sectionId of the entry section in the destination track (e.g. "track02_section_01")' }
+        fromTrackId: { type: 'string' },
+        fromSectionId: { type: 'string' },
+        toTrackId: { type: 'string' },
+        toSectionId: { type: 'string' }
       },
       required: ['fromTrackId', 'fromSectionId', 'toTrackId', 'toSectionId']
     }
   },
   {
     name: 'set_design_plan',
-    description: 'Lock in your DESIGN decisions before starting the BUILD phase. Call this exactly once at the end of DESIGN, after you have chosen your snippet sections and transition pairs. Provide the ordered list of transitions you plan to execute. The system validates each pair and warns you about low-score combinations. You MUST call this before any execute_shell_command calls.',
+    description: 'Lock DESIGN decisions.',
     parameters: {
       type: 'object',
       properties: {
-        sessionId: { type: 'string', description: 'The current session ID (provided at session start)' },
-        transitions: {
-          type: 'array',
-          description: 'Ordered list of planned transitions, one per consecutive track pair',
-          items: {
-            type: 'object',
-            properties: {
-              fromTrackId: { type: 'string' },
-              fromSectionId: { type: 'string' },
-              fromExitSec: { type: 'number', description: 'Exact timestamp (seconds) where you will cut/fade out of the source track' },
-              toTrackId: { type: 'string' },
-              toSectionId: { type: 'string' },
-              toEntrySec: { type: 'number', description: 'Exact timestamp (seconds) where you will cut/fade into the destination track' },
-              transitionType: { type: 'string', description: 'e.g. smooth_blend, hard_cut, energy_lift, etc.' },
-              justification: { type: 'string', description: 'Why this specific pair was chosen (score data, coherence reasoning)' }
-            },
-            required: ['fromTrackId', 'fromSectionId', 'fromExitSec', 'toTrackId', 'toSectionId', 'toEntrySec', 'transitionType', 'justification']
-          }
-        }
+        sessionId: { type: 'string' },
+        transitions: { type: 'array' }
       },
       required: ['sessionId', 'transitions']
     }

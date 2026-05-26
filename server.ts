@@ -5,7 +5,7 @@ import path from 'path';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { v4 as uuidv4 } from 'uuid';
-import { exec, execFile } from 'child_process';
+import { exec, execFile, spawn } from 'child_process';
 import { createServer as createViteServer } from 'vite';
 import ffmpegPath from 'ffmpeg-static';
 import MusicTempo from 'music-tempo';
@@ -14,6 +14,17 @@ import type { TrackIntelligence } from './src/engine/medleyIntelligence';
 import { analyzeLocalAudioFile, analyzeMedleyQuality } from './src/engine/localAudioAnalysis';
 
 dotenv.config();
+
+const RENDER_CONFIG = {
+  DEFAULT_TAIL_SEC: 30,
+  MIN_TAIL_SEC: 5,
+  MAX_TAIL_SEC: 60,
+  FADE_OUT_SECONDS: 3.0,
+  TIME_EPSILON: 1e-3,          // Prevents off-by-one boundary failures
+  MAX_ERROR_LOG_LINES: 50,      // Prevents memory bloating on large logs
+  SSE_HEARTBEAT_MS: 15000,      // Keeps proxy connections alive
+  PROGRESS_RATE_LIMIT_MS: 250,  // Prevents UI thread thrashing
+};
 
 const app = express();
 const PORT = 3000;
@@ -158,7 +169,15 @@ function getWisdom(): any[] {
 }
 
 function saveWisdom(data: any[]) {
-  fs.writeFileSync(wisdomPath, JSON.stringify(data, null, 2));
+  const tmpPath = wisdomPath + '.tmp';
+  try {
+    fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2));
+    fs.renameSync(tmpPath, wisdomPath);
+  } catch (e) {
+    console.error('[saveWisdom] Failed to write atomically:', e);
+    // Fallback in case of permissions or locks
+    fs.writeFileSync(wisdomPath, JSON.stringify(data, null, 2));
+  }
 }
 
 // Wisdom entries are NEVER deleted. This is intentional for permanent cumulative learning.
@@ -215,7 +234,10 @@ async function runFfmpegWithStrictLogging(
   args: string[],
   sessionWorkDir: string,
   graphScriptContent: string,
-  timeoutMs = 300000
+  timeoutMs = 300000,
+  sessionId?: string,
+  expectedDuration?: number,
+  onSpawned?: (proc: any) => void
 ): Promise<void> {
   const graphFile = path.join(sessionWorkDir, 'temp_filtergraph.txt');
   const cmdLogFile = path.join(sessionWorkDir, 'ffmpeg_command.txt');
@@ -240,31 +262,136 @@ async function runFfmpegWithStrictLogging(
   ].join('\n');
   fs.writeFileSync(cmdLogFile, cmdLogContent, 'utf8');
 
-  // 3. Execute (array form = no shell quoting issues on Windows)
+  // 3. Spawning with -progress pipe:1 and monitoring progress
   return new Promise((resolve, reject) => {
-    execFile(
-      ffmpegPath!,
-      args,
-      {
-        cwd: sessionWorkDir,
-        timeout: timeoutMs,
-        windowsHide: true,
-        maxBuffer: 100 * 1024 * 1024
-      },
-      (err, stdout, stderr) => {
-        const combined = `${stdout || ''}\n${stderr || ''}`;
-        fs.writeFileSync(stderrLogFile, combined, 'utf8');
+    // Inject auto-multithreading -threads 0 and progress tracking
+    const optimizedArgs = [...args];
+    
+    // Inject progress pipe
+    optimizedArgs.splice(optimizedArgs.length - 1, 0, '-progress', 'pipe:1');
+    
+    // Inject auto-multithreading threads 0
+    const threadsIdx = optimizedArgs.indexOf('-threads');
+    if (threadsIdx === -1) {
+      optimizedArgs.splice(optimizedArgs.length - 1, 0, '-threads', '0');
+    }
 
-        if (err) {
-          const code = (err as any).code ?? (err as any).signal ?? 'unknown';
-          reject(new Error(
-            `FFmpeg exited with code ${code}. See ffmpeg_stderr.log and temp_filtergraph.txt for exact failure.`
-          ));
-        } else {
-          resolve();
+    console.log(`[FFmpeg Spawn] Cwd: ${sessionWorkDir}`);
+    console.log(`[FFmpeg Spawn] Args: ${optimizedArgs.join(' ')}`);
+
+    const ffmpegProc = spawn(ffmpegPath!, optimizedArgs, {
+      cwd: sessionWorkDir,
+      windowsHide: true
+    });
+
+    if (onSpawned) {
+      onSpawned(ffmpegProc);
+    }
+
+    let stderrBuffer = '';
+    let stdoutBuffer = '';
+
+    // Watchdog timer
+    const watchdogTimer = setTimeout(() => {
+      console.error(`[Watchdog] Timeout reached (${timeoutMs} ms) for session ${sessionId}. Terminating process.`);
+      ffmpegProc.kill('SIGKILL');
+      reject(new Error(JSON.stringify({
+        status: 'error',
+        errorCategory: 'RENDER_TIMEOUT',
+        systemDescription: 'FFmpeg rendering process exceeded the maximum execution window.',
+        rawSnippet: `Execution timed out after ${timeoutMs}ms.`
+      })));
+    }, timeoutMs);
+
+    // Rate limiting for SSE progress logs
+    let lastProgressTime = 0;
+
+    // Parse -progress pipe:1 stdout
+    ffmpegProc.stdout.on('data', (chunk) => {
+      const dataStr = chunk.toString();
+      stdoutBuffer += dataStr;
+
+      if (!sessionId || !expectedDuration || expectedDuration <= 0) return;
+
+      // Extract out_time_us
+      const lines = dataStr.split('\n');
+      for (const line of lines) {
+        if (line.startsWith('out_time_us=')) {
+          const us = parseInt(line.substring(12).trim(), 10);
+          if (!isNaN(us) && us > 0) {
+            const elapsed = us / 1000000;
+            const percent = Math.min(99, Math.round((elapsed / expectedDuration) * 100));
+            const now = Date.now();
+            if (now - lastProgressTime >= RENDER_CONFIG.PROGRESS_RATE_LIMIT_MS) {
+              lastProgressTime = now;
+              const remaining = percent > 0 ? ((expectedDuration - elapsed) * (100 - percent)) / percent : null;
+              
+              // Broadcast progress message
+              broadcastToSession(sessionId, 'progress', {
+                stage: 'encoding',
+                percent,
+                elapsedSeconds: Math.round(elapsed),
+                remainingSecondsEstimate: remaining ? Math.round(remaining) : null
+              });
+            }
+          }
         }
       }
-    );
+    });
+
+    ffmpegProc.stderr.on('data', (chunk) => {
+      stderrBuffer += chunk.toString();
+    });
+
+    ffmpegProc.on('close', (code) => {
+      clearTimeout(watchdogTimer);
+
+      // Write execution log
+      fs.writeFileSync(stderrLogFile, `${stdoutBuffer}\n=== STDERR ===\n${stderrBuffer}`, 'utf8');
+
+      if (code !== 0) {
+        // Parse diagnostic errors
+        const lastLines = stderrBuffer.split('\n').slice(-RENDER_CONFIG.MAX_ERROR_LOG_LINES).join('\n');
+        
+        let errorCategory = 'FFMPEG_EXECUTION_FAILURE';
+        let systemDescription = 'FFmpeg render process failed. See logs for details.';
+        
+        if (stderrBuffer.includes('Invalid sample format')) {
+          errorCategory = 'INVALID_SAMPLE_FORMAT';
+          systemDescription = 'FFmpeg encountered an unsupported audio sample format.';
+        } else if (stderrBuffer.includes('No such filter')) {
+          errorCategory = 'FILTERGRAPH_SYNTAX_ERROR';
+          systemDescription = 'FFmpeg encountered an invalid or missing filter name.';
+        } else if (stderrBuffer.includes('Size mismatch')) {
+          errorCategory = 'SIZE_MISMATCH';
+          systemDescription = 'Stream size mismatch or buffer overflow.';
+        } else if (stderrBuffer.includes('atrim') && stderrBuffer.includes('out of bounds')) {
+          errorCategory = 'ATRIM_OUT_OF_BOUNDS';
+          systemDescription = 'Atrim segment time boundary exceeds track duration.';
+        }
+
+        const structuredErr = {
+          status: 'error',
+          errorCategory,
+          systemDescription,
+          rawSnippet: lastLines
+        };
+
+        // Write structured error artifact
+        try {
+          fs.writeFileSync(path.join(sessionWorkDir, 'finalize_error.json'), JSON.stringify(structuredErr, null, 2), 'utf8');
+        } catch (e) {}
+
+        reject(new Error(JSON.stringify(structuredErr)));
+      } else {
+        resolve();
+      }
+    });
+
+    ffmpegProc.on('error', (err) => {
+      clearTimeout(watchdogTimer);
+      reject(err);
+    });
   });
 }
 
@@ -272,6 +399,17 @@ function parseDuration(output: string) {
   const match = output.match(/Duration:\s*(\d+):(\d+):(\d+)\.(\d+)/);
   if (!match) return 0;
   return parseInt(match[1]) * 3600 + parseInt(match[2]) * 60 + parseInt(match[3]) + parseInt(match[4]) / 100;
+}
+
+async function queryTrackDuration(filePath: string): Promise<number> {
+  try {
+    const output = await execFfmpeg(['-i', filePath]);
+    const duration = parseDuration(output);
+    if (duration > 0) return duration;
+    throw new Error('Parsed duration was 0');
+  } catch (e: any) {
+    throw new Error(`Failed to query container duration via FFmpeg: ${e.message}`);
+  }
 }
 
 function extractNumber(output: string, pattern: RegExp) {
@@ -538,6 +676,9 @@ for (const entry of getHistory()) {
 // SSE connections for real-time streaming
 const sseClients: Record<string, express.Response[]> = {};
 
+// Active FFmpeg render processes per session — enables cancel support
+const activeRenderProcesses: Record<string, any> = {};
+
 function broadcastToSession(sessionId: string, event: string, data: any) {
   const clients = sseClients[sessionId] || [];
   const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -575,9 +716,36 @@ app.get('/api/session/:id/stream', (req, res) => {
   if (!sseClients[sessionId]) sseClients[sessionId] = [];
   sseClients[sessionId].push(res);
 
+  // Heartbeat loop to keep connections alive through reverse proxies
+  const heartbeat = setInterval(() => {
+    try {
+      res.write(': heartbeat\n\n');
+    } catch (e) {
+      clearInterval(heartbeat);
+    }
+  }, RENDER_CONFIG.SSE_HEARTBEAT_MS);
+
   req.on('close', () => {
+    clearInterval(heartbeat);
     sseClients[sessionId] = (sseClients[sessionId] || []).filter(c => c !== res);
   });
+});
+
+// Cancel active render for a session
+app.post('/api/session/:id/cancel', (req, res) => {
+  const sessionId = req.params.id;
+  const proc = activeRenderProcesses[sessionId];
+  if (proc && !proc.killed) {
+    console.log(`[Cancel] Killing active FFmpeg render for session ${sessionId}`);
+    proc.kill('SIGKILL');
+    delete activeRenderProcesses[sessionId];
+    if (sessions[sessionId]) {
+      sessions[sessionId].status = 'error';
+      logToSession(sessionId, '[finalize-medley] Render cancelled by user.');
+    }
+    return res.json({ success: true, message: 'Render process terminated.' });
+  }
+  res.json({ success: false, message: 'No active render process found for this session.' });
 });
 
 app.get('/api/library', (req, res) => {
@@ -1343,12 +1511,96 @@ app.post('/api/finalize-medley', async (req, res) => {
       logToSession(sessionId, `[finalize-medley] Progress: Validation passed. Building segments for ${transitions.length} transitions...`);
     }
 
-    // Library → file path lookup
+    // Library → file path lookup (also builds duration map for preflight)
     const library = getLibrary();
     const trackPathMap: Record<string, string> = {};
+    const trackDurationMap: Record<string, number> = {};
     library.forEach((entry: any) => {
-      if (entry && entry.id) trackPathMap[entry.id] = entry.path;
+      if (entry && entry.id) {
+        trackPathMap[entry.id] = entry.path;
+        // Use localAnalysis duration if available from pre-analysis
+        if (entry.localAnalysis?.duration && entry.localAnalysis.duration > 0) {
+          trackDurationMap[entry.id] = entry.localAnalysis.duration;
+        } else if (entry.analysis && typeof entry.analysis === 'object' && entry.analysis.duration > 0) {
+          trackDurationMap[entry.id] = entry.analysis.duration;
+        }
+      }
     });
+
+    // === PREFLIGHT: Validate all timestamps against actual track durations ===
+    if (sessionId) {
+      logToSession(sessionId, `[finalize-medley] Preflight: Validating timestamps against actual track durations...`);
+    }
+
+    const preflightErrors: string[] = [];
+    const uniqueTrackIds = new Set<string>();
+    transitions.forEach((t: any) => {
+      uniqueTrackIds.add(t.fromTrackId);
+      uniqueTrackIds.add(t.toTrackId);
+    });
+
+    // Dynamic ffprobe fallback: query duration for any track missing from library metadata
+    for (const trackId of uniqueTrackIds) {
+      if (!trackDurationMap[trackId]) {
+        const trackPath = trackPathMap[trackId];
+        if (trackPath && fs.existsSync(trackPath)) {
+          try {
+            const probedDuration = await queryTrackDuration(trackPath);
+            if (probedDuration > 0) {
+              trackDurationMap[trackId] = probedDuration;
+              console.log(`[finalize-medley] Preflight: Probed duration for ${trackId} = ${probedDuration.toFixed(2)}s`);
+            }
+          } catch (e: any) {
+            console.warn(`[finalize-medley] Preflight: Could not probe duration for ${trackId}: ${e.message}`);
+          }
+        }
+      }
+    }
+
+    // Path traversal validation
+    for (const trackId of uniqueTrackIds) {
+      const trackPath = trackPathMap[trackId];
+      if (trackPath) {
+        if (!isPathInside(trackPath, libraryDir) && !isPathInside(trackPath, workDir)) {
+          preflightErrors.push(`PATH_TRAVERSAL: Track ${trackId} path "${trackPath}" is outside allowed directories.`);
+        }
+      }
+    }
+
+    // Timing bounds validation against actual durations
+    for (let i = 0; i < transitions.length; i++) {
+      const t = transitions[i];
+      const fromExit = Number(t.actualFromExitSec);
+      const toEntry = Number(t.actualToEntrySec);
+      const fromDuration = trackDurationMap[t.fromTrackId];
+      const toDuration = trackDurationMap[t.toTrackId];
+
+      if (fromDuration !== undefined) {
+        if (fromExit > fromDuration + RENDER_CONFIG.TIME_EPSILON) {
+          preflightErrors.push(
+            `TIMING_OUT_OF_BOUNDS: transition[${i}] fromTrackId=${t.fromTrackId} exitSec=${fromExit} exceeds actual duration=${fromDuration.toFixed(2)}s`
+          );
+        }
+      }
+      if (toDuration !== undefined) {
+        if (toEntry > toDuration + RENDER_CONFIG.TIME_EPSILON) {
+          preflightErrors.push(
+            `TIMING_OUT_OF_BOUNDS: transition[${i}] toTrackId=${t.toTrackId} entrySec=${toEntry} exceeds actual duration=${toDuration.toFixed(2)}s`
+          );
+        }
+      }
+    }
+
+    if (preflightErrors.length > 0) {
+      throw new Error(
+        'PREFLIGHT VALIDATION FAILED — render aborted before FFmpeg execution.\n' +
+        preflightErrors.join('\n')
+      );
+    }
+
+    if (sessionId) {
+      logToSession(sessionId, `[finalize-medley] Preflight: All ${uniqueTrackIds.size} tracks passed validation. Proceeding to segment derivation...`);
+    }
 
     // === 1. Derive deterministic ordered segments (using ONLY the validated actual* values) ===
     const segments: Array<{
@@ -1398,7 +1650,35 @@ app.post('/api/finalize-medley', async (req, res) => {
       }
 
       const nextT = transitions[i + 1];
-      const nextExit = nextT ? Number(nextT.actualFromExitSec) : null;
+      let nextExit: number | null = nextT ? Number(nextT.actualFromExitSec) : null;
+
+      // === ADAPTIVE TAIL: For the LAST segment (no subsequent transition), cap the tail ===
+      if (nextExit === null) {
+        const toDuration = trackDurationMap[t.toTrackId];
+        const tailLimit = Math.max(
+          RENDER_CONFIG.MIN_TAIL_SEC,
+          Math.min(RENDER_CONFIG.MAX_TAIL_SEC, RENDER_CONFIG.DEFAULT_TAIL_SEC)
+        );
+        if (toDuration !== undefined && toDuration > 0) {
+          // Cap at entry + tailLimit, but don't exceed the track's actual duration
+          const cappedEnd = Math.min(toDuration, toEntry + tailLimit);
+          nextExit = cappedEnd;
+          console.log(
+            `[finalize-medley] Adaptive tail: last segment ${t.toTrackId} capped at ${cappedEnd.toFixed(2)}s ` +
+            `(entry=${toEntry}s + tailLimit=${tailLimit}s, trackDuration=${toDuration.toFixed(2)}s)`
+          );
+        } else {
+          // No duration info — apply a hard tail cap from entry point
+          nextExit = toEntry + tailLimit;
+          console.warn(
+            `[finalize-medley] Adaptive tail: no duration for ${t.toTrackId}, hard-capping at entry+${tailLimit}s = ${nextExit.toFixed(2)}s`
+          );
+        }
+
+        if (sessionId) {
+          logToSession(sessionId, `[finalize-medley] Adaptive tail: final segment capped at ${nextExit.toFixed(2)}s`);
+        }
+      }
 
       segments.push({
         trackId: t.toTrackId,
@@ -1457,13 +1737,24 @@ app.post('/api/finalize-medley', async (req, res) => {
     });
 
     // Per-input: mandatory normalization chain + atrim (exactly as specified)
+    // For the LAST segment, inject afade fade-out for clean ending
     segments.forEach((seg, idx) => {
       const normChain = 'aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,aresample=async=0,asetpts=PTS-STARTPTS';
       let atrim = `atrim=start=${seg.start}`;
       if (seg.end !== null && seg.end !== undefined) {
         atrim += `:end=${seg.end}`;
       }
-      filterLines.push(`[${idx}:a]${normChain},${atrim}[${seg.label}]`);
+
+      // Inject afade on the last segment for clean ending
+      let fadeFilter = '';
+      if (idx === segments.length - 1 && seg.end !== null && seg.end !== undefined) {
+        const segDuration = seg.end - seg.start;
+        const fadeDur = Math.min(RENDER_CONFIG.FADE_OUT_SECONDS, segDuration * 0.5);
+        const fadeStart = Math.max(0, segDuration - fadeDur);
+        fadeFilter = `,afade=t=out:st=${fadeStart.toFixed(3)}:d=${fadeDur.toFixed(3)}`;
+      }
+
+      filterLines.push(`[${idx}:a]${normChain},${atrim}${fadeFilter}[${seg.label}]`);
     });
 
     // === Phase 4+: Style-aware join graph construction (now powered by pluggable getTransitionStyleConfig) ===
@@ -1503,8 +1794,21 @@ app.post('/api/finalize-medley', async (req, res) => {
 
     const fullGraph = filterLines.join(';\n');
 
+    // === Compute expected medley duration for progress tracking ===
+    let expectedDuration = 0;
+    for (let i = 0; i < segments.length; i++) {
+      const seg = segments[i];
+      const segDur = (seg.end ?? 999) - seg.start;
+      expectedDuration += segDur;
+    }
+    // Subtract crossfade overlaps
+    for (const xd of xfadeDurations) {
+      expectedDuration -= xd;
+    }
+    expectedDuration = Math.max(1, expectedDuration);
+
     if (sessionId) {
-      logToSession(sessionId, `[finalize-medley] Progress: Filter graph constructed (${filterLines.length} lines). Writing script and starting FFmpeg...`);
+      logToSession(sessionId, `[finalize-medley] Progress: Filter graph constructed (${filterLines.length} lines). Expected duration: ${expectedDuration.toFixed(1)}s. Starting FFmpeg...`);
     }
 
     // === 4. Command using -filter_complex_script (MANDATORY) ===
@@ -1517,22 +1821,59 @@ app.post('/api/finalize-medley', async (req, res) => {
       path.basename(outputPath)   // write inside sessionWorkDir (cwd for the run)
     ];
 
-    // === 5. Execute with full artifact logging + hard failure ===
+    // === 5. Execute with full artifact logging + hard failure + progress tracking ===
+    // Compute watchdog timeout: 8x expected duration or minimum 5 minutes
+    const watchdogTimeout = Math.max(300000, Math.round(expectedDuration * 8000));
+    const renderStartTime = Date.now();
+
     try {
-      await runFfmpegWithStrictLogging(finalArgs, sessionWorkDir, fullGraph, 300000);
+      await runFfmpegWithStrictLogging(
+        finalArgs,
+        sessionWorkDir,
+        fullGraph,
+        watchdogTimeout,
+        sessionId,
+        expectedDuration,
+        (proc) => {
+          // Store for cancel support
+          activeRenderProcesses[sessionId] = proc;
+        }
+      );
     } catch (ffErr: any) {
+      delete activeRenderProcesses[sessionId];
       // Hard fail — caller sees the three log files + clear cause
       throw new Error(`FFmpeg render failed: ${ffErr.message}. Inspect temp_filtergraph.txt, ffmpeg_command.txt, and ffmpeg_stderr.log in the session folder.`);
     }
+
+    delete activeRenderProcesses[sessionId];
+    const renderElapsed = (Date.now() - renderStartTime) / 1000;
 
     // Success — ONLY reached via the pure-clean single-pass path
     sessions[sessionId].finalAudioPath = outputPath;
     sessions[sessionId].summary = summary;
 
-    console.log(`[finalize-medley] SUCCESS via PURE-CLEAN-MVP path only. Output: ${outputPath}`);
+    console.log(`[finalize-medley] SUCCESS via PURE-CLEAN-MVP path only. Output: ${outputPath} (render took ${renderElapsed.toFixed(1)}s)`);
+
+    // === Wisdom logging: Record successful render metrics ===
+    try {
+      appendWisdom({
+        type: 'render_success',
+        sessionId,
+        renderDurationSec: Math.round(renderElapsed),
+        expectedMedleyDurationSec: Math.round(expectedDuration),
+        segmentCount: numSegments,
+        crossfadeCount: xfadeDurations.length,
+        mashupBranches: mashupCount,
+        styleMix: joinStyles.reduce((acc: Record<string, number>, s) => { acc[s] = (acc[s] || 0) + 1; return acc; }, {}),
+        outputFile: path.basename(outputPath)
+      });
+    } catch (e) {
+      console.warn('[finalize-medley] Could not log wisdom:', e);
+    }
 
     if (sessionId) {
-      logToSession(sessionId, `[finalize-medley] Progress: Render complete. Final file ready: ${path.basename(outputPath)}`);
+      logToSession(sessionId, `[finalize-medley] Progress: Render complete in ${renderElapsed.toFixed(1)}s. Final file ready: ${path.basename(outputPath)}`);
+      broadcastToSession(sessionId, 'progress', { stage: 'complete', percent: 100 });
     }
 
     return res.json({
@@ -1540,6 +1881,8 @@ app.post('/api/finalize-medley', async (req, res) => {
       outputPath,
       renderPath: "pure-clean-mvp-single-pass",   // unambiguous marker
       mashupBranches: mashupCount,
+      renderDurationSec: Math.round(renderElapsed),
+      expectedMedleyDurationSec: Math.round(expectedDuration),
       message: 'Produced exclusively by the pure-clean single-pass path (original sources + linear acrossfades + one master loudnorm+limiter). No fallbacks were used.',
       usedPureCleanMVP: true,
       graphFile: path.join(sessionWorkDir, 'temp_filtergraph.txt'),

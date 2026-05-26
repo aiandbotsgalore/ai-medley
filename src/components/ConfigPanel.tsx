@@ -50,6 +50,17 @@ const GEMINI_MODELS = [
 ];
 
 const OPENROUTER_MODELS = [
+  // Free high-capability models (recommended for testing)
+  { id: 'nousresearch/hermes-3-llama-3.1-405b:free', label: 'Hermes 3 405B (free)', desc: 'Massive 405B — strong reasoning & instruction following' },
+  { id: 'qwen/qwen3-coder:free', label: 'Qwen3 Coder 480B (free)', desc: 'Very large Qwen — excellent structured output & logic' },
+  { id: 'deepseek/deepseek-v4-flash:free', label: 'DeepSeek V4 Flash (free)', desc: 'High benchmark performance, 1M context' },
+  { id: 'nvidia/nemotron-3-super-120b-a12b:free', label: 'Nemotron 3 Super 120B (free)', desc: 'NVIDIA model with massive 1M context' },
+  { id: 'meta-llama/llama-3.3-70b-instruct:free', label: 'Llama 3.3 70B (free)', desc: 'Efficient 70B that often outperforms larger models' },
+
+  // Agentic / Experimental models
+  { id: 'openrouter/owl-alpha', label: 'Owl Alpha', desc: 'High-performance model built for agentic workloads & tool use. Strong at complex workflows. (Prompts & completions may be logged by provider to improve the model)' },
+
+  // Paid / higher quality options
   { id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash', desc: 'Gemini routed through OpenRouter' },
   { id: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro', desc: 'Higher quality Gemini via OpenRouter' },
   { id: 'openai/gpt-4o-mini', label: 'GPT-4o Mini', desc: 'Low-cost OpenRouter option' },
@@ -73,7 +84,7 @@ export default function ConfigPanel({ config, onUpdate, onClose }: ConfigPanelPr
   };
 
   const setProvider = (provider: ProviderId) => {
-    const fallbackModel = provider === 'gemini' ? 'gemini-2.5-pro' : 'google/gemini-2.5-pro';
+    const fallbackModel = provider === 'gemini' ? 'gemini-2.5-pro' : 'openrouter/owl-alpha';
     update({ provider, model: fallbackModel });
   };
 

@@ -4,6 +4,11 @@ import type { MedleyConfig } from '../components/ConfigPanel';
 type ProviderResponse = {
   text?: string;
   functionCalls?: Array<{ id: string; name: string; args: unknown }>;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
 };
 
 type ProviderToolResponse = {
@@ -71,7 +76,11 @@ async function fetchOpenRouter(config: MedleyConfig, body: Record<string, unknow
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`OpenRouter request failed (${response.status}): ${text || response.statusText}`);
+    const error = new Error(`OpenRouter request failed (${response.status})`);
+    (error as any).status = response.status;
+    (error as any).rawBody = text;
+    (error as any).requestBody = body; // for debugging
+    throw error;
   }
 
   return response.json();
@@ -139,15 +148,42 @@ export function createProviderSession(
       const assistantMessage = choice?.message ?? {};
       messages.push(assistantMessage);
 
+      let functionCalls: any[] = [];
+
+      if (Array.isArray(assistantMessage.tool_calls)) {
+        functionCalls = assistantMessage.tool_calls.map((call: any) => {
+          let parsedArgs: any = {};
+          const rawArgs = call.function?.arguments;
+
+          if (rawArgs) {
+            try {
+              parsedArgs = JSON.parse(rawArgs);
+            } catch (parseErr) {
+              const parseError = new Error(`Failed to parse tool call arguments for ${call.function?.name}`);
+              (parseError as any).rawArguments = rawArgs;
+              (parseError as any).toolCall = call;
+              throw parseError;
+            }
+          }
+
+          return {
+            id: call.id,
+            name: call.function?.name ?? '',
+            args: parsedArgs
+          };
+        });
+      }
+
+      const usage = data?.usage;
+
       return {
         text: normalizeTextContent(assistantMessage.content),
-        functionCalls: Array.isArray(assistantMessage.tool_calls)
-          ? assistantMessage.tool_calls.map((call: any) => ({
-              id: call.id,
-              name: call.function?.name ?? '',
-              args: call.function?.arguments ? JSON.parse(call.function.arguments) : {}
-            }))
-          : []
+        functionCalls,
+        usage: usage ? {
+          prompt_tokens: usage.prompt_tokens,
+          completion_tokens: usage.completion_tokens,
+          total_tokens: usage.total_tokens
+        } : undefined
       };
     }
   };
