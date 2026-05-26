@@ -1492,9 +1492,7 @@ export default function App() {
           )}
         </section>
 
-        {status === 'running' ? (
-          <ExecutionContextPanel context={executionContext} status={status} />
-        ) : medleyDesign && activeTab === 'workshop' && status !== 'completed' ? (
+        {medleyDesign && activeTab === 'workshop' && status !== 'completed' && status !== 'running' ? (
           <MedleyMatchPanel design={medleyDesign} />
         ) : (
           <MetricsSidebar metrics={metrics} summary={summary} status={status} sessionId={sessionId} />
