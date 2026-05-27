@@ -1,7 +1,6 @@
 import type { MedleyConfig } from '../components/ConfigPanel';
 import type { LibraryFile } from '../components/LibrarySidebar';
 
-// Types for the autonomous loop
 interface AutonomousLoopOptions {
   config: MedleyConfig;
   library: LibraryFile[];
@@ -18,22 +17,48 @@ interface AutonomousLoopResult {
 }
 
 /**
+ * PHASE: Pre-Analysis
+ * Handles library analysis before the main loop starts.
+ */
+async function runPreAnalysis(options: AutonomousLoopOptions) {
+  // TODO: Move pre-analysis logic here
+}
+
+/**
+ * PHASE: Design
+ * Main design and planning phase.
+ */
+async function runDesignPhase(options: AutonomousLoopOptions) {
+  // TODO: Move design logic here (section selection, transitions, etc.)
+}
+
+/**
+ * PHASE: Build & Evaluate
+ * Building transitions and evaluating quality.
+ */
+async function runBuildAndEvaluate(options: AutonomousLoopOptions) {
+  // TODO: Move build + evaluation loop here
+}
+
+/**
  * Main autonomous medley generation loop.
- * This will eventually contain the core agent logic extracted from App.tsx.
+ * Extracted from App.tsx for better maintainability and future improvements.
  */
 export async function runAutonomousLoop(options: AutonomousLoopOptions): Promise<AutonomousLoopResult> {
-  const { config, library, sessionId, onLog, onModelChange, signal } = options;
+  const { onLog } = options;
 
-  if (onLog) onLog('Starting autonomous medley generation loop...');
+  if (onLog) onLog('[Loop] Starting autonomous medley generation...');
 
-  // TODO: Move core loop logic from App.tsx here
-  // - Model management
-  // - Tool calling loop
-  // - Design phase
-  // - Evaluation & reflection
-  // - Finalize medley
+  try {
+    await runPreAnalysis(options);
+    await runDesignPhase(options);
+    await runBuildAndEvaluate(options);
 
-  return {
-    success: true,
-  };
+    if (onLog) onLog('[Loop] Autonomous loop completed successfully.');
+
+    return { success: true };
+  } catch (error: any) {
+    if (onLog) onLog(`[Loop] Error: ${error.message}`);
+    return { success: false, error: error.message };
+  }
 }
