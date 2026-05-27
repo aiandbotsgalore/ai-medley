@@ -427,6 +427,24 @@ async function queryTrackDuration(filePath: string): Promise<number> {
   }
 }
 
+// Probe for the first silence_start in a track range that lasts >= 2 seconds.
+// Returns an absolute track timestamp, or null if none found or probe fails.
+async function probeFirstTrailingSilence(trackPath: string, fromSec: number, toSec: number): Promise<number | null> {
+  try {
+    const output = await execFfmpeg([
+      '-hide_banner', '-ss', String(fromSec), '-to', String(toSec),
+      '-i', trackPath,
+      '-af', 'silencedetect=noise=-50dB:d=2.0',
+      '-f', 'null', '-'
+    ], 20000);
+    const match = output.match(/silence_start:\s*([\d.]+)/);
+    if (match) return fromSec + Number(match[1]);
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function extractNumber(output: string, pattern: RegExp) {
   const match = output.match(pattern);
   return match ? Number(match[1]) : null;
@@ -674,6 +692,7 @@ const sessions: Record<string, {
 
 // Cache of the last computed TrackIntelligence[] for on-demand section pair evaluation
 let cachedTrackIntelligence: { key: string; tracks: TrackIntelligence[] } | null = null;
+let cachedUserConstraints: Record<string, any> = {};
 
 // Restore completed sessions from history so /api/audio/:id works after restart
 for (const entry of getHistory()) {
@@ -892,9 +911,8 @@ app.get('/api/audio-probe/:id', (req, res) => {
   if (!entry || !fs.existsSync(entry.path)) {
     return res.status(404).json({ error: 'File not found' });
   }
-  const cmd = `"${ffmpegPath}" -i "${entry.path}" -hide_banner -f null - 2>&1`;
-  exec(cmd, { timeout: 10000 }, (err, stdout, stderr) => {
-    const output = stdout + (stderr || '');
+  execFile(ffmpegPath!, ['-hide_banner', '-i', entry.path, '-f', 'null', '-'], { timeout: 10000, windowsHide: true }, (err, stdout, stderr) => {
+    const output = (stdout || '') + (stderr || '');
     const durationMatch = output.match(/Duration:\s*(\d+):(\d+):(\d+)\.(\d+)/);
     let durationSecs = 0;
     if (durationMatch) {
@@ -921,8 +939,8 @@ app.get('/api/waveform/:id', (req, res) => {
   
   const peaksFile = path.join(workDir, `peaks_${entry.id}.raw`);
   // Downsample to 8kHz mono, output raw PCM
-  const cmd = `"${ffmpegPath}" -y -i "${entry.path}" -ac 1 -ar 8000 -f s16le -acodec pcm_s16le "${peaksFile}"`;
-  exec(cmd, { timeout: 30000 }, (err) => {
+  const pcmArgs = ['-y', '-hide_banner', '-i', entry.path, '-ac', '1', '-ar', '8000', '-f', 's16le', '-acodec', 'pcm_s16le', peaksFile];
+  execFile(ffmpegPath!, pcmArgs, { timeout: 30000, windowsHide: true }, (err) => {
     if (err || !fs.existsSync(peaksFile)) {
       return res.json({ peaks: [] });
     }
@@ -1019,14 +1037,6 @@ app.post('/api/session/metrics', (req, res) => {
   if (sessions[sessionId]) {
     sessions[sessionId].metrics = { ...sessions[sessionId].metrics, ...metrics };
     broadcastToSession(sessionId, 'metrics', sessions[sessionId].metrics);
-
-    // Accumulate evaluation wisdom permanently
-    appendWisdom({
-      type: 'evaluation',
-      sessionId,
-      metrics,
-      designPlan: sessions[sessionId].designPlan || null
-    });
   }
   res.json({ success: true });
 });
@@ -1086,7 +1096,16 @@ app.get('/api/audio-file', (req, res) => {
 app.post('/api/audio-analysis/local', async (req, res) => {
   const { fileId, filePath, sessionId, saveToLibrary, includeClips } = req.body;
   const library = getLibrary();
-  const entry = fileId ? library.find((item: any) => item.id === fileId) : null;
+  const basename = filePath ? path.basename(filePath).toLowerCase() : '';
+  const entry = fileId
+    ? library.find((item: any) => item.id === fileId)
+    : basename
+      ? library.find((item: any) =>
+          item.id === basename.replace(/\.[^.]+$/, '') ||
+          (item.originalName || '').toLowerCase() === basename ||
+          (item.filename || '').toLowerCase() === basename
+        )
+      : null;
   const resolvedPath = entry?.path || (filePath ? resolveReadableAudioPath(filePath, sessionId) : null);
 
   if (!resolvedPath || !fs.existsSync(resolvedPath)) {
@@ -1103,7 +1122,7 @@ app.post('/api/audio-analysis/local', async (req, res) => {
     const clips = includeClips
       ? await createAnalysisClips(resolvedPath, result.analysis.candidateSections || [], result.analysis.duration || 0)
       : [];
-    const medleyIntelligence = entry
+    const medleyIntelligence = (entry && result.medleyIntelligence)
       ? retargetTrackIntelligence(result.medleyIntelligence, entry.id, entry.originalName)
       : result.medleyIntelligence;
     if (entry && saveToLibrary) {
@@ -1156,16 +1175,19 @@ app.post('/api/medley-intelligence/design', (req, res) => {
 
   // Load permanent accumulated wisdom so the system gets smarter over time
   const wisdom = getWisdom();
-
-  res.json({
-    success: true,
-    design: buildMedleyDesignPayload({
-      tracks,
-      userConstraints: userConstraints || {},
-      maxTransitions: 32,
-      wisdom
-    })
+  const designPayload = buildMedleyDesignPayload({
+    tracks,
+    userConstraints: userConstraints || {},
+    maxTransitions: 32,
+    wisdom
   });
+  // LOG_DESIGN_STRATEGIES — temporary diagnostic logging
+  cachedUserConstraints = userConstraints || {};
+  const strategyLog = (designPayload.recommendedStrategies as any[]).map((s: any) =>
+    `  ${s.strategyId}: estimatedDurationSec=${s.estimatedDurationSec}s score=${s.score}`
+  ).join(`\n`);
+  console.log(`[DESIGN] userConstraints=${JSON.stringify(userConstraints)}\n[DESIGN] Strategy estimates (ranked):\n${strategyLog}`);
+  res.json({ success: true, design: designPayload });
 });
 
 // Section pair evaluation (uses the cache populated by the design route)
@@ -1209,6 +1231,10 @@ app.post('/api/session/design-plan', (req, res) => {
   }
   if (!sessions[sessionId]) {
     sessions[sessionId] = { status: 'running', logs: [] };
+  } else {
+    // Preserve timing cache populated by apply_musical_transition calls before this set_design_plan
+    sessions[sessionId].status = 'running';
+    if (!sessions[sessionId].logs) sessions[sessionId].logs = [];
   }
   sessions[sessionId].designPlan = plan;
 
@@ -1253,6 +1279,10 @@ app.post('/api/apply-transition', async (req, res) => {
   // --- Basic implementation of musical transition ---
   console.log(`[apply-transition] Processing: ${fromTrackId}:${fromSectionId} → ${toTrackId}:${toSectionId} [${style}]`);
 
+  // Ensure session exists so timing cache can be written before set_design_plan is called
+  if (sessionId && !sessions[sessionId]) {
+    sessions[sessionId] = { status: 'running', logs: [] };
+  }
   const session = sessionId ? sessions[sessionId] : null;
   const designPlan = session?.designPlan;
 
@@ -1337,6 +1367,18 @@ app.post('/api/apply-transition', async (req, res) => {
 
     const actualFromExit = fromStart + transitionDuration;
     const actualToEntry = toStart;
+
+    // Always cache timing keyed by section pair — survives set_design_plan overwrites
+    if (session) {
+      if (!session.transitionTimingCache) session.transitionTimingCache = {};
+      const cacheKey = `${fromTrackId}:${fromSectionId}→${toTrackId}:${toSectionId}`;
+      (session.transitionTimingCache as Record<string, any>)[cacheKey] = {
+        actualFromExitSec: actualFromExit,
+        actualToEntrySec: actualToEntry,
+        durationUsed: transitionDuration,
+        style
+      };
+    }
 
     // === SEPARATED: Enrichment (for finalize_medley pure-clean path) happens independently of preview render ===
     // This decouples the "preview concern" (temporary audition file) from the enrichment needed by the final renderer.
@@ -1543,7 +1585,8 @@ app.post('/api/finalize-medley', async (req, res) => {
   if (!fs.existsSync(sessionWorkDir)) {
     fs.mkdirSync(sessionWorkDir, { recursive: true });
   }
-  const outputPath = path.join(sessionWorkDir, finalMp3Path);
+  const _normalizedMp3 = path.basename(finalMp3Path);
+  const outputPath = path.join(sessionWorkDir, _normalizedMp3);
 
   // Clean up any old confusing filtergraph.txt from previous code paths
   const oldGraph = path.join(sessionWorkDir, 'filtergraph.txt');
@@ -1567,6 +1610,48 @@ app.post('/api/finalize-medley', async (req, res) => {
     // === STRICT UPFRONT VALIDATION (Fix #2) ===
     // Every transition MUST have the enriched actual* timings from apply_musical_transition.
     // No silent ?? 0 fallbacks on internal segments.
+    // Fill missing timings from per-session cache (set by apply_musical_transition, survives set_design_plan)
+    const timingCache = session?.transitionTimingCache as Record<string, any> | undefined;
+    if (timingCache) {
+      transitions.forEach((t: any) => {
+        const hasFromExit = t.actualFromExitSec !== undefined && t.actualFromExitSec !== null;
+        const hasToEntry = t.actualToEntrySec !== undefined && t.actualToEntrySec !== null;
+        if (!hasFromExit || !hasToEntry) {
+          const cacheKey = `${t.fromTrackId}:${t.fromSectionId}→${t.toTrackId}:${t.toSectionId}`;
+          const cached = timingCache[cacheKey];
+          if (cached) {
+            if (!hasFromExit) t.actualFromExitSec = cached.actualFromExitSec;
+            if (!hasToEntry) t.actualToEntrySec = cached.actualToEntrySec;
+            console.log(`[finalize-medley] Filled timing from cache for ${cacheKey}: fromExit=${t.actualFromExitSec}, toEntry=${t.actualToEntrySec}`);
+          }
+        }
+      });
+    }
+
+    // Second fallback: derive timing from cachedTrackIntelligence section data for any still-missing transitions.
+    // This covers the case where the agent never called apply_musical_transition for a specific pair.
+    // Formula mirrors apply_musical_transition: actualFromExitSec = section.endSec, actualToEntrySec = section.startSec.
+    if (cachedTrackIntelligence) {
+      transitions.forEach((t: any) => {
+        const hasFromExit = t.actualFromExitSec !== undefined && t.actualFromExitSec !== null;
+        const hasToEntry = t.actualToEntrySec !== undefined && t.actualToEntrySec !== null;
+        if (!hasFromExit || !hasToEntry) {
+          const fromTrackIntel = cachedTrackIntelligence!.tracks.find((tr: any) => tr.profile.trackId === t.fromTrackId);
+          const toTrackIntel = cachedTrackIntelligence!.tracks.find((tr: any) => tr.profile.trackId === t.toTrackId);
+          const fromSection = fromTrackIntel?.sections?.find((s: any) => s.sectionId === t.fromSectionId);
+          const toSection = toTrackIntel?.sections?.find((s: any) => s.sectionId === t.toSectionId);
+          if (!hasFromExit && fromSection?.endSec != null) {
+            t.actualFromExitSec = fromSection.endSec;
+            console.log(`[finalize-medley] Derived fromExit from section intelligence for ${t.fromSectionId}: ${t.actualFromExitSec}s`);
+          }
+          if (!hasToEntry && toSection?.startSec != null) {
+            t.actualToEntrySec = toSection.startSec;
+            console.log(`[finalize-medley] Derived toEntry from section intelligence for ${t.toSectionId}: ${t.actualToEntrySec}s`);
+          }
+        }
+      });
+    }
+
     const badTransitions: string[] = [];
     transitions.forEach((t: any, idx: number) => {
       const hasFromExit = t.actualFromExitSec !== undefined && t.actualFromExitSec !== null;
@@ -1649,25 +1734,34 @@ app.post('/api/finalize-medley', async (req, res) => {
     }
 
     // Timing bounds validation against actual durations
+    // Clamp values within CLAMP_TOLERANCE of the track boundary (analysis vs FFprobe can disagree by ~0.1s).
+    // Only hard-fail when the overrun is unreasonably large.
+    const CLAMP_TOLERANCE = 0.5;
     for (let i = 0; i < transitions.length; i++) {
       const t = transitions[i];
-      const fromExit = Number(t.actualFromExitSec);
-      const toEntry = Number(t.actualToEntrySec);
+      let fromExit = Number(t.actualFromExitSec);
+      let toEntry = Number(t.actualToEntrySec);
       const fromDuration = trackDurationMap[t.fromTrackId];
       const toDuration = trackDurationMap[t.toTrackId];
 
       if (fromDuration !== undefined) {
-        if (fromExit > fromDuration + RENDER_CONFIG.TIME_EPSILON) {
+        if (fromExit > fromDuration + CLAMP_TOLERANCE) {
           preflightErrors.push(
             `TIMING_OUT_OF_BOUNDS: transition[${i}] fromTrackId=${t.fromTrackId} exitSec=${fromExit} exceeds actual duration=${fromDuration.toFixed(2)}s`
           );
+        } else if (fromExit > fromDuration) {
+          console.warn(`[finalize-medley] Clamping transition[${i}] fromExit ${fromExit}s → ${fromDuration.toFixed(3)}s (overrun=${(fromExit - fromDuration).toFixed(3)}s)`);
+          (t as any).actualFromExitSec = fromDuration;
         }
       }
       if (toDuration !== undefined) {
-        if (toEntry > toDuration + RENDER_CONFIG.TIME_EPSILON) {
+        if (toEntry > toDuration + CLAMP_TOLERANCE) {
           preflightErrors.push(
             `TIMING_OUT_OF_BOUNDS: transition[${i}] toTrackId=${t.toTrackId} entrySec=${toEntry} exceeds actual duration=${toDuration.toFixed(2)}s`
           );
+        } else if (toEntry > toDuration) {
+          console.warn(`[finalize-medley] Clamping transition[${i}] toEntry ${toEntry}s → ${toDuration.toFixed(3)}s (overrun=${(toEntry - toDuration).toFixed(3)}s)`);
+          (t as any).actualToEntrySec = toDuration;
         }
       }
     }
@@ -1747,7 +1841,16 @@ app.post('/api/finalize-medley', async (req, res) => {
           const toSect = toTrackIntel?.sections?.find((s: any) => s.sectionId === t.toSectionId);
           if (toSect?.endSec != null) sectionEndSec = toSect.endSec;
         }
-        const effectiveTailEnd = sectionEndSec ?? (toEntry + tailLimit);
+        let effectiveTailEnd = sectionEndSec ?? (toEntry + tailLimit);
+
+        // Probe for trailing silence in the section range — cap before it starts
+        if (toPath && fs.existsSync(toPath) && effectiveTailEnd > toEntry + 2) {
+          const silenceStart = await probeFirstTrailingSilence(toPath, toEntry, effectiveTailEnd);
+          if (silenceStart !== null && silenceStart > toEntry + 2) {
+            console.log(`[finalize-medley] Silence probe: capping tail at ${silenceStart.toFixed(2)}s (was ${effectiveTailEnd.toFixed(2)}s)`);
+            effectiveTailEnd = silenceStart;
+          }
+        }
 
         if (toDuration !== undefined && toDuration > 0) {
           const cappedEnd = Math.min(toDuration, effectiveTailEnd);
@@ -1784,6 +1887,57 @@ app.post('/api/finalize-medley', async (req, res) => {
     const mashupCount = joinStyles.filter(s => s === 'mashup_layer').length;
     if (mashupCount > 0) {
       console.log(`[finalize-medley] Phase 4 mashup_layer branching active on ${mashupCount} join(s).`);
+    }
+
+
+    // === DURATION ENFORCEMENT: Only trim when total estimated output exceeds target ===
+    const _targetDurSec = Number(cachedUserConstraints?.targetDurationMinutes ?? 0) * 60;
+    if (_targetDurSec > 0 && segments.length > 0) {
+      const _totalRaw = segments.reduce((sum, seg) => {
+        const _end = Number.isFinite(seg.end) ? seg.end! : seg.start + 72;
+        return sum + (_end - seg.start);
+      }, 0);
+      const _crossfadeDeduction = xfadeDurations.reduce((sum, d) => sum + d, 0);
+      const _estimatedOutput = _totalRaw - _crossfadeDeduction;
+
+      if (_estimatedOutput > _targetDurSec * 1.15) {
+        const _overBudget = _estimatedOutput - _targetDurSec;
+        const _capStartMsg = `[finalize-medley] Duration cap: estimated ${_estimatedOutput.toFixed(1)}s exceeds target ${_targetDurSec}s by ${_overBudget.toFixed(1)}s — trimming longest segment(s).`;
+        console.log(_capStartMsg);
+        if (sessionId) logToSession(sessionId, _capStartMsg);
+
+        // Trim greedily from longest segments first; keep each ≥15s for musical coherence
+        const _byLength = segments
+          .map(seg => {
+            const _end = Number.isFinite(seg.end) ? seg.end! : seg.start + 72;
+            return { seg, len: _end - seg.start };
+          })
+          .sort((a, b) => b.len - a.len);
+
+        let _remaining = _overBudget;
+        let _cappedCount = 0;
+        for (const { seg } of _byLength) {
+          if (_remaining <= 0) break;
+          const _end = Number.isFinite(seg.end) ? seg.end! : seg.start + 72;
+          const _segLen = _end - seg.start;
+          const _trimBy = Math.min(_remaining, _segLen - 15);
+          if (_trimBy > 0.1) {
+            seg.end = +((seg.start + _segLen - _trimBy).toFixed(3));
+            _remaining -= _trimBy;
+            _cappedCount++;
+            const _trimMsg = `[finalize-medley] Duration cap: ${seg.label} ${_end.toFixed(2)}s → ${seg.end}s (trimmed ${_trimBy.toFixed(1)}s)`;
+            console.log(_trimMsg);
+            if (sessionId) logToSession(sessionId, _trimMsg);
+          }
+        }
+        if (_cappedCount > 0 && sessionId) {
+          logToSession(sessionId, `[finalize-medley] Duration cap: ${_cappedCount}/${segments.length} segment(s) trimmed to fit ${_targetDurSec}s target`);
+        }
+      } else {
+        const _skipMsg = `[finalize-medley] Duration cap: estimated ${_estimatedOutput.toFixed(1)}s ≤ ${(_targetDurSec * 1.15).toFixed(0)}s threshold — no trimming needed.`;
+        console.log(_skipMsg);
+        if (sessionId) logToSession(sessionId, _skipMsg);
+      }
     }
 
     const numSegments = segments.length;
@@ -1833,13 +1987,12 @@ app.post('/api/finalize-medley', async (req, res) => {
         atrim += `:end=${seg.end}`;
       }
 
-      // Inject afade on the last segment for clean ending
+      // For the last segment: strip trailing silence, then apply fade-out duration-agnostically
+      // via areverse,afade=t=in,areverse (works regardless of post-trim length).
       let fadeFilter = '';
-      if (idx === segments.length - 1 && seg.end !== null && seg.end !== undefined) {
-        const segDuration = seg.end - seg.start;
-        const fadeDur = Math.min(RENDER_CONFIG.FADE_OUT_SECONDS, segDuration * 0.5);
-        const fadeStart = Math.max(0, segDuration - fadeDur);
-        fadeFilter = `,afade=t=out:st=${fadeStart.toFixed(3)}:d=${fadeDur.toFixed(3)}`;
+      if (idx === segments.length - 1) {
+        const fadeDur = Math.min(RENDER_CONFIG.FADE_OUT_SECONDS, 3);
+        fadeFilter = `,silenceremove=stop_periods=-1:stop_duration=0.5:stop_threshold=-50dB,areverse,afade=t=in:d=${fadeDur.toFixed(3)},areverse`;
       }
 
       filterLines.push(`[${idx}:a]${normChain},${atrim}${fadeFilter}[${seg.label}]`);
@@ -1856,18 +2009,12 @@ app.post('/api/finalize-medley', async (req, res) => {
       const styleConfig = getTransitionStyleConfig(style);
 
       if (styleConfig.isMashup) {
-        // Phase 4: True simultaneous layering (mashup) — now driven by pluggable config
-        const layerLabel = `layer_${i}`;
-        const mixedLabel = `mixed_${i}`;
-
-        // Use the extraFilters from the style config for the layer
-        filterLines.push(`[${nextLabel}]${styleConfig.extraFilters.replace(/^,/, '')}[${layerLabel}]`);
-
-        // Layer it simultaneously with the current main using amix
-        filterLines.push(`[${currentLabel}][${layerLabel}]amix=inputs=2:duration=first:dropout_transition=0[${mixedLabel}]`);
-
-        // The mixed result becomes the new current for subsequent joins
-        currentLabel = mixedLabel;
+        // amix without adelay causes all segments to overlap from t=0 — broken for sequential medley.
+        // Fall back to sequential acrossfade so the final render stays gap-free.
+        console.warn(`[finalize-medley] mashup_layer at join ${i}: amix requires delay calculation not yet implemented — falling back to sequential acrossfade`);
+        const xfadeLabel = `xfade_${i}`;
+        filterLines.push(`[${currentLabel}][${nextLabel}]acrossfade=d=${d}:curve1=tri:curve2=tri[${xfadeLabel}]`);
+        currentLabel = xfadeLabel;
       } else {
         // Standard sequential crossfade (original MVP behavior)
         const xfadeLabel = `xfade_${i}`;
