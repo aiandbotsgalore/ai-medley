@@ -1,183 +1,33 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
+import { validateProviderApiKey } from './utils/apiKey';
 import { Upload, Play, Loader2, AlertCircle } from 'lucide-react';
 import Header from './components/Header';
 import LibrarySidebar, { type LibraryFile } from './components/LibrarySidebar';
 import MetricsSidebar from './components/MetricsSidebar';
 import LogPanel from './components/LogPanel';
-import ConfigPanel, { type MedleyConfig, DEFAULT_CONFIG } from './components/ConfigPanel';
-import ExecutionContextPanel, { type ExecutionContextSummary } from './components/ExecutionContextPanel';
-import { buildSystemPrompt, getOpenRouterTools, getToolDeclarations } from './engine/prompts';
-import { analyzeAudioWithProvider, createProviderSession } from './engine/providers';
+import ConfigPanel from './components/ConfigPanel';
+import ExecutionContextPanel from './components/ExecutionContextPanel';
 import HistoryBrowser, { type HistoryEntry } from './components/HistoryBrowser';
 import MedleyMatchPanel from './components/MedleyMatchPanel';
-import type { MedleyDesignPayload } from './engine/medleyIntelligence';
+import { useConfig, type MedleyConfig } from './hooks/useConfig';
+import { useLibrary } from './hooks/useLibrary';
+import { useAutonomousLoop, type AppStatus } from './hooks/useAutonomousLoop';
+import type { CheckpointData } from './types/checkpoint';
 
-type AppStatus = 'idle' | 'uploading' | 'running' | 'completed' | 'error';
-
-type CheckpointData = {
-  sessionId: string;
-  savedAt: string;
-  provider: string;
-  model: string;
-  iterations: number;
-  currentModelIndex: number;
-  llmCallCount: number;
-  refinementPassCount: number;
-  evaluateCallCount: number;
-  expensiveLLMCalls: number;
-  cheapLLMCalls: number;
-  autoAcceptedCount: number;
-  autoRejectedCount: number;
-  currentPhase: string;
-  design: any | null;
-  chatHistory: unknown[];
-  sectionPairCacheEntries: [string, unknown][];
-  evaluationsPerFromSectionEntries: [string, number][];
-};
-const CONFIG_STORAGE_KEY = 'ai-medley-config-v1';
-const AUDIO_ANALYSIS_PROMPT = 'Analyze this audio file and provide BPM if discernible, musical key, genre or mood, energy level from 1 to 10, and a concise 2 to 3 sentence structural summary. If this is a medley output, also mention any obvious transition or loudness issues.';
-
-/**
- * Pure function. Translates the last observed tool + phase + reasoning into
- * a human-friendly 4-question summary. Called after every meaningful step
- * in the orchestration loop. Never mutates state or calls tools.
- * (Interface is defined in ExecutionContextPanel.tsx and re-exported for consumers.)
- */
-function deriveExecutionContext(
-  phase: string,
-  lastTool: string | null,
-  lastReasoning: string | null,
-  _iteration: number
-): ExecutionContextSummary {
-  const p = (phase || 'Initializing').trim();
-  const tool = (lastTool || '').toLowerCase();
-  const reasoningSnippet = lastReasoning ? lastReasoning.replace(/\s+/g, ' ').trim().slice(0, 160) : '';
-
-  // Strong defaults
-  let ctx: ExecutionContextSummary = {
-    phase: p || 'AGENT LOOP',
-    currentAction: 'Advancing the autonomous medley generation process',
-    rationale: 'The agent follows a structured multi-phase loop (analyze → design → build → evaluate → refine → finish) to produce a musically coherent result.',
-    impact: 'Each step contributes data or decisions that improve the quality and seamlessness of the final medley.',
-    nextStep: 'The model will decide the next tool call or conclude the process.'
-  };
-
-  if (tool.includes('listen_to_audio') || p.toUpperCase().includes('ANALYZE')) {
-    ctx = {
-      phase: p || 'ANALYZE',
-      currentAction: 'Performing deep analysis of a track’s waveform, energy, tempo, silence map, and timbral character',
-      rationale: 'No creative decisions can be trustworthy without objective sonic facts about every piece of source material.',
-      impact: 'This data powers the transition scoring matrix, recommended section candidates, and every later timing decision.',
-      nextStep: 'The agent will evaluate promising section pairs or load more cached analyses.'
-    };
-  } else if (tool.includes('evaluate_section_pair')) {
-    ctx = {
-      phase: p || 'DESIGN',
-      currentAction: 'Scoring how musically compatible two specific sections are for a direct join',
-      rationale: 'Raw energy or key data is not enough — only direct compatibility testing reveals which pairs will actually feel seamless.',
-      impact: 'Only high-scoring pairs are allowed into the final locked design plan, dramatically reducing the chance of weak transitions.',
-      nextStep: 'Once enough pairs are scored the agent will call set_design_plan to lock the authoritative structure.'
-    };
-  } else if (tool.includes('set_design_plan')) {
-    ctx = {
-      phase: 'DESIGN — STRUCTURE LOCKED',
-      currentAction: 'Committing to a final ordered sequence of sections and exact transition points',
-      rationale: 'After objective evaluation the agent now has enough confidence to freeze one concrete architecture for the rest of the run.',
-      impact: 'All future preview renders and the final single-pass render will use these exact timings and this exact ordering.',
-      nextStep: 'The agent will render real musical preview crossfades (apply_musical_transition) for the locked joins so you can audition them.'
-    };
-  } else if (tool.includes('apply_musical_transition')) {
-    ctx = {
-      phase: p || 'BUILD',
-      currentAction: 'Rendering a high-quality preview crossfade for one locked transition using style-aware DSP and beat alignment',
-      rationale: 'The only reliable way to know whether a paper plan actually sounds good is to hear the real audio join.',
-      impact: 'The precise actual exit/entry timestamps returned (post beat-snap) become the authoritative values used in the final clean render.',
-      nextStep: 'After auditioning transitions the agent will either refine or call finalize_medley for the production master.'
-    };
-  } else if (tool.includes('analyze_medley_quality') || tool.includes('report_progress')) {
-    ctx = {
-      phase: p || 'EVALUATE / REFINE',
-      currentAction: 'Measuring the current draft against hard quality metrics (loudness, smoothness, emotional arc, identity)',
-      rationale: 'Human ears are biased. Objective numbers tell the agent exactly which dimensions are still weak.',
-      impact: 'Low scores directly drive the next targeted refinement actions instead of random guessing.',
-      nextStep: 'The agent will either perform a focused refinement or decide the current version is ready for final rendering.'
-    };
-  } else if (tool.includes('finalize_medley')) {
-    ctx = {
-      phase: 'FINISH — PRODUCTION RENDER',
-      currentAction: 'Executing the single deterministic final render from original sources only (sequential atrim + acrossfade chain + one master loudnorm + limiter)',
-      rationale: 'This is the authoritative, gap-free, timing-accurate production file. It never uses any pre-rendered preview assets.',
-      impact: 'This is the finished downloadable medley that represents the complete artistic vision.',
-      nextStep: 'Process complete. The final file is ready for playback and export.'
-    };
-  } else if (tool.includes('finish_medley')) {
-    ctx.currentAction = 'Persisting the completed medley and surfacing the final summary';
-    ctx.nextStep = 'You can now listen and download the result.';
-  } else if (tool.includes('execute_shell')) {
-    ctx = {
-      phase: p,
-      currentAction: 'Executing a direct low-level command (usually FFmpeg or file I/O) in the session work directory',
-      rationale: 'Some operations still require direct shell access when no specialized tool exists for that exact step.',
-      impact: 'These commands are in service of the current phase (analysis, preview, or final export).',
-      nextStep: 'The command result is returned to the model so it can continue reasoning.'
-    };
-  }
-
-  if (reasoningSnippet.length > 25) {
-    ctx.rationale = `${ctx.rationale} Recent model note: “${reasoningSnippet}${lastReasoning && lastReasoning.length > 160 ? '…”' : '”'}`;
-  }
-
-  if (p) ctx.phase = p;
-  return ctx;
-}
-
+// ── App Shell ──
 export default function App() {
-  const [library, setLibrary] = useState<LibraryFile[]>([]);
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [status, setStatus] = useState<AppStatus>('idle');
+  const { config, configLoaded, setConfig } = useConfig();
+  const { library, setLibrary, uploadProgress, setUploadProgress, fetchLibrary, uploadToLibrary, removeFile, reorderLibrary } = useLibrary();
 
-  // Keep statusRef in sync for use inside async runAutonomousLoop
-  const statusRef = useRef<AppStatus>('idle');
-  useEffect(() => {
-    statusRef.current = status;
-  }, [status]);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
-  const [summary, setSummary] = useState<string | null>(null);
-  const [metrics, setMetrics] = useState<any>(null);
-  const [config, setConfig] = useState<MedleyConfig>(DEFAULT_CONFIG);
-  const [configLoaded, setConfigLoaded] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null);
-  const [iteration, setIteration] = useState<{ current: number; max: number } | null>(null);
-  const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<'workshop' | 'history'>('workshop');
-  const [medleyDesign, setMedleyDesign] = useState<MedleyDesignPayload | null>(null);
-  const [currentPhase, setCurrentPhaseState] = useState<string>(''); // ANALYZE | DESIGN | BUILD | EVALUATE | REFINE | FINISH
-  const currentPhaseRef = useRef<string>('');
-  const setCurrentPhase = useCallback((phase: string) => {
-    currentPhaseRef.current = phase;
-    setCurrentPhaseState(phase);
-  }, []);
-  const [preAnalysisProgress, setPreAnalysisProgress] = useState<{ current: number; total: number } | null>(null);
-  const [renderProgress, setRenderProgress] = useState<{ stage: string; percent: number; elapsedSeconds?: number; remainingSecondsEstimate?: number | null } | null>(null);
-  const [activeModel, setActiveModel] = useState<string>('');
-  const [executionContext, setExecutionContext] = useState<ExecutionContextSummary | null>(null);
-  const [checkpoints, setCheckpoints] = useState<CheckpointData[]>([]);
-
-  // Used for manual "Force Model Switch" button from the header
-  const forceModelSwitchRef = useRef<(() => void) | null>(null);
-
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const abortRef = useRef<AbortController | null>(null);
-  const sseRef = useRef<EventSource | null>(null);
-  const sessionIdRef = useRef<string | null>(null);
 
   const addLog = useCallback((msg: string) => {
     setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
   }, []);
 
-  // Rich error logger - designed to make debugging failures (especially with free/weak models) much easier
   const logDetailedError = useCallback((context: string, error: any, extra?: any) => {
     const errMessage = error?.message || String(error);
     const status = error?.status;
@@ -213,1225 +63,86 @@ export default function App() {
     console.error(`[DETAILED ERROR - ${context}]`, { error, extra, rawBody, rawArguments });
   }, [addLog]);
 
-  const fetchLibrary = useCallback(async () => {
+  const keyValidation = config ? validateProviderApiKey(config) : { ok: false, message: '', severity: 'error' as const };
+  const hasProviderKey = keyValidation.ok;
+
+  // ── Autonomous Loop Hook ──
+  const loop = useAutonomousLoop({
+    library,
+    config: config || {} as MedleyConfig,
+    hasProviderKey,
+    fetchLibrary,
+    setLibrary,
+    addLog,
+    logDetailedError,
+  });
+
+  const isIdle = loop.status === 'idle' || loop.status === 'error';
+
+  const handleReset = useCallback(() => {
+    loop.reset();
+    setLogs([]);
+  }, [loop]);
+  const canStart = library.length >= 2 && hasProviderKey && configLoaded;
+
+  // ── Upload handler ──
+  const handleUpload = async (files: File[]) => {
     try {
-      const res = await fetch('/api/library');
-      if (res.ok && res.headers.get('content-type')?.includes('application/json')) {
-        setLibrary(await res.json());
-      }
-    } catch (e) {
-      console.error('Library fetch error:', e);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchLibrary();
-  }, [fetchLibrary]);
-
-  const fetchCheckpoints = useCallback(async () => {
-    try {
-      const res = await fetch('/api/checkpoints');
-      if (res.ok) setCheckpoints(await res.json());
-    } catch {}
-  }, []);
-
-  useEffect(() => { fetchCheckpoints(); }, [fetchCheckpoints]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const loadConfig = async () => {
-      try {
-        const rawStored = localStorage.getItem(CONFIG_STORAGE_KEY);
-        const storedConfig = rawStored ? JSON.parse(rawStored) : {};
-        const serverConfig = await fetch('/api/config').then(r => r.json()).catch(() => ({}));
-        const nextConfig: MedleyConfig = {
-          ...DEFAULT_CONFIG,
-          ...storedConfig,
-          geminiApiKey: storedConfig?.geminiApiKey || serverConfig?.geminiApiKey || '',
-          openrouterApiKey: storedConfig?.openrouterApiKey || serverConfig?.openrouterApiKey || ''
-        };
-
-        if (!cancelled) {
-          setConfig(nextConfig);
-        }
-      } catch (e) {
-        console.error('Config load error:', e);
-      } finally {
-        if (!cancelled) {
-          setConfigLoaded(true);
-        }
-      }
-    };
-
-    loadConfig();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!configLoaded) return;
-    localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(config));
-  }, [config, configLoaded]);
-
-  // Prevent page-level drag/drop
-  useEffect(() => {
-    const prevent = (e: Event) => e.preventDefault();
-    window.addEventListener('dragover', prevent);
-    window.addEventListener('drop', prevent);
-    return () => { window.removeEventListener('dragover', prevent); window.removeEventListener('drop', prevent); };
-  }, []);
-
-  const uploadToLibrary = async (newFiles: File[]) => {
-    if (newFiles.length === 0) return;
-    setStatus('uploading');
-    setErrorMessage(null);
-    setUploadProgress({ current: 0, total: newFiles.length });
-    try {
-      let count = 0;
-      for (const f of newFiles) {
-        const formData = new FormData();
-        formData.append('files', f);
-        const res = await fetch('/api/library', { method: 'POST', body: formData });
-        if (!res.ok) throw new Error(await res.text() || res.statusText);
-        count++;
-        setUploadProgress({ current: count, total: newFiles.length });
-        await fetchLibrary();
-      }
-      setUploadProgress(null);
-      setStatus('idle');
+      await uploadToLibrary(Array.from(files));
     } catch (e: any) {
-      setUploadProgress(null);
-      setStatus('error');
-      let msg = e.message;
-      if (msg.includes('413') || msg.toLowerCase().includes('payload too large')) {
-        msg = 'File exceeds the 50MB server limit.';
-      }
-      setErrorMessage(msg);
+      loop.setStatus('error');
+      loop.setErrorMessage(e.message);
     }
   };
 
-  const removeFile = async (id: string) => {
-    await fetch(`/api/library/${id}`, { method: 'DELETE' });
-    await fetchLibrary();
-  };
-
-  const reorderLibrary = async (ids: string[]) => {
-    // Optimistic update
-    const reordered = ids.map(id => library.find(f => f.id === id)).filter(Boolean) as LibraryFile[];
-    setLibrary(reordered);
-    await fetch('/api/library/reorder', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ orderedIds: ids })
-    });
-  };
-
+  // ── File drop handler ──
   const handleFileDrop = (e: React.DragEvent) => {
     e.preventDefault();
     const droppedFiles = Array.from(e.dataTransfer.files as FileList);
     if (droppedFiles.length > 0) {
-      uploadToLibrary(droppedFiles.filter(file => file.type.startsWith('audio/')));
+      handleUpload(droppedFiles.filter(file => file.type.startsWith('audio/')));
     }
   };
 
-  const activeApiKey = (config.provider === 'gemini' ? config.geminiApiKey : config.openrouterApiKey).trim();
-  const hasProviderKey = Boolean(activeApiKey);
-
-  const shouldUploadAudioForAnalysis = (displayName: string) => {
-    if (config.audioAnalysisMode === 'cloud') return true;
-    if (config.audioAnalysisMode === 'ask') {
-      return window.confirm(`Upload "${displayName}" to ${config.provider === 'gemini' ? 'Gemini' : 'OpenRouter'} for deeper audio analysis? Local analysis will be used if you choose Cancel.`);
-    }
-    return false;
-  };
-
-  const getLocalAnalysis = async (payload: { fileId?: string; filePath?: string; sessionId?: string; saveToLibrary?: boolean }, signal: AbortSignal) => {
-    const res = await fetch('/api/audio-analysis/local', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-      signal
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Local audio analysis failed.');
-    return data as { analysisText: string; analysis: unknown; medleyIntelligence?: unknown };
-  };
-
-  const buildMedleyDesign = async (lib: LibraryFile[], signal?: AbortSignal) => {
-    const res = await fetch('/api/medley-intelligence/design', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        library: lib,
-        userConstraints: {
-          style: config.style,
-          targetDurationMinutes: config.targetDuration,
-          crossfadeDurationSeconds: config.crossfadeDuration,
-          customInstructions: config.customInstructions || undefined
-        }
-      }),
-      signal
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Medley intelligence design failed.');
-    setMedleyDesign(data.design);
-    return data.design as MedleyDesignPayload;
-  };
-
-  // ── Autonomous Medley Loop ──
-  const runAutonomousLoop = async (lib: LibraryFile[], signal: AbortSignal, design: MedleyDesignPayload | null, resumeState?: CheckpointData) => {
-    if (!hasProviderKey) {
-      setErrorMessage(config.provider === 'gemini' ? 'Gemini API key is not set.' : 'OpenRouter API key is not set.');
-      setStatus('error');
-      return;
-    }
-
-    const sid = resumeState?.sessionId ?? Math.random().toString(36).substring(7);
-    setSessionId(sid);
-    sessionIdRef.current = sid;
-    if (!resumeState) {
-      setLogs([]);
-      setSummary(null);
-      setMetrics(null);
-      setIteration(null);
-      setExecutionContext(null);
-      setRenderProgress(null);
-    } else {
-      addLog(`🔁 Resuming session ${sid} from iteration ${resumeState.iterations}`);
-    }
-
-    // === Real-Time Progress Stream (SSE) ===
-    if (sseRef.current) {
-      sseRef.current.close();
-    }
-    const sse = new EventSource(`/api/session/${sid}/stream`);
-    sseRef.current = sse;
-
-    sse.addEventListener('log', (e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data);
-        if (data.message) {
-          addLog(`📡 ${data.message}`);
-        }
-      } catch (err) {}
-    });
-
-    sse.addEventListener('progress', (e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data);
-        setRenderProgress(data);
-      } catch (err) {}
-    });
-
-    sse.addEventListener('completed', (e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data);
-        if (data.summary) {
-          setSummary(data.summary);
-        }
-      } catch (err) {}
-    });
-
-    sse.addEventListener('metrics', (e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data);
-        setMetrics(data);
-      } catch (err) {}
-    });
-
-    sse.onerror = (err) => {
-      console.warn('SSE connection error, attempting automatic reconnection...', err);
-    };
-
-    // === Model Fallback System (for free / unreliable models) ===
-    const fallbackModels = (config.provider === 'gemini'
-      ? [
-          config.model,
-          'gemini-2.5-flash',
-          'gemini-2.5-pro',
-        ]
-      : [
-          config.model,
-          'qwen/qwen3-coder:free',
-          'deepseek/deepseek-v4-flash:free',
-          'nousresearch/hermes-3-llama-3.1-405b:free',
-          'nvidia/nemotron-3-super-120b-a12b:free',
-          'meta-llama/llama-3.3-70b-instruct:free',
-        ]
-    ).filter((m, i, arr) => arr.indexOf(m) === i); // dedupe
-
-    let currentModelIndex = resumeState?.currentModelIndex ?? 0;
-    let toolFailureStreak = 0;
-    const MAX_TOOL_FAILURE_STREAK = 3;
-
-    const MAX_EVALUATE_CALLS_PER_RUN = 25;
-    const MAX_LLM_CALLS_PER_RUN = 40; // total, we track cheap vs expensive separately below
-    const EARLY_TERMINATION_SCORE = 0.88; // will be calibrated; start conservative
-    // Phase 2 thresholds (widened for current similar-track libraries)
-    // TODO: Recalibrate these once we have runs on more diverse libraries
-    const LOCAL_REJECTION_THRESHOLD = 0.45;
-    const LOCAL_AUTO_ACCEPT_THRESHOLD = 0.80;
-
-    let evaluateCallCount = resumeState?.evaluateCallCount ?? 0;
-    let llmCallCount = resumeState?.llmCallCount ?? 0;
-    let refinementPassCount = resumeState?.refinementPassCount ?? 0;
-    let expensiveLLMCalls = resumeState?.expensiveLLMCalls ?? 0;   // generation / complex reasoning
-    let cheapLLMCalls = resumeState?.cheapLLMCalls ?? 0;           // classification / simple scoring
-
-    // Phase 2 stats
-    let autoAcceptedCount = resumeState?.autoAcceptedCount ?? 0;
-    let autoRejectedCount = resumeState?.autoRejectedCount ?? 0;
-
-    // Simple in-session cache for section pair evaluations (fromSectionId + toSectionId)
-    const sectionPairCache = new Map<string, any>(resumeState?.sectionPairCacheEntries ?? []);
-
-    // Phase 1: Per-source-section Top-N=5 tracking (in-session)
-    const evaluationsPerFromSection = new Map<string, number>(resumeState?.evaluationsPerFromSectionEntries ?? []);
-
-    const getCurrentModel = () => fallbackModels[Math.min(currentModelIndex, fallbackModels.length - 1)];
-
-    const createSessionForModel = (model: string, history?: unknown[]) => {
-      const tempConfig = { ...config, model };
-      return createProviderSession(
-        tempConfig,
-        buildSystemPrompt(lib, tempConfig, design, sid),
-        tempConfig.provider === 'gemini' ? getToolDeclarations() : getOpenRouterTools(),
-        tempConfig.temperature,
-        history
-      );
-    };
-
-    let session = createSessionForModel(getCurrentModel(), resumeState?.chatHistory);
-    setActiveModel(getCurrentModel());
-
-    // Wire up manual force switch from header
-    let forceModelSwitchPending = false;
-    forceModelSwitchRef.current = () => {
-      if (statusRef.current === 'running') {
-        forceModelSwitchPending = true;
-        addLog('⚡ Manual model switch requested from header');
-      }
-    };
-
-    const switchToNextModel = async (reason: string) => {
-      if (currentModelIndex >= fallbackModels.length - 1) {
-        addLog(`⚠️ All fallback models exhausted. Last failure reason: ${reason}`);
-        return false;
-      }
-
-      const previousModel = getCurrentModel();
-      currentModelIndex++;
-      const nextModel = getCurrentModel();
-
-      addLog(`🔄 Model switch triggered: ${previousModel} → ${nextModel}`);
-      addLog(`   Reason: ${reason}`);
-      addLog(`   Resetting tool failure streak.`);
-
-      setActiveModel(nextModel);
-
-      // Recreate session with new model
-      session = createSessionForModel(nextModel);
-
-      // Send a recovery message so the new model understands context
-      try {
-        const recoveryMessage = `The previous model (${previousModel}) was struggling with tool calls and formatting. We have switched to you (${nextModel}). Please continue the medley architect process from where we left off. Current phase and key decisions so far are in the conversation history. Focus on producing valid tool calls.`;
-        await session.send(recoveryMessage);
-      } catch (e) {
-        logDetailedError('Model Switch Recovery Message', e);
-      }
-
-      toolFailureStreak = 0;
-      return true;
-    };
-
-    let _checkpointFn: (() => void) | null = null;
-
-    try {
-
-      const withHeartbeat = <T,>(label: string, promise: Promise<T>, intervalMs = 8000): Promise<T> => {
-        const start = Date.now();
-        const timer = setInterval(() => {
-          const elapsed = Math.round((Date.now() - start) / 1000);
-          addLog(`   ⏳ ${label}... (${elapsed}s elapsed)`);
-        }, intervalMs);
-        return promise.finally(() => clearInterval(timer));
-      };
-
-      const sendWithRetry = async (msg: any, retries = 0): Promise<any> => {
-        if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
-        try {
-          return await withHeartbeat(`Waiting for ${getCurrentModel()}`, session.send(msg), 10000);
-        } catch (err: any) {
-          const errText = String(err?.message || err);
-          const isRateLimit = errText.includes('429') || errText.includes('RESOURCE_EXHAUSTED') || errText.includes('rate limit');
-          const isPaymentError = err?.status === 402 || errText.includes('402') || errText.includes('insufficient_quota') || errText.includes('Out of credits');
-          const isModelUnsupported = errText.includes('No endpoints found') || errText.includes('no endpoints found');
-
-          if (isRateLimit && retries < 5) {
-            const delay = Math.pow(2, retries) * 2000 + Math.random() * 1000;
-            addLog(`⏳ Rate limited on ${getCurrentModel()} (attempt ${retries + 1}/5). Retrying in ${Math.round(delay / 1000)}s...`);
-            await new Promise<void>((res, rej) => {
-              const t = setTimeout(res, delay);
-              signal.addEventListener('abort', () => { clearTimeout(t); rej(new DOMException('Aborted', 'AbortError')); }, { once: true });
-            });
-            return sendWithRetry(msg, retries + 1);
-          }
-
-          // Special handling for 402 (payment / credits exhausted) on free models
-          if (isPaymentError) {
-            const currentModel = getCurrentModel();
-            logDetailedError('LLM Send Failed (Payment Required)', err, {
-              model: currentModel,
-              provider: config.provider,
-              messagePreview: typeof msg === 'string' ? msg.substring(0, 300) : '[tool results]',
-              retriesAttempted: retries,
-              note: 'This is a quota/credits issue on the free tier, not a model intelligence problem.'
-            });
-
-            addLog(`💳 OpenRouter 402 — This free model ran out of credits.`);
-            addLog(`   Model: ${currentModel}`);
-            addLog(`   Recommendation: Switch to a different free model or use a paid API key with quota.`);
-
-            // Immediately try to switch to next model instead of waiting for streak
-            const switched = await switchToNextModel(`OpenRouter returned 402 (out of credits) on model ${currentModel}`);
-            if (switched) {
-              return sendWithRetry(msg, 0);
-            }
-
-            throw err;
-          }
-
-          // Model doesn't exist or doesn't support tool calling on OpenRouter
-          if (isModelUnsupported) {
-            const currentModel = getCurrentModel();
-            addLog(`🚫 Model "${currentModel}" is not supported or doesn't support tool calling on OpenRouter.`);
-            addLog(`   Switching to next fallback model…`);
-            const switched = await switchToNextModel(`OpenRouter returned 404 — model "${currentModel}" has no compatible endpoints`);
-            if (switched) {
-              return sendWithRetry(msg, 0);
-            }
-            throw err;
-          }
-
-          // Normal non-rate-limit failure
-          toolFailureStreak++;
-          logDetailedError('LLM Send Failed', err, {
-            model: getCurrentModel(),
-            provider: config.provider,
-            messagePreview: typeof msg === 'string' ? msg.substring(0, 300) : '[tool results]',
-            retriesAttempted: retries,
-            toolFailureStreak
-          });
-
-          if (toolFailureStreak >= MAX_TOOL_FAILURE_STREAK) {
-            const switched = await switchToNextModel(`Repeated LLM failures when sending messages (${toolFailureStreak} times)`);
-            if (switched) {
-              return sendWithRetry(msg, 0);
-            }
-          }
-
-          throw err;
-        }
-      };
-
-      const allAnalyzed = lib.every(f => f.analysis && f.medleyIntelligence);
-      const initialMessage = resumeState
-        ? `Session resumed from checkpoint at iteration ${resumeState.iterations}. The conversation history above contains all previous work. Please assess the current state and continue immediately from where we left off.`
-        : allAnalyzed
-          ? `All ${lib.length} tracks are pre-analyzed — the full analysis and medley intelligence data for every track is embedded in your system prompt above. DO NOT call listen_to_audio. Skip the ANALYZE phase entirely and proceed directly to DESIGN.`
-          : 'Begin the medley architect process. Analyze any tracks marked [Not yet analyzed] first, then design and build the medley.';
-
-      let result = await sendWithRetry(initialMessage);
-      llmCallCount++;
-      expensiveLLMCalls++;
-
-      if (result.usage?.total_tokens) {
-        addLog(`   [Tokens] Prompt: ${result.usage.prompt_tokens ?? '?'}, Completion: ${result.usage.completion_tokens ?? '?'}, Total: ${result.usage.total_tokens}`);
-      }
-
-      let loopFinished = false;
-      let iterations = resumeState?.iterations ?? 0;
-      const MAX_ITERATIONS = 50;
-
-      const saveCheckpoint = () => {
-        const data: CheckpointData = {
-          sessionId: sid,
-          savedAt: new Date().toISOString(),
-          provider: config.provider,
-          model: getCurrentModel(),
-          iterations,
-          currentModelIndex,
-          llmCallCount,
-          refinementPassCount,
-          evaluateCallCount,
-          expensiveLLMCalls,
-          cheapLLMCalls,
-          autoAcceptedCount,
-          autoRejectedCount,
-          currentPhase: currentPhaseRef.current,
-          design,
-          chatHistory: session.getHistory(),
-          sectionPairCacheEntries: [...sectionPairCache.entries()],
-          evaluationsPerFromSectionEntries: [...evaluationsPerFromSection.entries()],
-        };
-        fetch('/api/checkpoint', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(data)
-        }).catch(() => {});
-      };
-      _checkpointFn = saveCheckpoint;
-
-      while (!loopFinished && iterations < MAX_ITERATIONS) {
-        if (signal.aborted) break;
-
-        // === Immediate manual model switch (from SWITCH MODEL button) ===
-        if (forceModelSwitchPending) {
-          forceModelSwitchPending = false;
-          await switchToNextModel('Manual switch requested by user');
-        }
-
-        if (llmCallCount >= MAX_LLM_CALLS_PER_RUN) {
-          addLog(`   ⛔ Hard limit reached: maxLLMCallsPerRun (${MAX_LLM_CALLS_PER_RUN}). The model used ${llmCallCount} LLM calls without finishing.`);
-          setStatus('error');
-          setErrorMessage(`LLM call limit (${MAX_LLM_CALLS_PER_RUN}) reached without producing a final medley.`);
-          break;
-        }
-
-        iterations++;
-        refinementPassCount++;
-
-        setIteration({ current: iterations, max: MAX_ITERATIONS });
-        if (result.text) addLog(`🤖 ${result.text}`);
-
-        // Update the pure derived execution context layer (UI only, after every model turn)
-        setExecutionContext(deriveExecutionContext(currentPhase, null, result.text || null, iterations));
-
-        const functionCalls = result.functionCalls;
-        if (!functionCalls || functionCalls.length === 0) {
-          if (!result.text) {
-            // Completely empty response — count as failure and nudge
-            toolFailureStreak++;
-            addLog(`⚠️ Model returned no tool calls and no text (streak: ${toolFailureStreak}/${MAX_TOOL_FAILURE_STREAK})`);
-            if (toolFailureStreak >= MAX_TOOL_FAILURE_STREAK) {
-              const switched = await switchToNextModel(`Model returned empty responses ${toolFailureStreak} times`);
-              if (!switched) break;
-            }
-            result = await sendWithRetry('Please proceed with the next step. You must call a tool.');
-            llmCallCount++;
-            cheapLLMCalls++;
-            if (result.usage?.total_tokens) {
-              addLog(`   [Tokens] Prompt: ${result.usage.prompt_tokens ?? '?'}, Completion: ${result.usage.completion_tokens ?? '?'}, Total: ${result.usage.total_tokens}`);
-            }
-            continue;
-          }
-          // Text-only response with no tool call — this model may not support function calling.
-          // Count toward streak so repeated text-only outputs trigger a model switch.
-          toolFailureStreak++;
-          addLog(`⚠️ Model returned text without a tool call (streak: ${toolFailureStreak}/${MAX_TOOL_FAILURE_STREAK}). May not support function calling.`);
-          if (toolFailureStreak >= MAX_TOOL_FAILURE_STREAK) {
-            const switched = await switchToNextModel(`Model returned text-only responses ${toolFailureStreak} times — likely no tool/function-calling support`);
-            if (switched) {
-              result = await sendWithRetry('Please continue. You must use tool calls to make progress.');
-              llmCallCount++;
-              cheapLLMCalls++;
-              continue;
-            }
-          }
-          break;
-        }
-
-        // Extra visibility when using weaker free models
-        if (functionCalls.length > 0) {
-          addLog(`   → Model requested ${functionCalls.length} tool call(s): ${functionCalls.map((c: any) => c.name).join(', ')}`);
-        }
-
-        const toolResponses: any[] = [];
-
-        for (const call of functionCalls) {
-          addLog(`🔧 Tool: ${call.name}`);
-          const args = call.args as any;
-          let toolRes: any = null;
-
-          try {
-            if (call.name === 'execute_shell_command') {
-              addLog(`  ➜ ${(args.command || '').substring(0, 100)}...`);
-              const res = await fetch('/api/exec', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ command: args.command, sessionId: sid }),
-                signal
-              });
-              const data = await res.json();
-              toolRes = { functionResponse: { name: call.name, id: call.id, response: data } };
-            }
-            else if (call.name === 'listen_to_audio') {
-              setCurrentPhase('EVALUATE — Analyzing Audio');
-              const argPath = String(args.filePath || '');
-              const argBasename = argPath.split(/[\\/]/).pop()?.toLowerCase() || '';
-              const entry = lib.find(f =>
-                f.path === argPath ||
-                f.path.replace(/\\/g, '/') === argPath.replace(/\\/g, '/') ||
-                f.originalName?.toLowerCase() === argBasename ||
-                f.filename?.toLowerCase() === argBasename ||
-                f.id === argBasename.replace(/\.[^.]+$/, '')
-              );
-              const displayName = entry?.originalName || argBasename || 'audio-output';
-
-              if (!entry) {
-                addLog(`⚠️ listen_to_audio: no library match for "${argBasename}"`);
-                addLog(`   Tried: exact path, normalized slashes, originalName, filename, UUID`);
-                addLog(`   Library (${lib.length} files): ${lib.map(f => f.originalName || f.filename || f.id).join(' | ')}`);
-              }
-
-              addLog(`  🎧 Analyzing: ${displayName}${entry ? '' : ' (no library entry — using raw path)'}`);
-
-              const local = await getLocalAnalysis(
-                entry
-                  ? { fileId: entry.id, saveToLibrary: true }
-                  : { filePath: args.filePath, sessionId: sid },
-                signal
-              );
-
-              if (!shouldUploadAudioForAnalysis(displayName)) {
-                toolRes = {
-                  functionResponse: {
-                    name: call.name,
-                    id: call.id,
-                    response: {
-                      analysisText: local.analysisText,
-                      medleyIntelligence: local.medleyIntelligence,
-                      source: 'local',
-                      cloudAudioSent: false
-                    }
-                  }
-                };
-              } else {
-                const audioUrl = entry
-                  ? `/api/audio-raw/${entry.id}`
-                  : `/api/audio-file?filePath=${encodeURIComponent(args.filePath)}&sessionId=${encodeURIComponent(sid)}`;
-                const audioResp = await fetch(audioUrl, { signal });
-                if (!audioResp.ok) {
-                  addLog(`❌ Audio fetch failed for "${displayName}" — HTTP ${audioResp.status}`);
-                  addLog(`   Path: ${args.filePath}`);
-                  addLog(`   Library entry: ${entry ? `found (ID: ${entry.id})` : 'none — model passed unrecognized path'}`);
-                  toolRes = {
-                    functionResponse: {
-                      name: call.name,
-                      id: call.id,
-                      response: { error: `Audio file not found or unreadable: ${args.filePath} (HTTP ${audioResp.status})` }
-                    }
-                  };
-                } else {
-                  addLog(`  ☁️ Cloud audio upload allowed for ${displayName}`);
-                  const blob = await audioResp.blob();
-                  const mimeType = entry?.mimeType || audioResp.headers.get('content-type') || 'audio/mpeg';
-                  const analysisText = await analyzeAudioWithProvider({
-                    config,
-                    file: new File([blob], displayName, { type: mimeType }),
-                    mimeType,
-                    displayName,
-                    prompt: AUDIO_ANALYSIS_PROMPT,
-                    signal
-                  });
-                  toolRes = {
-                    functionResponse: {
-                      name: call.name,
-                      id: call.id,
-                      response: {
-                        analysisText,
-                        localAnalysisText: local.analysisText,
-                        medleyIntelligence: local.medleyIntelligence,
-                        source: 'cloud',
-                        cloudAudioSent: true
-                      }
-                    }
-                  };
-                }
-              }
-            }
-            else if (call.name === 'evaluate_section_pair') {
-              addLog(`  🔬 Evaluating pair: ${args.fromSectionId} → ${args.toSectionId}`);
-
-              // === Phase 1: In-session cache + hard limits + Top-N + local rejection ===
-              const cacheKey = `${args.fromSectionId}:${args.toSectionId}`;
-              if (sectionPairCache.has(cacheKey)) {
-                addLog(`   ♻️ Cache hit for pair ${args.fromSectionId} → ${args.toSectionId}`);
-                toolRes = { functionResponse: { name: call.name, id: call.id, response: sectionPairCache.get(cacheKey) } };
-                continue;
-              }
-
-              // Per-fromSection Top-N=5 tracking (Phase 1)
-              const fromKey = args.fromSectionId;
-              const currentCount = evaluationsPerFromSection.get(fromKey) || 0;
-              if (currentCount >= 5) {
-                addLog(`   ⛔ Top-N=5 limit reached for ${fromKey}. Rejecting additional candidates locally.`);
-                const rejectedResponse = { 
-                  success: true, 
-                  locallyRejected: true, 
-                  localHeuristicScore: 0.0,
-                  reason: 'Top-N=5 per source section reached' 
-                };
-                sectionPairCache.set(cacheKey, rejectedResponse);
-                toolRes = { functionResponse: { name: call.name, id: call.id, response: rejectedResponse } };
-                continue;
-              }
-              evaluationsPerFromSection.set(fromKey, currentCount + 1);
-
-              if (evaluateCallCount >= MAX_EVALUATE_CALLS_PER_RUN) {
-                addLog(`   ⛔ Hard limit reached: maxEvaluateCallsPerRun (${MAX_EVALUATE_CALLS_PER_RUN}). Rejecting further evaluations.`);
-                toolRes = { functionResponse: { name: call.name, id: call.id, response: { error: 'Evaluation limit reached for this run' } } };
-                continue;
-              }
-
-              evaluateCallCount++;
-              cheapLLMCalls++;
-
-              const res = await fetch('/api/section-pair-evaluate', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  fromTrackId: args.fromTrackId,
-                  fromSectionId: args.fromSectionId,
-                  toTrackId: args.toTrackId,
-                  toSectionId: args.toSectionId
-                }),
-                signal
-              });
-
-              if (!res.ok) {
-                const errData = await res.json().catch(() => ({}));
-                const errMsg = errData.error || `HTTP ${res.status}`;
-                addLog(`❌ evaluate_section_pair failed: ${errMsg}`);
-                toolRes = { functionResponse: { name: call.name, id: call.id, response: { error: errMsg } } };
-              } else {
-                const data = await res.json();
-
-                // Store in in-session cache (even rejections for this run)
-                if (!data.error) {
-                  sectionPairCache.set(cacheKey, data);
-                }
-
-                // data.transition.score is the composite 0-1 score from TransitionScore
-                const localScore: number | undefined = data.transition?.score;
-
-                if (data.locallyRejected) {
-                  // Top-N client-side rejection (fabricated locally above, not from server)
-                  autoRejectedCount++;
-                  addLog(`   🚫 Locally rejected — no LLM cost.`);
-                } else if (localScore !== undefined) {
-                  if (localScore >= LOCAL_AUTO_ACCEPT_THRESHOLD) {
-                    autoAcceptedCount++;
-                    addLog(`   ✅ High local confidence (${localScore.toFixed(2)}) — auto-accepted.`);
-                  } else if (localScore <= LOCAL_REJECTION_THRESHOLD) {
-                    autoRejectedCount++;
-                    addLog(`   🚫 Low local confidence (${localScore.toFixed(2)}) — auto-rejected.`);
-                  } else {
-                    addLog(`   ⚖️ Ambiguous score (${localScore.toFixed(2)}) — proceeding with full evaluation.`);
-                  }
-                }
-
-                toolRes = { functionResponse: { name: call.name, id: call.id, response: data } };
-              }
-            }
-            else if (call.name === 'set_design_plan') {
-              addLog(`   Locking design plan: ${(args.transitions || []).length} transitions`);
-              const res = await fetch('/api/session/design-plan', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ sessionId: sid, plan: { transitions: args.transitions } }),
-                signal
-              });
-              const data = await res.json();
-              if (!res.ok) {
-                addLog(`  ❌ set_design_plan failed: ${data.error || res.statusText}`);
-                toolRes = { functionResponse: { name: call.name, id: call.id, response: { success: false, error: data.error || res.statusText } } };
-              } else {
-                if (data.warnings?.length) {
-                  for (const w of data.warnings) addLog(`  ⚠️ ${w}`);
-                }
-                toolRes = { functionResponse: { name: call.name, id: call.id, response: data } };
-              }
-            }
-            else if (call.name === 'apply_musical_transition') {
-              addLog(`   Applying ${args.style} transition: ${args.fromSectionId} → ${args.toSectionId}`);
-              const transStart = Date.now();
-              const res = await withHeartbeat(
-                `FFmpeg ${args.style} render (${args.fromSectionId} → ${args.toSectionId})`,
-                fetch('/api/apply-transition', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    fromTrackId: args.fromTrackId,
-                    fromSectionId: args.fromSectionId,
-                    toTrackId: args.toTrackId,
-                    toSectionId: args.toSectionId,
-                    style: args.style,
-                    duration: args.duration,
-                    intensity: args.intensity,
-                    beatAlign: args.beatAlign,
-                    notes: args.notes,
-                    sessionId: sid
-                  }),
-                  signal
-                }),
-                6000
-              );
-              const data = await res.json();
-              if (!res.ok) {
-                addLog(`   ❌ Transition render failed (HTTP ${res.status}): ${data.error || res.statusText}${data.errorCategory ? ` [${data.errorCategory}]` : ''}`);
-                toolRes = { functionResponse: { name: call.name, id: call.id, response: { success: false, error: data.error || res.statusText, errorCategory: data.errorCategory } } };
-              } else {
-                addLog(`   ✓ Transition rendered in ${((Date.now() - transStart) / 1000).toFixed(1)}s`);
-                toolRes = { functionResponse: { name: call.name, id: call.id, response: data } };
-              }
-            }
-            else if (call.name === 'analyze_medley_quality') {
-              addLog(`   Analyzing medley quality: ${args.filePath}`);
-              const res = await fetch('/api/medley-quality', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filePath: args.filePath, sessionId: sid }),
-                signal
-              });
-              const data = await res.json();
-              if (!res.ok) {
-                addLog(`  ❌ analyze_medley_quality failed: ${data.error || res.statusText}`);
-                toolRes = { functionResponse: { name: call.name, id: call.id, response: { success: false, error: data.error || res.statusText } } };
-              } else {
-                toolRes = { functionResponse: { name: call.name, id: call.id, response: data } };
-              }
-            }
-            else if (call.name === 'read_file') {
-              const res = await fetch(`/api/file-read?filePath=${encodeURIComponent(args.filePath)}`, { signal });
-              const data = await res.json();
-              if (!res.ok) {
-                toolRes = { functionResponse: { name: call.name, id: call.id, response: { success: false, error: data.error || res.statusText } } };
-              } else {
-                toolRes = { functionResponse: { name: call.name, id: call.id, response: data } };
-              }
-            }
-            else if (call.name === 'write_file') {
-              const res = await fetch('/api/file-write', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ filePath: args.filePath, content: args.content }),
-                signal
-              });
-              const data = await res.json();
-              if (!res.ok) {
-                toolRes = { functionResponse: { name: call.name, id: call.id, response: { success: false, error: data.error || res.statusText } } };
-              } else {
-                toolRes = { functionResponse: { name: call.name, id: call.id, response: data } };
-              }
-            }
-            else if (call.name === 'save_file_analysis') {
-              addLog(`  📊 Saving analysis for ${args.fileId}`);
-              const res = await fetch('/api/library/analysis', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ 
-                  fileId: args.fileId, 
-                  analysisText: args.analysisText,
-                  sessionId: sid   // pass session for wisdom accumulation
-                }),
-                signal
-              });
-              toolRes = { functionResponse: { name: call.name, id: call.id, response: await res.json() } };
-              await fetchLibrary();
-            }
-            else if (call.name === 'report_progress') {
-              if (args.phase) {
-                setCurrentPhase(args.phase);
-              } else {
-                setCurrentPhase('EVALUATE — Scoring Output');
-              }
-              const newMetrics = {
-                emotionalArc: args.emotionalArc,
-                transitionSmoothness: args.transitionSmoothness,
-                performerIdentity: args.performerIdentity,
-                overallScore: args.overallScore,
-                iteration: args.iteration,
-                phase: args.phase || undefined
-              };
-              setMetrics(newMetrics);
-              const phaseLog = args.phase ? ` [${args.phase}]` : '';
-              addLog(`  📈 Scores: Arc=${args.emotionalArc}% Trans=${args.transitionSmoothness}% Identity=${args.performerIdentity}% Overall=${args.overallScore}%${phaseLog}`);
-
-              // === Phase 1 Early Termination ===
-              if (typeof args.overallScore === 'number' && args.overallScore >= EARLY_TERMINATION_SCORE) {
-                addLog(`   ✅ Early termination: overallScore ${args.overallScore} >= ${EARLY_TERMINATION_SCORE}. Stopping refinement.`);
-                // Let the agent naturally call finalize_medley next
-              }
-              // Also persist to server for SSE
-              await fetch('/api/session/metrics', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ sessionId: sid, metrics: newMetrics }),
-                signal
-              });
-              toolRes = { functionResponse: { name: call.name, id: call.id, response: { status: 'Metrics updated.' } } };
-            }
-            else if (call.name === 'finish_medley') {
-              setCurrentPhase('FINISH — Finalizing Medley');
-              addLog(`  ✅ Medley complete: ${args.finalMp3Path}`);
-              await fetch('/api/session/finish', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ sessionId: sid, finalAudioPath: args.finalMp3Path, summary: args.summary }),
-                signal
-              });
-              fetch(`/api/checkpoint/${sid}`, { method: 'DELETE' }).catch(() => {});
-              setSummary(args.summary);
-              setStatus('completed');
-              loopFinished = true;
-              toolRes = { functionResponse: { name: call.name, id: call.id, response: { status: 'acknowledged' } } };
-            }
-            else if (call.name === 'finalize_medley') {
-              setCurrentPhase('FINISH — Rendering Final Clean Medley');
-              addLog(`  🚀 Calling finalize_medley for clean render: ${args.finalMp3Path}`);
-              const finalStart = Date.now();
-
-              const res = await withHeartbeat(
-                'FFmpeg final medley render',
-                fetch('/api/finalize-medley', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    sessionId: sid,
-                    finalMp3Path: args.finalMp3Path,
-                    summary: args.summary,
-                    useCleanRender: args.useCleanRender ?? true
-                  }),
-                  signal
-                }),
-                6000
-              );
-              const data = await res.json();
-
-              if (!res.ok || !data.success) {
-                throw new Error(data.error || 'finalize_medley failed');
-              }
-
-              addLog(`   ✓ Final render completed in ${((Date.now() - finalStart) / 1000).toFixed(1)}s`);
-              addLog(`  ✅ Clean final medley rendered: ${data.outputPath}`);
-
-              await fetch('/api/session/finish', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  sessionId: sid,
-                  finalAudioPath: data.outputPath,
-                  summary: args.summary
-                }),
-                signal
-              });
-
-              fetch(`/api/checkpoint/${sid}`, { method: 'DELETE' }).catch(() => {});
-              setSummary(args.summary);
-              setStatus('completed');
-              loopFinished = true;
-              toolRes = { functionResponse: { name: call.name, id: call.id, response: data } };
-            }
-          } catch (e: any) {
-            toolFailureStreak++;
-            logDetailedError(`Tool Execution: ${call.name}`, e, {
-              toolName: call.name,
-              toolId: call.id,
-              arguments: args,
-              model: getCurrentModel(),
-              provider: config.provider,
-              toolFailureStreak
-            });
-
-            toolRes = {
-              functionResponse: {
-                name: call.name,
-                id: call.id,
-                response: {
-                  error: e.message || String(e),
-                  details: e.rawBody || e.rawArguments || undefined
-                }
-              }
-            };
-
-            // Auto model switch on repeated tool failures
-            if (toolFailureStreak >= MAX_TOOL_FAILURE_STREAK) {
-              const switched = await switchToNextModel(`Repeated failures calling tool "${call.name}" (${toolFailureStreak} times)`);
-              if (switched) {
-                addLog(`   Continuing with new model...`);
-              }
-            }
-          }
-
-          if (toolRes) toolResponses.push(toolRes);
-        }
-
-        // Update derived Execution Context after every tool batch (pure UI layer, reflects actual activity)
-        const lastToolThisTurn = functionCalls.length > 0 ? functionCalls[functionCalls.length - 1].name : null;
-        setExecutionContext(deriveExecutionContext(currentPhase, lastToolThisTurn, result.text || null, iterations));
-
-        const anySuccess = toolResponses.some((tr: any) => !tr.functionResponse?.response?.error);
-        if (toolResponses.length > 0 && !loopFinished) {
-          // Only reset streak if at least one tool call succeeded — prevents a model
-          // that always calls tools with bad arguments from never accumulating a streak
-          if (anySuccess) toolFailureStreak = 0;
-          result = await sendWithRetry(toolResponses.map((toolResponse: any) => ({
-            name: toolResponse.functionResponse.name,
-            id: toolResponse.functionResponse.id,
-            response: toolResponse.functionResponse.response
-          })));
-          llmCallCount++;
-          expensiveLLMCalls++;
-          if (result.usage?.total_tokens) {
-            addLog(`   [Tokens] Prompt: ${result.usage.prompt_tokens ?? '?'}, Completion: ${result.usage.completion_tokens ?? '?'}, Total: ${result.usage.total_tokens}`);
-          }
-          saveCheckpoint();
-        }
-      }
-
-      if (iterations >= MAX_ITERATIONS && !loopFinished) {
-        addLog('⚠️ Max iterations reached. Stopping.');
-        setStatus('error');
-        setErrorMessage('Max iterations reached without completing the medley.');
-      }
-
-      // Phase 1 + Phase 2 stats at end of run
-      addLog(`   [Phase 1/2 Final Stats] evaluateCalls=${evaluateCallCount}, llmCalls=${llmCallCount} (expensive=${expensiveLLMCalls}, cheap=${cheapLLMCalls}), refinementPasses=${refinementPassCount}, cachedPairs=${sectionPairCache.size}, autoAccepted=${autoAcceptedCount}, autoRejected=${autoRejectedCount}`);
-      addLog(`   Note: Auto-accept threshold = ${LOCAL_AUTO_ACCEPT_THRESHOLD}, auto-reject threshold = ${LOCAL_REJECTION_THRESHOLD}. Recalibrate when using more diverse libraries.`);
-    } catch (e: any) {
-      if (e.name === 'AbortError') {
-        setStatus('idle');
-        setRunStartedAt(null);
-        setLogs([]);
-        setMetrics(null);
-        setSummary(null);
-        setSessionId(null);
-        sessionIdRef.current = null;
-        setErrorMessage(null);
-        setIteration(null);
-        setExecutionContext(null);
-        return;
-      }
-
-      try { _checkpointFn?.(); } catch {}
-
-      addLog(`💥 Loop crashed — Phase: ${currentPhaseRef.current || 'unknown'} | Model: ${config.model} | Provider: ${config.provider} | Session: ${sid}`);
-      addLog(`   Error: ${e.message || String(e)}${e.status ? ` (HTTP ${e.status})` : ''}`);
-      if (e.rawBody) {
-        try {
-          const parsed = JSON.parse(typeof e.rawBody === 'string' ? e.rawBody : JSON.stringify(e.rawBody));
-          const apiMsg = parsed?.error?.message || parsed?.message || parsed?.error;
-          if (apiMsg) {
-            addLog(`   API message: ${String(apiMsg).substring(0, 500)}`);
-          } else {
-            addLog(`   Raw response: ${(typeof e.rawBody === 'string' ? e.rawBody : JSON.stringify(e.rawBody)).substring(0, 500)}`);
-          }
-        } catch {
-          addLog(`   Raw response: ${String(e.rawBody).substring(0, 500)}`);
-        }
-      }
-      console.error('[Autonomous Loop Crashed]', { error: e, phase: currentPhaseRef.current, model: config.model, sessionId: sid });
-
-      setStatus('error');
-      setErrorMessage(e.message || 'Autonomous loop failed unexpectedly');
-    } finally {
-      if (sseRef.current) {
-        sseRef.current.close();
-        sseRef.current = null;
-      }
-      setRenderProgress(null);
-    }
-  };
-
-  const handleCancel = () => {
-    const activeSid = sessionIdRef.current;
-    if (activeSid) {
-      fetch(`/api/session/${activeSid}/cancel`, { method: 'POST' }).catch(err => {
-        console.error('Failed to cancel active render process:', err);
-      });
-    }
-    if (sseRef.current) {
-      sseRef.current.close();
-      sseRef.current = null;
-    }
-    setRenderProgress(null);
-    abortRef.current?.abort();
-    abortRef.current = null;
-    setTimeout(fetchCheckpoints, 600);
-  };
-
-  const resumeFromCheckpoint = async (checkpoint: CheckpointData) => {
-    if (status !== 'idle') return;
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setStatus('running');
-    setCurrentPhase(checkpoint.currentPhase || '');
-    setMedleyDesign(checkpoint.design);
-    setIteration({ current: checkpoint.iterations, max: 50 });
-    await runAutonomousLoop(library, controller.signal, checkpoint.design, checkpoint);
-  };
-
-  const discardCheckpoint = async (sessionId: string) => {
-    await fetch(`/api/checkpoint/${sessionId}`, { method: 'DELETE' });
-    await fetchCheckpoints();
-  };
-
+  // ── Load from History ──
   const loadFromHistory = (entry: HistoryEntry) => {
-    setSessionId(entry.id);
-    setSummary(entry.summary);
-    setMetrics(entry.metrics ?? null);
-    setStatus('completed');
-    setLogs([]);
+    loop.loadFromHistory(entry);
     setActiveTab('workshop');
   };
 
-  const preAnalyzeLibrary = async (lib: LibraryFile[], signal: AbortSignal): Promise<void> => {
-    const unanalyzed = lib.filter(f => !f.analysis || !f.localAnalysis || !(f.localAnalysis as any)?.localAnalysisV2 || !f.medleyIntelligence);
-    if (unanalyzed.length === 0) return;
-
-    setPreAnalysisProgress({ current: 0, total: unanalyzed.length });
-    setCurrentPhase('ANALYZE — Pre-analyzing Library');
-    addLog(`🔬 Pre-analyzing ${unanalyzed.length} track(s) before session starts...`);
-
-    // Bounded parallel queue — analyze up to 3 tracks concurrently
-    const CONCURRENCY = 1;  // was 3 — prevents db.json write race condition
-    let completedCount = 0;
-
-    const analyzeOne = async (entry: typeof unanalyzed[0]) => {
-      if (signal.aborted) return;
-      addLog(`  📡 Analyzing: ${entry.originalName}`);
-
-      try {
-        const local = await getLocalAnalysis({ fileId: entry.id, saveToLibrary: true }, signal);
-        let analysisText = local.analysisText;
-
-        if (shouldUploadAudioForAnalysis(entry.originalName)) {
-          addLog(`  ☁️ Cloud audio upload allowed for ${entry.originalName}`);
-          const audioRes = await fetch(`/api/audio-raw/${entry.id}`, { signal });
-          if (!audioRes.ok) {
-            addLog(`  ⚠️ Cloud audio fetch failed (HTTP ${audioRes.status}) for ${entry.originalName} — using local analysis only`);
-          } else {
-            const audioBlob = await audioRes.blob();
-            const cloudAnalysisText = await analyzeAudioWithProvider({
-              config,
-              file: new File([audioBlob], entry.originalName, { type: entry.mimeType }),
-              mimeType: entry.mimeType,
-              displayName: entry.originalName,
-              prompt: 'Analyze this audio track and provide BPM if discernible, musical key, mood or genre, energy level from 1 to 10, and a concise 2 to 3 sentence structural summary.',
-              signal
-            });
-            analysisText = `${local.analysisText}\n\nOptional cloud audio analysis:\n${cloudAnalysisText}`;
-          }
-        }
-
-        if (analysisText) {
-          if (config.audioAnalysisMode !== 'local') {
-            await fetch('/api/library/analysis', {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ fileId: entry.id, analysisText }),
-              signal
-            });
-          }
-          addLog(`  ✅ Analyzed: ${entry.originalName}`);
-        }
-      } catch (e: any) {
-        if (e.name === 'AbortError') return;
-        addLog(`  ⚠️ Pre-analysis failed for ${entry.originalName}: ${e.message}`);
-      }
-
-      completedCount++;
-      setPreAnalysisProgress({ current: completedCount, total: unanalyzed.length });
-    };
-
-    // Process in waves of CONCURRENCY
-    for (let i = 0; i < unanalyzed.length; i += CONCURRENCY) {
-      if (signal.aborted) {
-        setPreAnalysisProgress(null);
-        return;
-      }
-      const wave = unanalyzed.slice(i, i + CONCURRENCY);
-      await Promise.all(wave.map(analyzeOne));
-    }
-
-    await fetchLibrary();
-    setPreAnalysisProgress(null);
-    setCurrentPhase('');
-    addLog('✅ Pre-analysis complete. Handing off to Architect...');
-  };
-
-  const startMedley = async () => {
-    if (library.length < 2) return;
-    if (!hasProviderKey) {
-      setStatus('error');
-      setErrorMessage(config.provider === 'gemini' ? 'Add a Gemini API key in Configuration before starting.' : 'Add an OpenRouter API key in Configuration before starting.');
-      return;
-    }
-    abortRef.current = new AbortController();
-    setStatus('running');
-    setRunStartedAt(Date.now());
-    addLog('🔍 Checking system integrity...');
-    
-    let healthy = false;
-    let attempts = 0;
-    while (!healthy && attempts < 5) {
-      try {
-        const res = await fetch('/api/health');
-        if (res.ok) {
-          healthy = true;
-        } else {
-          throw new Error('Not ready');
-        }
-      } catch (e) {
-        attempts++;
-        addLog(`⚠️ Backend warming up (Attempt ${attempts}/5)...`);
-        await new Promise(r => setTimeout(r, 2000));
-      }
-    }
-
-    if (!healthy) {
-      setErrorMessage('Backend failed to respond. Please refresh the page.');
-      setStatus('error');
-      return;
-    }
-
-    addLog('✅ System online. Initializing Architect...');
-    setCurrentPhase('ANALYZE — Library Analysis');
-    addLog('📚 Loading library from server...');
-    const freshLibForAnalysis: LibraryFile[] = await fetch('/api/library').then(r => r.json()).catch(() => library);
-    setLibrary(freshLibForAnalysis);
-    await preAnalyzeLibrary(freshLibForAnalysis, abortRef.current.signal);
-    if (!abortRef.current || abortRef.current.signal.aborted) return;
-    const freshLib: LibraryFile[] = await fetch('/api/library').then(r => r.json()).catch(() => freshLibForAnalysis);
-    let design: MedleyDesignPayload | null = null;
-    try {
-      setCurrentPhase('DESIGN — Building Structure');
-      addLog('🧠 Building Medley Intelligence match scores...');
-      design = await buildMedleyDesign(freshLib, abortRef.current.signal);
-      addLog(`✅ Medley Intelligence ready: ${design.recommendedStrategies.length} strategies, ${design.transitionMatrixSummary.length} transition scores.`);
-    } catch (e: any) {
-      addLog(`⚠️ Medley Intelligence unavailable: ${e.message}`);
-    }
-    setCurrentPhase('BUILD — Constructing Medley');
-    runAutonomousLoop(freshLib, abortRef.current.signal, design);
-  };
-
-  const isIdle = status === 'idle' || status === 'error';
-  const canStart = library.length >= 2 && hasProviderKey && configLoaded;
+  if (!config) return null;  // still loading
 
   return (
     <div className="h-screen bg-[#060606] text-[#E0E0E0] font-sans flex flex-col overflow-hidden selection:bg-[#00F0FF]/30">
       <Header 
-        status={status} 
+        status={loop.status} 
         provider={config.provider} 
-        currentModel={activeModel}
+        currentModel={loop.activeModel}
         onConfigClick={() => setShowConfig(true)} 
-        onForceModelSwitch={() => forceModelSwitchRef.current?.()}
-        onCancel={handleCancel} 
+        onForceModelSwitch={() => loop.forceModelSwitchRef.current?.()}
+        onCancel={loop.handleCancel} 
       />
-      {showConfig && <ConfigPanel config={config} onUpdate={setConfig} onClose={() => setShowConfig(false)} />}
+      {showConfig && <ConfigPanel config={config} onUpdate={setConfig} onClose={() => setShowConfig(false)} isRunning={loop.status === 'running'} />}
+
+      {loop.cloudAnalysisPrompt && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className="bg-[#111] border border-[#222] rounded-xl w-full max-w-sm p-6 shadow-2xl">
+            <p className="text-[12px] text-white font-semibold mb-1">Cloud Audio Analysis</p>
+            <p className="text-[11px] text-[#888] mb-5">
+              Upload <span className="text-[#ccc] font-mono">"{loop.cloudAnalysisPrompt.trackName}"</span> to {config.provider === 'gemini' ? 'Gemini' : 'OpenRouter'} for deeper analysis?
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              <button onClick={() => loop.cloudAnalysisPrompt?.respond('upload')} className="px-3 py-2 text-[10px] font-bold uppercase bg-[#00F0FF]/10 border border-[#00F0FF]/30 text-[#00F0FF] rounded-lg hover:bg-[#00F0FF]/20 transition-colors">Upload this track</button>
+              <button onClick={() => loop.cloudAnalysisPrompt?.respond('local')} className="px-3 py-2 text-[10px] font-bold uppercase bg-[#1A1A1A] border border-[#333] text-[#888] rounded-lg hover:border-[#555] transition-colors">Local only</button>
+              <button onClick={() => loop.cloudAnalysisPrompt?.respond('upload-all')} className="px-3 py-2 text-[10px] font-bold uppercase bg-[#00F0FF]/10 border border-[#00F0FF]/30 text-[#00F0FF] rounded-lg hover:bg-[#00F0FF]/20 transition-colors">Upload all remaining</button>
+              <button onClick={() => loop.cloudAnalysisPrompt?.respond('local-all')} className="px-3 py-2 text-[10px] font-bold uppercase bg-[#1A1A1A] border border-[#333] text-[#888] rounded-lg hover:border-[#555] transition-colors">Local only for all</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <main className="flex-1 flex overflow-hidden">
-        <LibrarySidebar library={library} status={status} provider={config.provider} apiReady={hasProviderKey} onRemove={removeFile} onReorder={reorderLibrary} />
+        <LibrarySidebar library={library} status={loop.status} provider={config.provider} apiReady={hasProviderKey} onRemove={removeFile} onReorder={reorderLibrary} />
 
         <section className="flex-1 flex flex-col bg-[#030303] overflow-hidden">
           {/* Tab bar */}
@@ -1452,66 +163,57 @@ export default function App() {
           </div>
 
           {/* Persistent Activity Status Bar */}
-          {status === 'running' && (
+          {loop.status === 'running' && (
             <div className="shrink-0 border-b border-[#1A1A1A] bg-[#0A0A0A] px-5 py-2.5 flex items-center justify-between text-[11px] font-mono animate-fade-in">
               <div className="flex items-center gap-3 min-w-0">
                 <span className="uppercase tracking-[1.5px] text-[#00F0FF] font-bold shrink-0">CURRENT PHASE</span>
                 <span className="text-white font-medium truncate">
-                  {preAnalysisProgress
-                    ? `ANALYZE — Pre-analyzing Library (${preAnalysisProgress.current}/${preAnalysisProgress.total})`
-                    : (metrics?.phase || currentPhase || (iteration ? 'BUILD — Constructing Medley' : 'Initializing...'))}
+                  {loop.preAnalysisProgress
+                    ? `ANALYZE — Pre-analyzing Library (${loop.preAnalysisProgress.current}/${loop.preAnalysisProgress.total})`
+                    : (loop.metrics?.phase || loop.currentPhase || (loop.iteration ? 'BUILD — Constructing Medley' : 'Initializing...'))}
                 </span>
               </div>
 
               <div className="flex items-center gap-3">
                 {/* Pre-analysis progress bar */}
-                {preAnalysisProgress && (
+                {loop.preAnalysisProgress && (
                   <div className="flex items-center gap-3 ml-4 min-w-[220px]">
                     <div className="flex-1 h-1.5 bg-[#1A1A1A] rounded-full overflow-hidden">
                       <div
-                        className="h-full bg-gradient-to-r from-[#00F0FF] to-[#0080FF] transition-all duration-200"
-                        style={{ width: `${(preAnalysisProgress.current / preAnalysisProgress.total) * 100}%` }}
+                        className="progress-fill h-full bg-gradient-to-r from-[#00F0FF] to-[#0080FF] transition-all duration-200"
+                        style={{ '--progress-width': `${(loop.preAnalysisProgress.current / loop.preAnalysisProgress.total) * 100}%` } as React.CSSProperties}
                       />
                     </div>
                     <div className="text-[#888] tabular-nums w-12 text-right">
-                      {Math.round((preAnalysisProgress.current / preAnalysisProgress.total) * 100)}%
+                      {Math.round((loop.preAnalysisProgress.current / loop.preAnalysisProgress.total) * 100)}%
                     </div>
                   </div>
                 )}
 
                 {/* Render progress bar */}
-                {renderProgress && renderProgress.percent < 100 && (
+                {loop.renderProgress && loop.renderProgress.percent < 100 && (
                   <div className="flex items-center gap-3 ml-4 min-w-[260px] animate-pulse">
-                    <span className="text-[#FF00F0] text-[9px] uppercase tracking-wider font-bold">
-                      [FFMPEG ENCODING]
-                    </span>
+                    <span className="text-[#FF00F0] text-[9px] uppercase tracking-wider font-bold">[FFMPEG ENCODING]</span>
                     <div className="flex-1 h-1.5 bg-[#1A1A1A] rounded-full overflow-hidden relative">
-                      <div
-                        className="h-full bg-gradient-to-r from-[#FF00F0] to-[#00F0FF] transition-all duration-200"
-                        style={{ width: `${renderProgress.percent}%` }}
-                      />
+                      <div className="progress-fill h-full bg-gradient-to-r from-[#FF00F0] to-[#00F0FF] transition-all duration-200" style={{ '--progress-width': `${loop.renderProgress.percent}%` } as React.CSSProperties} />
                     </div>
-                    <div className="text-white tabular-nums font-bold w-10 text-right">
-                      {renderProgress.percent}%
-                    </div>
-                    {renderProgress.remainingSecondsEstimate !== undefined && renderProgress.remainingSecondsEstimate !== null && (
-                      <span className="text-[#666] text-[9px] shrink-0">
-                        ~{renderProgress.remainingSecondsEstimate}s left
-                      </span>
+                    <div className="text-white tabular-nums font-bold w-10 text-right">{loop.renderProgress.percent}%</div>
+                    {loop.renderProgress.remainingSecondsEstimate !== undefined && loop.renderProgress.remainingSecondsEstimate !== null && (
+                      <span className="text-[#666] text-[9px] shrink-0">~{loop.renderProgress.remainingSecondsEstimate}s left</span>
                     )}
                   </div>
                 )}
 
                 {/* Main loop iteration */}
-                {iteration && !preAnalysisProgress && !renderProgress && (
+                {loop.iteration && !loop.preAnalysisProgress && !loop.renderProgress && (
                   <div className="text-[#666] shrink-0">
-                    Iteration <span className="text-white font-medium">{iteration.current}</span> / {iteration.max}
+                    Iteration <span className="text-white font-medium">{loop.iteration.current}</span> / {loop.iteration.max}
                   </div>
                 )}
 
-                {/* Cancel Button in Status Bar */}
+                {/* Cancel Button */}
                 <button
-                  onClick={handleCancel}
+                  onClick={loop.handleCancel}
                   className="ml-4 px-3 py-1 rounded-md border border-red-500/40 bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 font-mono text-[10px] uppercase tracking-wider transition-all flex items-center gap-1.5 shrink-0"
                 >
                   <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping" />
@@ -1535,11 +237,11 @@ export default function App() {
                 <Upload className="w-12 h-12 text-[#333] group-hover:text-[#00F0FF] transition-colors mx-auto mb-6" />
                 <h3 className="text-[15px] font-bold uppercase tracking-wider text-white mb-2">Drop Audio Files Here</h3>
                 <p className="text-[#555] text-[12px]">MP3, WAV, FLAC, AAC, OGG • Click to browse</p>
-                <input type="file" multiple accept="audio/*" className="hidden" ref={fileInputRef} onChange={e => e.target.files && uploadToLibrary(Array.from(e.target.files))} />
+                <input type="file" multiple accept="audio/*" className="hidden" ref={fileInputRef} aria-label="Select audio files to upload" onChange={e => e.target.files && handleUpload(Array.from(e.target.files))} />
               </div>
 
               {/* Upload progress */}
-              {status === 'uploading' && uploadProgress && (
+              {uploadProgress && (
                 <div className="mt-8 border border-[#00F0FF]/20 bg-[#00F0FF]/[0.03] p-4 rounded-xl w-full max-w-lg">
                   <div className="flex items-center text-[#00F0FF] text-[11px] font-mono uppercase font-bold mb-2">
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Ingesting...
@@ -1552,21 +254,21 @@ export default function App() {
               )}
 
               {/* Error display */}
-              {status === 'error' && errorMessage && (
+              {loop.status === 'error' && loop.errorMessage && (
                 <div className="mt-6 border border-red-500/30 bg-red-500/5 text-red-400 p-4 text-[11px] font-mono flex items-start gap-3 rounded-xl w-full max-w-lg">
                   <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
                   <div>
                     <div className="font-bold uppercase">Error</div>
-                    <div className="mt-1 text-[10px] opacity-80">{errorMessage}</div>
+                    <div className="mt-1 text-[10px] opacity-80">{loop.errorMessage}</div>
                   </div>
                 </div>
               )}
 
               {/* Checkpoint resume banner */}
-              {checkpoints.length > 0 && (
+              {loop.checkpoints.length > 0 && (
                 <div className="mt-8 w-full max-w-lg border border-[#00F0FF]/20 bg-[#00F0FF]/[0.03] rounded-xl p-4">
                   <div className="text-[10px] font-mono uppercase tracking-widest text-[#00F0FF] font-bold mb-3">Interrupted Sessions</div>
-                  {checkpoints.map(cp => (
+                  {loop.checkpoints.map((cp: CheckpointData) => (
                     <div key={cp.sessionId} className="flex items-center gap-3 py-2 border-t border-white/5 first:border-t-0">
                       <div className="flex-1 min-w-0">
                         <div className="text-[11px] text-white font-mono truncate">{cp.model}</div>
@@ -1574,18 +276,8 @@ export default function App() {
                           Iteration {cp.iterations} · {cp.currentPhase || 'Unknown phase'} · {new Date(cp.savedAt).toLocaleString()}
                         </div>
                       </div>
-                      <button
-                        onClick={() => resumeFromCheckpoint(cp)}
-                        className="shrink-0 px-3 py-1 text-[10px] font-mono uppercase tracking-wider border border-[#00F0FF]/50 text-[#00F0FF] rounded hover:bg-[#00F0FF]/10 transition-all"
-                      >
-                        Resume
-                      </button>
-                      <button
-                        onClick={() => discardCheckpoint(cp.sessionId)}
-                        className="shrink-0 px-3 py-1 text-[10px] font-mono uppercase tracking-wider border border-red-500/40 text-red-400 rounded hover:bg-red-500/10 transition-all"
-                      >
-                        Discard
-                      </button>
+                      <button onClick={() => loop.resumeFromCheckpoint(cp)} className="shrink-0 px-3 py-1 text-[10px] font-mono uppercase tracking-wider border border-[#00F0FF]/50 text-[#00F0FF] rounded hover:bg-[#00F0FF]/10 transition-all">Resume</button>
+                      <button onClick={() => loop.discardCheckpoint(cp.sessionId)} className="shrink-0 px-3 py-1 text-[10px] font-mono uppercase tracking-wider border border-red-500/40 text-red-400 rounded hover:bg-red-500/10 transition-all">Discard</button>
                     </div>
                   ))}
                 </div>
@@ -1593,7 +285,7 @@ export default function App() {
 
               {/* Start button */}
               <button
-                onClick={startMedley}
+                onClick={loop.startMedley}
                 disabled={!canStart}
                 className="mt-10 px-10 py-3.5 bg-gradient-to-r from-[#00F0FF] to-[#0080FF] text-black text-[12px] font-bold uppercase rounded-xl hover:shadow-xl hover:shadow-[#00F0FF]/20 transition-all duration-300 disabled:opacity-20 disabled:cursor-not-allowed disabled:shadow-none flex items-center gap-2 group"
               >
@@ -1603,26 +295,52 @@ export default function App() {
               {library.length < 2 && library.length > 0 && (
                 <p className="mt-3 text-[10px] text-[#444] font-mono">Need at least 2 tracks to build a medley</p>
               )}
-              {library.length >= 2 && !hasProviderKey && (
-                <p className="mt-3 text-[10px] text-[#444] font-mono">Open Configuration and add a {config.provider === 'gemini' ? 'Gemini' : 'OpenRouter'} API key</p>
+              {library.length >= 2 && !keyValidation.ok && keyValidation.message && (
+                <p className="mt-3 text-[10px] text-[#444] font-mono">{keyValidation.message}</p>
+              )}
+              {library.length >= 2 && keyValidation.ok && keyValidation.severity === 'warning' && keyValidation.message && (
+                <p className="mt-3 text-[10px] text-amber-500/70 font-mono">{keyValidation.message}</p>
               )}
             </div>
           ) : (
-            <LogPanel status={status} logs={logs} iteration={iteration} runStartedAt={runStartedAt} />
+            <div className="flex flex-col h-full">
+              {loop.status === 'completed' && (
+                <div className="flex items-center justify-between px-4 py-2 border-b border-[#1A1A1A] bg-[#0A0A0A] shrink-0">
+                  <span className="text-[10px] font-mono text-[#00F0FF] uppercase tracking-widest">Run complete</span>
+                  <button
+                    onClick={handleReset}
+                    className="px-3 py-1 rounded border border-[#00F0FF]/40 bg-[#00F0FF]/10 hover:bg-[#00F0FF]/20 text-[#00F0FF] hover:text-white font-mono text-[10px] uppercase tracking-wider transition-all flex items-center gap-1.5"
+                  >
+                    <Play className="w-3 h-3" />
+                    New Run
+                  </button>
+                </div>
+              )}
+              <LogPanel status={loop.status} logs={logs} iteration={loop.iteration} runStartedAt={loop.runStartedAt} />
+            </div>
           )}
         </section>
 
-        {medleyDesign && activeTab === 'workshop' && status !== 'completed' && status !== 'running' ? (
-          <MedleyMatchPanel design={medleyDesign} />
+        {loop.medleyDesign && activeTab === 'workshop' && loop.status !== 'completed' && loop.status !== 'running' ? (
+          <MedleyMatchPanel design={loop.medleyDesign} />
         ) : (
-          <MetricsSidebar metrics={metrics} summary={summary} status={status} sessionId={sessionId} />
+          <MetricsSidebar metrics={loop.metrics} summary={loop.summary} status={loop.status} sessionId={loop.sessionId} />
         )}
       </main>
 
       {/* Footer Audio Player */}
       <footer className="h-20 border-t border-[#1A1A1A] bg-[#0A0A0A] flex items-center px-6 gap-6 shrink-0">
-        {status === 'completed' && sessionId ? (
-          <audio controls src={`/api/audio/${sessionId}`} className="w-full max-w-5xl h-10 mx-auto" style={{ filter: 'invert(1) hue-rotate(180deg)', opacity: 0.8 }} />
+        {loop.status === 'completed' && loop.sessionId ? (
+          <>
+            <audio controls src={`/api/audio/${loop.sessionId}`} className="flex-1 h-10" style={{ filter: 'invert(1) hue-rotate(180deg)', opacity: 0.8 }} />
+            <button
+              onClick={handleReset}
+              className="shrink-0 px-4 py-2 rounded-lg border border-[#00F0FF]/40 bg-[#00F0FF]/10 hover:bg-[#00F0FF]/20 text-[#00F0FF] hover:text-white font-mono text-[10px] uppercase tracking-wider transition-all flex items-center gap-1.5"
+            >
+              <Play className="w-3 h-3" />
+              New Run
+            </button>
+          </>
         ) : (
           <>
             <div className="flex items-center gap-4 opacity-20 pointer-events-none">
@@ -1648,10 +366,7 @@ export default function App() {
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #222; border-radius: 3px; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #444; }
-        @keyframes shimmer {
-          0% { transform: translateX(-100%); }
-          100% { transform: translateX(100%); }
-        }
+        @keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
         .animate-shimmer { animation: shimmer 2s infinite; }
         input[type="range"] { height: 4px; }
         input[type="range"]::-webkit-slider-thumb { width: 14px; height: 14px; }
