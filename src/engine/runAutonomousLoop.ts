@@ -16,49 +16,39 @@ interface AutonomousLoopResult {
   error?: string;
 }
 
-/**
- * PHASE: Pre-Analysis
- * Handles library analysis before the main loop starts.
- */
-async function runPreAnalysis(options: AutonomousLoopOptions) {
-  // TODO: Move pre-analysis logic here
+async function preAnalysisPhase(options: AutonomousLoopOptions) {
+  if (options.onLog) options.onLog('[Phase] Running pre-analysis...');
+  // TODO: Move actual pre-analysis logic from App.tsx
 }
 
-/**
- * PHASE: Design
- * Main design and planning phase.
- */
-async function runDesignPhase(options: AutonomousLoopOptions) {
-  // TODO: Move design logic here (section selection, transitions, etc.)
+async function designPhase(options: AutonomousLoopOptions) {
+  if (options.onLog) options.onLog('[Phase] Running design phase...');
+  // TODO: Move design, section selection, transition planning here
 }
 
-/**
- * PHASE: Build & Evaluate
- * Building transitions and evaluating quality.
- */
-async function runBuildAndEvaluate(options: AutonomousLoopOptions) {
-  // TODO: Move build + evaluation loop here
+async function buildAndEvaluatePhase(options: AutonomousLoopOptions) {
+  if (options.onLog) options.onLog('[Phase] Running build & evaluate loop...');
+  // TODO: Move main agent loop, tool calling, evaluation here
 }
 
-/**
- * Main autonomous medley generation loop.
- * Extracted from App.tsx for better maintainability and future improvements.
- */
+async function finalizePhase(options: AutonomousLoopOptions) {
+  if (options.onLog) options.onLog('[Phase] Finalizing medley...');
+  // TODO: Move finalize_medley logic here
+}
+
 export async function runAutonomousLoop(options: AutonomousLoopOptions): Promise<AutonomousLoopResult> {
   const { onLog } = options;
 
-  if (onLog) onLog('[Loop] Starting autonomous medley generation...');
-
   try {
-    await runPreAnalysis(options);
-    await runDesignPhase(options);
-    await runBuildAndEvaluate(options);
+    await preAnalysisPhase(options);
+    await designPhase(options);
+    await buildAndEvaluatePhase(options);
+    await finalizePhase(options);
 
-    if (onLog) onLog('[Loop] Autonomous loop completed successfully.');
-
+    if (onLog) onLog('[Loop] Completed successfully');
     return { success: true };
   } catch (error: any) {
-    if (onLog) onLog(`[Loop] Error: ${error.message}`);
+    if (onLog) onLog(`[Loop] Failed: ${error.message}`);
     return { success: false, error: error.message };
   }
 }
