@@ -21,6 +21,7 @@ const RENDER_CONFIG = {
   MAX_TAIL_SEC: 60,
   FADE_OUT_SECONDS: 3.0,
   TIME_EPSILON: 1e-3,          // Prevents off-by-one boundary failures
+  TIMING_TOLERANCE: 0.25,       // Clamp (not abort) for small float/metadata rounding overruns
   MAX_ERROR_LOG_LINES: 50,      // Prevents memory bloating on large logs
   SSE_HEARTBEAT_MS: 15000,      // Keeps proxy connections alive
   PROGRESS_RATE_LIMIT_MS: 250,  // Prevents UI thread thrashing
@@ -656,6 +657,7 @@ const sessions: Record<string, {
     iteration?: number;
   };
   designPlan?: any;
+  enrichedTimings?: Record<string, any>; // keyed by "fromTrackId:fromSectionId:toTrackId:toSectionId"
   [key: string]: any; // allow dynamic wisdom-related fields
 }> = {};
 
@@ -1173,6 +1175,45 @@ app.post('/api/session/design-plan', (req, res) => {
   if (!sessions[sessionId]) {
     sessions[sessionId] = { status: 'running', logs: [] };
   }
+
+  // Merge enriched timing fields from the previous design plan (if any) and from
+  // session.enrichedTimings (populated by apply_musical_transition even before set_design_plan).
+  // This prevents set_design_plan from destroying actualFromExitSec / actualToEntrySec.
+  const existingPlan = sessions[sessionId].designPlan;
+  const enrichedTimings = sessions[sessionId].enrichedTimings || {};
+  const ENRICHED_FIELDS = ['actualFromExitSec', 'actualToEntrySec', 'actualOverlapSec', 'durationUsed', 'beatSnapApplied', 'outputPath'];
+
+  for (const incoming of plan.transitions) {
+    const key = `${incoming.fromTrackId}:${incoming.fromSectionId}:${incoming.toTrackId}:${incoming.toSectionId}`;
+
+    // 1. Merge from session.enrichedTimings (populated by apply_musical_transition)
+    const cached = enrichedTimings[key];
+    if (cached) {
+      for (const f of ENRICHED_FIELDS) {
+        if (cached[f] !== undefined && incoming[f] === undefined) {
+          incoming[f] = cached[f];
+        }
+      }
+    }
+
+    // 2. Merge from old designPlan if transition identity matches
+    if (existingPlan && Array.isArray(existingPlan.transitions)) {
+      const old = existingPlan.transitions.find((t: any) =>
+        t.fromTrackId === incoming.fromTrackId &&
+        t.fromSectionId === incoming.fromSectionId &&
+        t.toTrackId === incoming.toTrackId &&
+        t.toSectionId === incoming.toSectionId
+      );
+      if (old) {
+        for (const f of ENRICHED_FIELDS) {
+          if (old[f] !== undefined && incoming[f] === undefined) {
+            incoming[f] = old[f];
+          }
+        }
+      }
+    }
+  }
+
   sessions[sessionId].designPlan = plan;
 
   // Soft validation: warn about any low-score pairs
@@ -1296,20 +1337,33 @@ app.post('/api/apply-transition', async (req, res) => {
 
     // === SEPARATED: Enrichment (for finalize_medley pure-clean path) happens independently of preview render ===
     // This decouples the "preview concern" (temporary audition file) from the enrichment needed by the final renderer.
-    if (session && session.designPlan && Array.isArray(session.designPlan.transitions)) {
-      const matchingTransition = session.designPlan.transitions.find((t: any) =>
-        t.fromTrackId === fromTrackId &&
-        t.fromSectionId === fromSectionId &&
-        t.toTrackId === toTrackId &&
-        t.toSectionId === toSectionId
-      );
-      if (matchingTransition) {
-        matchingTransition.actualFromExitSec = actualFromExit;
-        matchingTransition.actualToEntrySec = actualToEntry;
-        matchingTransition.durationUsed = transitionDuration;
-        matchingTransition.beatSnapApplied = useBeatAlign && (beatSnapNotes.length > 0);
-        matchingTransition.style = style;   // Hook point for Phase 4 mashup_layer branching in finalize_medley
-        // Note: outputPath is only set if/when we actually render the preview below
+    // Always store enriched timings in session.enrichedTimings keyed by transition identity,
+    // so they survive even if apply_musical_transition runs before set_design_plan.
+    if (session) {
+      if (!session.enrichedTimings) session.enrichedTimings = {};
+      const timingKey = `${fromTrackId}:${fromSectionId}:${toTrackId}:${toSectionId}`;
+      session.enrichedTimings[timingKey] = {
+        actualFromExitSec: actualFromExit,
+        actualToEntrySec: actualToEntry,
+        durationUsed: transitionDuration,
+        beatSnapApplied: useBeatAlign && (beatSnapNotes.length > 0),
+        style,
+      };
+      // Also patch into designPlan in-place if it already exists
+      if (session.designPlan && Array.isArray(session.designPlan.transitions)) {
+        const matchingTransition = session.designPlan.transitions.find((t: any) =>
+          t.fromTrackId === fromTrackId &&
+          t.fromSectionId === fromSectionId &&
+          t.toTrackId === toTrackId &&
+          t.toSectionId === toSectionId
+        );
+        if (matchingTransition) {
+          matchingTransition.actualFromExitSec = actualFromExit;
+          matchingTransition.actualToEntrySec = actualToEntry;
+          matchingTransition.durationUsed = transitionDuration;
+          matchingTransition.beatSnapApplied = useBeatAlign && (beatSnapNotes.length > 0);
+          matchingTransition.style = style;
+        }
       }
     }
 
@@ -1520,26 +1574,64 @@ app.post('/api/finalize-medley', async (req, res) => {
       throw new Error('MVP finalize_medley requires at least one transition to establish deterministic track ordering and crossfade points. Single-track support is out of current strict scope.');
     }
 
-    // === STRICT UPFRONT VALIDATION (Fix #2) ===
-    // Every transition MUST have the enriched actual* timings from apply_musical_transition.
-    // No silent ?? 0 fallbacks on internal segments.
+    // === TIMING NORMALIZATION: resolve final timing values with fallback chain ===
+    // Priority: actualFromExitSec → fromExitSec → exitSec (and same for entry side).
+    // apply_musical_transition may have been called before set_design_plan, so actual* fields
+    // may be absent from the plan object but the planned fields may still be usable.
+    // We resolve once here and mutate each transition with _resolvedFromExitSec / _resolvedToEntrySec
+    // so all downstream code (preflight + segment derivation) uses a single consistent value.
     const badTransitions: string[] = [];
     transitions.forEach((t: any, idx: number) => {
-      const hasFromExit = t.actualFromExitSec !== undefined && t.actualFromExitSec !== null;
-      const hasToEntry = t.actualToEntrySec !== undefined && t.actualToEntrySec !== null;
+      const resolveFrom = (): number | undefined => {
+        if (isFinite(Number(t.actualFromExitSec))) return Number(t.actualFromExitSec);
+        if (isFinite(Number(t.fromExitSec))) {
+          logToSession(sessionId, `[finalize-medley] Using planned timing fallback (fromExitSec) for transition[${idx}]`);
+          console.log(`[finalize-medley] Timing fallback: transition[${idx}] actualFromExitSec missing, using fromExitSec=${t.fromExitSec}`);
+          return Number(t.fromExitSec);
+        }
+        if (isFinite(Number(t.exitSec))) {
+          logToSession(sessionId, `[finalize-medley] Using planned timing fallback (exitSec) for transition[${idx}]`);
+          console.log(`[finalize-medley] Timing fallback: transition[${idx}] actualFromExitSec missing, using exitSec=${t.exitSec}`);
+          return Number(t.exitSec);
+        }
+        return undefined;
+      };
+      const resolveTo = (): number | undefined => {
+        if (isFinite(Number(t.actualToEntrySec))) return Number(t.actualToEntrySec);
+        if (isFinite(Number(t.toEntrySec))) {
+          logToSession(sessionId, `[finalize-medley] Using planned timing fallback (toEntrySec) for transition[${idx}]`);
+          console.log(`[finalize-medley] Timing fallback: transition[${idx}] actualToEntrySec missing, using toEntrySec=${t.toEntrySec}`);
+          return Number(t.toEntrySec);
+        }
+        if (isFinite(Number(t.entrySec))) {
+          logToSession(sessionId, `[finalize-medley] Using planned timing fallback (entrySec) for transition[${idx}]`);
+          console.log(`[finalize-medley] Timing fallback: transition[${idx}] actualToEntrySec missing, using entrySec=${t.entrySec}`);
+          return Number(t.entrySec);
+        }
+        return undefined;
+      };
 
-      if (!hasFromExit || !hasToEntry) {
+      const fromExit = resolveFrom();
+      const toEntry = resolveTo();
+
+      if (fromExit === undefined || toEntry === undefined) {
         badTransitions.push(
           `transition[${idx}] ${t.fromTrackId}:${t.fromSectionId} → ${t.toTrackId}:${t.toSectionId} ` +
-          `(actualFromExitSec=${t.actualFromExitSec}, actualToEntrySec=${t.actualToEntrySec})`
+          `has no usable exit timing (tried actualFromExitSec, fromExitSec, exitSec=${t.actualFromExitSec}/${t.fromExitSec}/${t.exitSec}) ` +
+          `or entry timing (tried actualToEntrySec, toEntrySec, entrySec=${t.actualToEntrySec}/${t.toEntrySec}/${t.entrySec}). ` +
+          `Call apply_musical_transition for this pair before calling finalize_medley.`
         );
+      } else {
+        // Store resolved values for uniform use in preflight and segment derivation
+        t._resolvedFromExitSec = fromExit;
+        t._resolvedToEntrySec = toEntry;
       }
     });
 
     if (badTransitions.length > 0) {
       throw new Error(
-        'PURE-CLEAN-MVP ABORT: One or more transitions are missing required enriched timings from apply_musical_transition.\n' +
-        'The pure-clean path refuses to guess or fall back.\n\n' +
+        'PURE-CLEAN-MVP ABORT: One or more transitions have no usable timing from any field.\n' +
+        'Call apply_musical_transition for each transition before finalize_medley.\n\n' +
         badTransitions.join('\n')
       );
     }
@@ -1604,26 +1696,48 @@ app.post('/api/finalize-medley', async (req, res) => {
       }
     }
 
-    // Timing bounds validation against actual durations
+    // Timing bounds validation against actual durations (using resolved values from normalization step)
     for (let i = 0; i < transitions.length; i++) {
       const t = transitions[i];
-      const fromExit = Number(t.actualFromExitSec);
-      const toEntry = Number(t.actualToEntrySec);
+      let fromExit = t._resolvedFromExitSec as number;
+      let toEntry = t._resolvedToEntrySec as number;
       const fromDuration = trackDurationMap[t.fromTrackId];
       const toDuration = trackDurationMap[t.toTrackId];
 
       if (fromDuration !== undefined) {
-        if (fromExit > fromDuration + RENDER_CONFIG.TIME_EPSILON) {
+        if (fromExit > fromDuration + RENDER_CONFIG.TIMING_TOLERANCE) {
           preflightErrors.push(
-            `TIMING_OUT_OF_BOUNDS: transition[${i}] fromTrackId=${t.fromTrackId} exitSec=${fromExit} exceeds actual duration=${fromDuration.toFixed(2)}s`
+            `TIMING_OUT_OF_BOUNDS: transition[${i}] fromTrackId=${t.fromTrackId} exitSec=${fromExit} exceeds actual duration=${fromDuration.toFixed(2)}s by more than ${RENDER_CONFIG.TIMING_TOLERANCE}s tolerance`
           );
+        } else if (fromExit > fromDuration) {
+          // Small float/metadata rounding — clamp to actual duration
+          const clamped = fromDuration;
+          console.log(`[finalize-medley] Clamped transition[${i}] exitSec from ${fromExit} to actual duration ${clamped.toFixed(3)}s`);
+          logToSession(sessionId, `[finalize-medley] Clamped transition[${i}] exitSec from ${fromExit} to actual duration ${clamped.toFixed(3)}s`);
+          t._resolvedFromExitSec = clamped;
+          fromExit = clamped;
         }
       }
       if (toDuration !== undefined) {
-        if (toEntry > toDuration + RENDER_CONFIG.TIME_EPSILON) {
+        if (toEntry < 0) {
+          if (Math.abs(toEntry) <= RENDER_CONFIG.TIMING_TOLERANCE) {
+            console.log(`[finalize-medley] Clamped transition[${i}] entrySec from ${toEntry} to 0`);
+            logToSession(sessionId, `[finalize-medley] Clamped transition[${i}] entrySec from ${toEntry} to 0`);
+            t._resolvedToEntrySec = 0;
+          } else {
+            preflightErrors.push(
+              `TIMING_OUT_OF_BOUNDS: transition[${i}] toTrackId=${t.toTrackId} entrySec=${toEntry} is negative beyond tolerance`
+            );
+          }
+        } else if (toEntry > toDuration + RENDER_CONFIG.TIMING_TOLERANCE) {
           preflightErrors.push(
-            `TIMING_OUT_OF_BOUNDS: transition[${i}] toTrackId=${t.toTrackId} entrySec=${toEntry} exceeds actual duration=${toDuration.toFixed(2)}s`
+            `TIMING_OUT_OF_BOUNDS: transition[${i}] toTrackId=${t.toTrackId} entrySec=${toEntry} exceeds actual duration=${toDuration.toFixed(2)}s by more than ${RENDER_CONFIG.TIMING_TOLERANCE}s tolerance`
           );
+        } else if (toEntry > toDuration) {
+          const clamped = toDuration;
+          console.log(`[finalize-medley] Clamped transition[${i}] entrySec from ${toEntry} to actual duration ${clamped.toFixed(3)}s`);
+          logToSession(sessionId, `[finalize-medley] Clamped transition[${i}] entrySec from ${toEntry} to actual duration ${clamped.toFixed(3)}s`);
+          t._resolvedToEntrySec = clamped;
         }
       }
     }
@@ -1658,9 +1772,9 @@ app.post('/api/finalize-medley', async (req, res) => {
     for (let i = 0; i < transitions.length; i++) {
       const t = transitions[i];
 
-      // Use ONLY the enriched values. No silent ?? 0 on internal points.
-      const fromExit = Number(t.actualFromExitSec);
-      const toEntry = Number(t.actualToEntrySec);
+      // Use resolved values (set by normalization step — actual* or planned fallback, clamped if needed).
+      const fromExit = Number(t._resolvedFromExitSec);
+      const toEntry = Number(t._resolvedToEntrySec);
       const dur = Number(t.durationUsed ?? t.duration ?? t.crossfadeDuration ?? 4.0);
 
       console.log(
@@ -1687,7 +1801,7 @@ app.post('/api/finalize-medley', async (req, res) => {
       }
 
       const nextT = transitions[i + 1];
-      let nextExit: number | null = nextT ? Number(nextT.actualFromExitSec) : null;
+      let nextExit: number | null = nextT ? Number(nextT._resolvedFromExitSec) : null;
 
       // === ADAPTIVE TAIL: For the LAST segment (no subsequent transition), cap the tail ===
       if (nextExit === null) {
