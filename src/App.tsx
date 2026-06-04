@@ -686,15 +686,29 @@ export default function App() {
           const toolStartMs = Date.now();
           try {
             if (call.name === 'execute_shell_command') {
-              addLog(`  ➜ ${(args.command || '').substring(0, 100)}...`);
-              const res = await fetch('/api/exec', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ command: args.command, sessionId: sid }),
-                signal
-              });
-              const data = await res.json();
-              toolRes = { functionResponse: { name: call.name, id: call.id, response: data } };
+              const cmd = (args.command || '').toLowerCase();
+              const isRenderAttempt = /ffmpeg|filter_complex|concat|medley_final|\.mp3|atempo|amerge|amix|aconcat|final\s*render|export|finalize/.test(cmd);
+              if (isRenderAttempt) {
+                addLog(`  🚫 Blocked manual render shell command — use finalize_medley`);
+                toolRes = {
+                  functionResponse: {
+                    name: call.name, id: call.id,
+                    response: {
+                      error: 'Manual shell rendering is disabled. The final medley MP3 must be produced by calling finalize_medley after set_design_plan, apply_musical_transition, and report_progress. Do not use execute_shell_command for audio rendering.'
+                    }
+                  }
+                };
+              } else {
+                addLog(`  ➜ ${(args.command || '').substring(0, 100)}...`);
+                const res = await fetch('/api/exec', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ command: args.command, sessionId: sid }),
+                  signal
+                });
+                const data = await res.json();
+                toolRes = { functionResponse: { name: call.name, id: call.id, response: data } };
+              }
             }
             else if (call.name === 'listen_to_audio') {
               setCurrentPhase('EVALUATE — Analyzing Audio');
@@ -966,18 +980,16 @@ export default function App() {
               };
             }
             else if (call.name === 'finish_medley') {
-              setCurrentPhase('FINISH — Finalizing Medley');
-              addLog(`  ✅ Medley complete: ${args.finalMp3Path}`);
-              await fetch('/api/session/finish', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ sessionId: sid, finalAudioPath: args.finalMp3Path, summary: args.summary }),
-                signal
-              });
-              fetch(`/api/checkpoint/${sid}`, { method: 'DELETE' }).catch(() => {});
-              setSummary(args.summary);
-              setStatus('completed');
-              loopFinished = true;
-              toolRes = { functionResponse: { name: call.name, id: call.id, response: { status: 'acknowledged' } } };
+              // finish_medley does NOT render an MP3. Redirect the model to finalize_medley.
+              addLog(`  ⚠️ finish_medley called — redirecting to finalize_medley (no render was performed)`);
+              toolRes = {
+                functionResponse: {
+                  name: call.name, id: call.id,
+                  response: {
+                    error: 'finish_medley does not produce an MP3. You must call finalize_medley with useCleanRender: true to render the final output audio file.'
+                  }
+                }
+              };
             }
             else if (call.name === 'finalize_medley') {
               setCurrentPhase('FINISH — Rendering Final Clean Medley');
