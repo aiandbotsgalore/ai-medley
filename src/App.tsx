@@ -7,6 +7,21 @@ import LogPanel from './components/LogPanel';
 import ConfigPanel, { type MedleyConfig, DEFAULT_CONFIG } from './components/ConfigPanel';
 import ExecutionContextPanel, { type ExecutionContextSummary } from './components/ExecutionContextPanel';
 import { buildSystemPrompt, getOpenRouterTools, getToolDeclarations } from './engine/prompts';
+import { useSSEStream } from './hooks/useSSEStream';
+import { useMetricsManager } from './hooks/useMetricsManager';
+import { useSessionState } from './hooks/useSessionState';
+import { useModelFallback } from './hooks/useModelFallback';
+import { updateSemanticMemoryOnToolResult } from './types/semanticMemory';
+import { validateCheckpoint, upgradeCheckpoint, enrichCheckpointPayload } from './utils/checkpointManager';
+import { logIterationTelemetry } from './utils/telemetry';
+import {
+  EARLY_TERMINATION_SCORE,
+  MAX_EVALUATE_CALLS_PER_RUN,
+  MAX_LLM_CALLS_PER_RUN,
+  MAX_TOOL_FAILURE_STREAK,
+  LOCAL_REJECTION_THRESHOLD,
+  LOCAL_AUTO_ACCEPT_THRESHOLD,
+} from './constants/thresholds';
 import { analyzeAudioWithProvider, createProviderSession } from './engine/providers';
 import HistoryBrowser, { type HistoryEntry } from './components/HistoryBrowser';
 import MedleyMatchPanel from './components/MedleyMatchPanel';
@@ -144,25 +159,21 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [summary, setSummary] = useState<string | null>(null);
-  const [metrics, setMetrics] = useState<any>(null);
+  const metricsManager = useMetricsManager();
+  const sessionManager = useSessionState();
   const [config, setConfig] = useState<MedleyConfig>(DEFAULT_CONFIG);
+
   const [configLoaded, setConfigLoaded] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null);
-  const [iteration, setIteration] = useState<{ current: number; max: number } | null>(null);
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<'workshop' | 'history'>('workshop');
-  const [medleyDesign, setMedleyDesign] = useState<MedleyDesignPayload | null>(null);
-  const [currentPhase, setCurrentPhaseState] = useState<string>(''); // ANALYZE | DESIGN | BUILD | EVALUATE | REFINE | FINISH
   const currentPhaseRef = useRef<string>('');
   const setCurrentPhase = useCallback((phase: string) => {
     currentPhaseRef.current = phase;
-    setCurrentPhaseState(phase);
-  }, []);
-  const [preAnalysisProgress, setPreAnalysisProgress] = useState<{ current: number; total: number } | null>(null);
-  const [renderProgress, setRenderProgress] = useState<{ stage: string; percent: number; elapsedSeconds?: number; remainingSecondsEstimate?: number | null } | null>(null);
-  const [activeModel, setActiveModel] = useState<string>('');
-  const [executionContext, setExecutionContext] = useState<ExecutionContextSummary | null>(null);
+    sessionManager.updatePhase(phase);
+  }, [sessionManager]);
+  const modelFallback = useModelFallback(config);
   const [checkpoints, setCheckpoints] = useState<CheckpointData[]>([]);
 
   // Used for manual "Force Model Switch" button from the header
@@ -170,7 +181,7 @@ export default function App() {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
-  const sseRef = useRef<EventSource | null>(null);
+  const { connect: connectSSE, disconnect: disconnectSSE } = useSSEStream();
   const sessionIdRef = useRef<string | null>(null);
 
   const addLog = useCallback((msg: string) => {
@@ -367,7 +378,7 @@ export default function App() {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Medley intelligence design failed.');
-    setMedleyDesign(data.design);
+    sessionManager.updateDesign(data.design);
     return data.design as MedleyDesignPayload;
   };
 
@@ -385,87 +396,25 @@ export default function App() {
     if (!resumeState) {
       setLogs([]);
       setSummary(null);
-      setMetrics(null);
-      setIteration(null);
-      setExecutionContext(null);
-      setRenderProgress(null);
+      metricsManager.resetMetrics();
     } else {
       addLog(`🔁 Resuming session ${sid} from iteration ${resumeState.iterations}`);
     }
 
     // === Real-Time Progress Stream (SSE) ===
-    if (sseRef.current) {
-      sseRef.current.close();
-    }
-    const sse = new EventSource(`/api/session/${sid}/stream`);
-    sseRef.current = sse;
-
-    sse.addEventListener('log', (e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data);
-        if (data.message) {
-          addLog(`📡 ${data.message}`);
-        }
-      } catch (err) {}
+    connectSSE(sid, {
+      onLog: (message) => addLog(`📡 ${message}`),
+      onProgress: (data) => metricsManager.setRenderProgress(data),
+      onMetrics: (data) => metricsManager.setMetrics(data),
+      onCompleted: (data) => { if (data.summary) setSummary(data.summary); },
     });
-
-    sse.addEventListener('progress', (e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data);
-        setRenderProgress(data);
-      } catch (err) {}
-    });
-
-    sse.addEventListener('completed', (e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data);
-        if (data.summary) {
-          setSummary(data.summary);
-        }
-      } catch (err) {}
-    });
-
-    sse.addEventListener('metrics', (e: MessageEvent) => {
-      try {
-        const data = JSON.parse(e.data);
-        setMetrics(data);
-      } catch (err) {}
-    });
-
-    sse.onerror = (err) => {
-      console.warn('SSE connection error, attempting automatic reconnection...', err);
-    };
-
-    // === Model Fallback System (for free / unreliable models) ===
-    const fallbackModels = (config.provider === 'gemini'
-      ? [
-          config.model,
-          'gemini-2.5-flash',
-          'gemini-2.5-pro',
-        ]
-      : [
-          config.model,
-          'qwen/qwen3-coder:free',
-          'deepseek/deepseek-v4-flash:free',
-          'nousresearch/hermes-3-llama-3.1-405b:free',
-          'nvidia/nemotron-3-super-120b-a12b:free',
-          'meta-llama/llama-3.3-70b-instruct:free',
-        ]
-    ).filter((m, i, arr) => arr.indexOf(m) === i); // dedupe
-
-    let currentModelIndex = resumeState?.currentModelIndex ?? 0;
-    let toolFailureStreak = 0;
-    const MAX_TOOL_FAILURE_STREAK = 3;
 
     // === Phase 1 Hard Limits (Optimization + Stabilization) ===
-    const MAX_EVALUATE_CALLS_PER_RUN = 25;
-    const MAX_REFINEMENT_PASSES = 3;
-    const MAX_LLM_CALLS_PER_RUN = 40; // total, we track cheap vs expensive separately below
-    const EARLY_TERMINATION_SCORE = 0.88; // will be calibrated; start conservative
-    // Phase 2 thresholds (widened for current similar-track libraries)
-    // TODO: Recalibrate these once we have runs on more diverse libraries
-    const LOCAL_REJECTION_THRESHOLD = 0.45;
-    const LOCAL_AUTO_ACCEPT_THRESHOLD = 0.80;
+    const MAX_LOOP_TURNS = 10; // counts every assistant/tool round-trip, not just refinement turns
+
+    // Stability guards
+    const recentToolCallHashes = new Set<string>();
+    const MAX_TOOL_HASH_MEMORY = 20;
 
     let evaluateCallCount = resumeState?.evaluateCallCount ?? 0;
     let llmCallCount = resumeState?.llmCallCount ?? 0;
@@ -483,60 +432,40 @@ export default function App() {
     // Phase 1: Per-source-section Top-N=5 tracking (in-session)
     const evaluationsPerFromSection = new Map<string, number>(resumeState?.evaluationsPerFromSectionEntries ?? []);
 
-    const getCurrentModel = () => fallbackModels[Math.min(currentModelIndex, fallbackModels.length - 1)];
+    // Hoisted so switchToNextModel can reference it before the try block defines saveCheckpoint.
+    let _checkpointFn: (() => void) | undefined;
 
-    const createSessionForModel = (model: string, history?: unknown[]) => {
-      const tempConfig = { ...config, model };
-      return createProviderSession(
-        tempConfig,
-        buildSystemPrompt(lib, tempConfig, design, sid),
-        tempConfig.provider === 'gemini' ? getToolDeclarations() : getOpenRouterTools(),
-        tempConfig.temperature,
-        history
-      );
-    };
-
-    let session = createSessionForModel(getCurrentModel(), resumeState?.chatHistory);
-    setActiveModel(getCurrentModel());
+    let session = modelFallback.createSessionForModel(modelFallback.getCurrentModel(), lib, design, sid, resumeState?.chatHistory);
+    modelFallback.setActiveModel(modelFallback.getCurrentModel());
+    sessionManager.initSession(sid, modelFallback.getCurrentModel());
 
     // Wire up manual force switch from header
-    let forceModelSwitchPending = false;
     forceModelSwitchRef.current = () => {
       if (statusRef.current === 'running') {
-        forceModelSwitchPending = true;
+        modelFallback.requestForceModelSwitch();
         addLog('⚡ Manual model switch requested from header');
       }
     };
 
+    // Window helpers for console-driven model navigation
+    (window as any).switchModelBack = () => modelFallback.switchToPreviousModel(addLog);
+    (window as any).resetModel = () => modelFallback.resetToPrimaryModel(addLog);
+
     const switchToNextModel = async (reason: string) => {
-      if (currentModelIndex >= fallbackModels.length - 1) {
-        addLog(`⚠️ All fallback models exhausted. Last failure reason: ${reason}`);
-        return false;
+      const switched = await modelFallback.switchToNextModel(reason, {
+        lib,
+        design: sessionManager.design,
+        sid,
+        semanticMemory: sessionManager.sessionState?.semanticMemory,
+        currentPhase: currentPhaseRef.current,
+        checkpointFn: () => _checkpointFn?.(),
+        addLog,
+      });
+      if (switched) {
+        session = modelFallback.getSession();
+        logIterationTelemetry({ sessionId: sid, iteration: 0, phase: currentPhaseRef.current, model: modelFallback.getCurrentModel(), fallbackOccurred: true });
       }
-
-      const previousModel = getCurrentModel();
-      currentModelIndex++;
-      const nextModel = getCurrentModel();
-
-      addLog(`🔄 Model switch triggered: ${previousModel} → ${nextModel}`);
-      addLog(`   Reason: ${reason}`);
-      addLog(`   Resetting tool failure streak.`);
-
-      setActiveModel(nextModel);
-
-      // Recreate session with new model
-      session = createSessionForModel(nextModel);
-
-      // Send a recovery message so the new model understands context
-      try {
-        const recoveryMessage = `The previous model (${previousModel}) was struggling with tool calls and formatting. We have switched to you (${nextModel}). Please continue the medley architect process from where we left off. Current phase and key decisions so far are in the conversation history. Focus on producing valid tool calls.`;
-        await session.send(recoveryMessage);
-      } catch (e) {
-        logDetailedError('Model Switch Recovery Message', e);
-      }
-
-      toolFailureStreak = 0;
-      return true;
+      return switched;
     };
 
     try {
@@ -563,7 +492,7 @@ export default function App() {
 
           // Special handling for 402 (payment / credits exhausted) on free models
           if (isPaymentError) {
-            const currentModel = getCurrentModel();
+            const currentModel = modelFallback.getCurrentModel();
             logDetailedError('LLM Send Failed (Payment Required)', err, {
               model: currentModel,
               provider: config.provider,
@@ -587,7 +516,7 @@ export default function App() {
 
           // Model doesn't exist or doesn't support tool calling on OpenRouter
           if (isModelUnsupported) {
-            const currentModel = getCurrentModel();
+            const currentModel = modelFallback.getCurrentModel();
             addLog(`🚫 Model "${currentModel}" is not supported or doesn't support tool calling on OpenRouter.`);
             addLog(`   Switching to next fallback model…`);
             const switched = await switchToNextModel(`OpenRouter returned 404 — model "${currentModel}" has no compatible endpoints`);
@@ -598,17 +527,17 @@ export default function App() {
           }
 
           // Normal non-rate-limit failure
-          toolFailureStreak++;
+          const streak1 = modelFallback.incrementToolFailure();
           logDetailedError('LLM Send Failed', err, {
-            model: getCurrentModel(),
+            model: modelFallback.getCurrentModel(),
             provider: config.provider,
             messagePreview: typeof msg === 'string' ? msg.substring(0, 300) : '[tool results]',
             retriesAttempted: retries,
-            toolFailureStreak
+            toolFailureStreak: streak1
           });
 
-          if (toolFailureStreak >= MAX_TOOL_FAILURE_STREAK) {
-            const switched = await switchToNextModel(`Repeated LLM failures when sending messages (${toolFailureStreak} times)`);
+          if (modelFallback.toolFailureStreakRef.current >= MAX_TOOL_FAILURE_STREAK) {
+            const switched = await switchToNextModel(`Repeated LLM failures when sending messages (${streak1} times)`);
             if (switched) {
               return sendWithRetry(msg, 0);
             }
@@ -641,9 +570,9 @@ export default function App() {
           sessionId: sid,
           savedAt: new Date().toISOString(),
           provider: config.provider,
-          model: getCurrentModel(),
+          model: modelFallback.getCurrentModel(),
           iterations,
-          currentModelIndex,
+          currentModelIndex: modelFallback.currentModelIndexRef.current,
           llmCallCount,
           refinementPassCount,
           evaluateCallCount,
@@ -652,54 +581,57 @@ export default function App() {
           autoAcceptedCount,
           autoRejectedCount,
           currentPhase: currentPhaseRef.current,
-          design,
+          design: sessionManager.design,
           chatHistory: session.getHistory(),
           sectionPairCacheEntries: [...sectionPairCache.entries()],
           evaluationsPerFromSectionEntries: [...evaluationsPerFromSection.entries()],
         };
+        const enriched = enrichCheckpointPayload(data, sessionManager.sessionState?.semanticMemory, metricsManager.metrics);
         fetch('/api/checkpoint', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(data)
+          body: JSON.stringify(enriched)
         }).catch(() => {});
+        logIterationTelemetry({ sessionId: sid, iteration: iterations, phase: currentPhaseRef.current, model: modelFallback.getCurrentModel(), checkpointSaved: true });
       };
+      _checkpointFn = saveCheckpoint; // wire hoisted ref so switchToNextModel can call it
 
       while (!loopFinished && iterations < MAX_ITERATIONS) {
         if (signal.aborted) break;
 
         // === Immediate manual model switch (from SWITCH MODEL button) ===
-        if (forceModelSwitchPending) {
-          forceModelSwitchPending = false;
+        if (modelFallback.isForceModelSwitchPending()) {
           await switchToNextModel('Manual switch requested by user');
         }
 
         // === Phase 1 Hard Limits (checked BEFORE incrementing) ===
-        if (refinementPassCount >= MAX_REFINEMENT_PASSES) {
-          addLog(`   ⛔ Hard limit reached: maxRefinementPasses (${MAX_REFINEMENT_PASSES}). Stopping.`);
+        if (refinementPassCount >= MAX_LOOP_TURNS) {
+          addLog(`⛔ Hard limit: maxLoopTurns (${MAX_LOOP_TURNS}) reached at iteration ${iterations}. Completed: ${evaluateCallCount} evaluations, ${refinementPassCount} turns. Phase at stop: ${currentPhaseRef.current}. Stopping.`);
           break;
         }
         if (llmCallCount >= MAX_LLM_CALLS_PER_RUN) {
-          addLog(`   ⛔ Hard limit reached: maxLLMCallsPerRun (${MAX_LLM_CALLS_PER_RUN}). Stopping autonomous refinement.`);
+          addLog(`⛔ Hard limit: MAX_LLM_CALLS_PER_RUN (${MAX_LLM_CALLS_PER_RUN}) reached at iteration ${iterations}. Completed: ${evaluateCallCount} evaluations, ${refinementPassCount} refinements. Phase at stop: ${currentPhaseRef.current}. Stopping.`);
           break;
         }
 
         iterations++;
         refinementPassCount++;
+        logIterationTelemetry({ sessionId: sid, iteration: iterations, phase: currentPhaseRef.current, model: modelFallback.getCurrentModel() });
 
-        setIteration({ current: iterations, max: MAX_ITERATIONS });
+        metricsManager.setIteration({ current: iterations, max: MAX_ITERATIONS });
         if (result.text) addLog(`🤖 ${result.text}`);
 
         // Update the pure derived execution context layer (UI only, after every model turn)
-        setExecutionContext(deriveExecutionContext(currentPhase, null, result.text || null, iterations));
+        metricsManager.setExecutionContext(deriveExecutionContext(currentPhaseRef.current, null, result.text || null, iterations));
 
         const functionCalls = result.functionCalls;
         if (!functionCalls || functionCalls.length === 0) {
           if (!result.text) {
             // Completely empty response — count as failure and nudge
-            toolFailureStreak++;
-            addLog(`⚠️ Model returned no tool calls and no text (streak: ${toolFailureStreak}/${MAX_TOOL_FAILURE_STREAK})`);
-            if (toolFailureStreak >= MAX_TOOL_FAILURE_STREAK) {
-              const switched = await switchToNextModel(`Model returned empty responses ${toolFailureStreak} times`);
+            const streak2 = modelFallback.incrementToolFailure();
+            addLog(`⚠️ Model returned no tool calls and no text (streak: ${streak2}/${MAX_TOOL_FAILURE_STREAK})`);
+            if (modelFallback.toolFailureStreakRef.current >= MAX_TOOL_FAILURE_STREAK) {
+              const switched = await switchToNextModel(`Model returned empty responses ${streak2} times`);
               if (!switched) break;
             }
             result = await sendWithRetry('Please proceed with the next step. You must call a tool.');
@@ -712,10 +644,10 @@ export default function App() {
           }
           // Text-only response with no tool call — this model may not support function calling.
           // Count toward streak so repeated text-only outputs trigger a model switch.
-          toolFailureStreak++;
-          addLog(`⚠️ Model returned text without a tool call (streak: ${toolFailureStreak}/${MAX_TOOL_FAILURE_STREAK}). May not support function calling.`);
-          if (toolFailureStreak >= MAX_TOOL_FAILURE_STREAK) {
-            const switched = await switchToNextModel(`Model returned text-only responses ${toolFailureStreak} times — likely no tool/function-calling support`);
+          const streak3 = modelFallback.incrementToolFailure();
+          addLog(`⚠️ Model returned text without a tool call (streak: ${streak3}/${MAX_TOOL_FAILURE_STREAK}). May not support function calling.`);
+          if (modelFallback.toolFailureStreakRef.current >= MAX_TOOL_FAILURE_STREAK) {
+            const switched = await switchToNextModel(`Model returned text-only responses ${streak3} times — likely no tool/function-calling support`);
             if (switched) {
               result = await sendWithRetry('Please continue. You must use tool calls to make progress.');
               llmCallCount++;
@@ -738,6 +670,20 @@ export default function App() {
           const args = call.args as any;
           let toolRes: any = null;
 
+          // Duplicate tool call detection
+          const toolHash = `${call.name}:${JSON.stringify(call.args ?? {})}`;
+          if (recentToolCallHashes.has(toolHash)) {
+            addLog(`⚠️ Duplicate tool call detected: ${call.name} — returning early-exit result.`);
+            toolRes = { functionResponse: { name: call.name, id: call.id, response: { status: 'This exact call was already made this session. Do not repeat it — advance to the next step.' } } };
+            if (toolRes) toolResponses.push(toolRes);
+            continue;
+          }
+          recentToolCallHashes.add(toolHash);
+          if (recentToolCallHashes.size > MAX_TOOL_HASH_MEMORY) {
+            recentToolCallHashes.delete(recentToolCallHashes.values().next().value!);
+          }
+
+          const toolStartMs = Date.now();
           try {
             if (call.name === 'execute_shell_command') {
               addLog(`  ➜ ${(args.command || '').substring(0, 100)}...`);
@@ -855,7 +801,7 @@ export default function App() {
               evaluationsPerFromSection.set(fromKey, currentCount + 1);
 
               if (evaluateCallCount >= MAX_EVALUATE_CALLS_PER_RUN) {
-                addLog(`   ⛔ Hard limit reached: maxEvaluateCallsPerRun (${MAX_EVALUATE_CALLS_PER_RUN}). Rejecting further evaluations.`);
+                addLog(`⛔ Hard limit: MAX_EVALUATE_CALLS_PER_RUN (${MAX_EVALUATE_CALLS_PER_RUN}) reached at iteration ${iterations}. Completed: ${evaluateCallCount} evaluations, ${refinementPassCount} refinements. Phase at stop: ${currentPhaseRef.current}. Rejecting further evaluations.`);
                 toolRes = { functionResponse: { name: call.name, id: call.id, response: { error: 'Evaluation limit reached for this run' } } };
                 continue;
               }
@@ -911,6 +857,10 @@ export default function App() {
               if (data.warnings?.length) {
                 for (const w of data.warnings) addLog(`  ⚠️ ${w}`);
               }
+              if (data.success !== false) {
+                const emptyMemory = { lockedDecisions: [], rejectedApproaches: [], stylisticConstraints: [], unresolvedProblems: [], successfulTransitions: [], failedTransitions: [], timingConstraints: [], recoveryNarrative: '' };
+                sessionManager.updateSemanticMemory(updateSemanticMemoryOnToolResult(sessionManager.sessionState?.semanticMemory ?? emptyMemory, call.name, call.args ?? {}, data));
+              }
               toolRes = { functionResponse: { name: call.name, id: call.id, response: data } };
             }
             else if (call.name === 'apply_musical_transition') {
@@ -933,6 +883,10 @@ export default function App() {
                 signal
               });
               const data = await res.json();
+              if (data.success !== false) {
+                const emptyMemory = { lockedDecisions: [], rejectedApproaches: [], stylisticConstraints: [], unresolvedProblems: [], successfulTransitions: [], failedTransitions: [], timingConstraints: [], recoveryNarrative: '' };
+                sessionManager.updateSemanticMemory(updateSemanticMemoryOnToolResult(sessionManager.sessionState?.semanticMemory ?? emptyMemory, call.name, call.args ?? {}, data));
+              }
               toolRes = { functionResponse: { name: call.name, id: call.id, response: data } };
             }
             else if (call.name === 'analyze_medley_quality') {
@@ -978,30 +932,38 @@ export default function App() {
               } else {
                 setCurrentPhase('EVALUATE — Scoring Output');
               }
-              const newMetrics = {
-                emotionalArc: args.emotionalArc,
-                transitionSmoothness: args.transitionSmoothness,
-                performerIdentity: args.performerIdentity,
-                overallScore: args.overallScore,
-                iteration: args.iteration,
-                phase: args.phase || undefined
-              };
-              setMetrics(newMetrics);
+              const normalizedMetrics = metricsManager.ingestMetrics(args);
               const phaseLog = args.phase ? ` [${args.phase}]` : '';
-              addLog(`  📈 Scores: Arc=${args.emotionalArc}% Trans=${args.transitionSmoothness}% Identity=${args.performerIdentity}% Overall=${args.overallScore}%${phaseLog}`);
+              addLog(`  📈 Scores: Arc=${normalizedMetrics.emotionalArc}% Trans=${normalizedMetrics.transitionSmoothness}% Identity=${normalizedMetrics.performerIdentity}% Overall=${normalizedMetrics.overallScore}%${phaseLog}`);
 
-              // === Phase 1 Early Termination ===
-              if (typeof args.overallScore === 'number' && args.overallScore >= EARLY_TERMINATION_SCORE) {
-                addLog(`   ✅ Early termination: overallScore ${args.overallScore} >= ${EARLY_TERMINATION_SCORE}. Stopping refinement.`);
-                // Let the agent naturally call finalize_medley next
+              // === Early Termination — log only; let the agent naturally call finalize_medley next ===
+              if (metricsManager.shouldTerminateEarly(normalizedMetrics.overallScore)) {
+                addLog(`   ✅ Early termination: overallScore ${normalizedMetrics.overallScore} >= ${EARLY_TERMINATION_SCORE}. Stopping refinement.`);
               }
+
+              // Stall detection — embed guidance in function response (same turn, no protocol violation)
+              const isStalled = metricsManager.isConverged(normalizedMetrics) && iterations > 10;
+              if (isStalled) {
+                addLog(`⚠️ Stalled progress detected at iteration ${iterations}.`);
+              }
+
               // Also persist to server for SSE
               await fetch('/api/session/metrics', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ sessionId: sid, metrics: newMetrics }),
+                body: JSON.stringify({ sessionId: sid, metrics: normalizedMetrics }),
                 signal
               });
-              toolRes = { functionResponse: { name: call.name, id: call.id, response: { status: 'Metrics updated.' } } };
+              toolRes = {
+                functionResponse: {
+                  name: call.name,
+                  id: call.id,
+                  response: {
+                    status: isStalled
+                      ? 'Metrics updated. NOTE: Scores have not improved for 3+ consecutive iterations. Consider: (1) different section pair combinations, (2) changing transition styles, or (3) calling finalize_medley if current quality is acceptable. Do not repeat the same actions.'
+                      : 'Metrics updated.',
+                  },
+                },
+              };
             }
             else if (call.name === 'finish_medley') {
               setCurrentPhase('FINISH — Finalizing Medley');
@@ -1059,14 +1021,14 @@ export default function App() {
               toolRes = { functionResponse: { name: call.name, id: call.id, response: data } };
             }
           } catch (e: any) {
-            toolFailureStreak++;
+            const streak4 = modelFallback.incrementToolFailure();
             logDetailedError(`Tool Execution: ${call.name}`, e, {
               toolName: call.name,
               toolId: call.id,
               arguments: args,
-              model: getCurrentModel(),
+              model: modelFallback.getCurrentModel(),
               provider: config.provider,
-              toolFailureStreak
+              toolFailureStreak: streak4
             });
 
             toolRes = {
@@ -1081,8 +1043,8 @@ export default function App() {
             };
 
             // Auto model switch on repeated tool failures
-            if (toolFailureStreak >= MAX_TOOL_FAILURE_STREAK) {
-              const switched = await switchToNextModel(`Repeated failures calling tool "${call.name}" (${toolFailureStreak} times)`);
+            if (modelFallback.toolFailureStreakRef.current >= MAX_TOOL_FAILURE_STREAK) {
+              const switched = await switchToNextModel(`Repeated failures calling tool "${call.name}" (${streak4} times)`);
               if (switched) {
                 addLog(`   Continuing with new model...`);
               }
@@ -1090,15 +1052,16 @@ export default function App() {
           }
 
           if (toolRes) toolResponses.push(toolRes);
+          logIterationTelemetry({ sessionId: sid, iteration: iterations, phase: currentPhaseRef.current, model: modelFallback.getCurrentModel(), toolName: call.name, durationMs: Date.now() - toolStartMs });
         }
 
         // Update derived Execution Context after every tool batch (pure UI layer, reflects actual activity)
         const lastToolThisTurn = functionCalls.length > 0 ? functionCalls[functionCalls.length - 1].name : null;
-        setExecutionContext(deriveExecutionContext(currentPhase, lastToolThisTurn, result.text || null, iterations));
+        metricsManager.setExecutionContext(deriveExecutionContext(currentPhaseRef.current, lastToolThisTurn, result.text || null, iterations));
 
         if (toolResponses.length > 0) {
           // Reset streak: a successful round-trip means the model is functioning
-          toolFailureStreak = 0;
+          modelFallback.resetToolFailure();
           result = await sendWithRetry(toolResponses.map((toolResponse: any) => ({
             name: toolResponse.functionResponse.name,
             id: toolResponse.functionResponse.id,
@@ -1118,25 +1081,24 @@ export default function App() {
       }
 
       // Phase 1 + Phase 2 stats at end of run
-      addLog(`   [Phase 1/2 Final Stats] evaluateCalls=${evaluateCallCount}, llmCalls=${llmCallCount} (expensive=${expensiveLLMCalls}, cheap=${cheapLLMCalls}), refinementPasses=${refinementPassCount}, cachedPairs=${sectionPairCache.size}, autoAccepted=${autoAcceptedCount}, autoRejected=${autoRejectedCount}`);
+      addLog(`   [Phase 1/2 Final Stats] evaluateCalls=${evaluateCallCount}, llmCalls=${llmCallCount} (expensive=${expensiveLLMCalls}, cheap=${cheapLLMCalls}), loopTurns=${refinementPassCount}, cachedPairs=${sectionPairCache.size}, autoAccepted=${autoAcceptedCount}, autoRejected=${autoRejectedCount}`);
       addLog(`   Note: Auto-accept threshold = ${LOCAL_AUTO_ACCEPT_THRESHOLD}, auto-reject threshold = ${LOCAL_REJECTION_THRESHOLD}. Recalibrate when using more diverse libraries.`);
     } catch (e: any) {
       if (e.name === 'AbortError') {
         setStatus('idle');
         setRunStartedAt(null);
         setLogs([]);
-        setMetrics(null);
+        metricsManager.resetMetrics();
+        sessionManager.resetSession();
         setSummary(null);
         setSessionId(null);
         sessionIdRef.current = null;
         setErrorMessage(null);
-        setIteration(null);
-        setExecutionContext(null);
         return;
       }
 
       logDetailedError('Autonomous Loop Crashed', e, {
-        lastKnownPhase: currentPhase,
+        lastKnownPhase: currentPhaseRef.current,
         model: config.model,
         provider: config.provider,
         sessionId: sid
@@ -1145,11 +1107,8 @@ export default function App() {
       setStatus('error');
       setErrorMessage(e.message || 'Autonomous loop failed unexpectedly');
     } finally {
-      if (sseRef.current) {
-        sseRef.current.close();
-        sseRef.current = null;
-      }
-      setRenderProgress(null);
+      disconnectSSE();
+      metricsManager.setRenderProgress(null);
     }
   };
 
@@ -1160,24 +1119,27 @@ export default function App() {
         console.error('Failed to cancel active render process:', err);
       });
     }
-    if (sseRef.current) {
-      sseRef.current.close();
-      sseRef.current = null;
-    }
-    setRenderProgress(null);
+    disconnectSSE();
+    metricsManager.setRenderProgress(null);
     abortRef.current?.abort();
     abortRef.current = null;
     setTimeout(fetchCheckpoints, 600);
   };
 
-  const resumeFromCheckpoint = async (checkpoint: CheckpointData) => {
+  const resumeFromCheckpoint = async (rawCheckpoint: CheckpointData) => {
     if (status !== 'idle') return;
+    if (!validateCheckpoint(rawCheckpoint)) {
+      addLog('❌ Checkpoint failed validation — data may be corrupt. Discarding.');
+      setStatus('idle');
+      return;
+    }
+    const checkpoint = upgradeCheckpoint(rawCheckpoint);
     const controller = new AbortController();
     abortRef.current = controller;
     setStatus('running');
     setCurrentPhase(checkpoint.currentPhase || '');
-    setMedleyDesign(checkpoint.design);
-    setIteration({ current: checkpoint.iterations, max: 50 });
+    sessionManager.updateDesign(checkpoint.design ?? null);
+    metricsManager.setIteration({ current: checkpoint.iterations, max: 50 });
     await runAutonomousLoop(library, controller.signal, checkpoint.design, checkpoint);
   };
 
@@ -1189,7 +1151,7 @@ export default function App() {
   const loadFromHistory = (entry: HistoryEntry) => {
     setSessionId(entry.id);
     setSummary(entry.summary);
-    setMetrics(entry.metrics ?? null);
+    metricsManager.setMetrics(entry.metrics ?? null);
     setStatus('completed');
     setLogs([]);
     setActiveTab('workshop');
@@ -1199,7 +1161,7 @@ export default function App() {
     const unanalyzed = lib.filter(f => !f.analysis || !f.localAnalysis || !(f.localAnalysis as any)?.localAnalysisV2 || !f.medleyIntelligence);
     if (unanalyzed.length === 0) return;
 
-    setPreAnalysisProgress({ current: 0, total: unanalyzed.length });
+    metricsManager.setPreAnalysisProgress({ current: 0, total: unanalyzed.length });
     setCurrentPhase('ANALYZE — Pre-analyzing Library');
     addLog(`🔬 Pre-analyzing ${unanalyzed.length} track(s) before session starts...`);
 
@@ -1246,13 +1208,13 @@ export default function App() {
       }
 
       completedCount++;
-      setPreAnalysisProgress({ current: completedCount, total: unanalyzed.length });
+      metricsManager.setPreAnalysisProgress({ current: completedCount, total: unanalyzed.length });
     };
 
     // Process in waves of CONCURRENCY
     for (let i = 0; i < unanalyzed.length; i += CONCURRENCY) {
       if (signal.aborted) {
-        setPreAnalysisProgress(null);
+        metricsManager.setPreAnalysisProgress(null);
         return;
       }
       const wave = unanalyzed.slice(i, i + CONCURRENCY);
@@ -1260,7 +1222,7 @@ export default function App() {
     }
 
     await fetchLibrary();
-    setPreAnalysisProgress(null);
+    metricsManager.setPreAnalysisProgress(null);
     setCurrentPhase('');
     addLog('✅ Pre-analysis complete. Handing off to Architect...');
   };
@@ -1319,6 +1281,7 @@ export default function App() {
   };
 
   const isIdle = status === 'idle' || status === 'error';
+  const isUploading = status === 'uploading';
   const canStart = library.length >= 2 && hasProviderKey && configLoaded;
 
   return (
@@ -1326,7 +1289,7 @@ export default function App() {
       <Header 
         status={status} 
         provider={config.provider} 
-        currentModel={activeModel}
+        currentModel={modelFallback.activeModel}
         onConfigClick={() => setShowConfig(true)} 
         onForceModelSwitch={() => forceModelSwitchRef.current?.()}
         onCancel={handleCancel} 
@@ -1360,30 +1323,30 @@ export default function App() {
               <div className="flex items-center gap-3 min-w-0">
                 <span className="uppercase tracking-[1.5px] text-[#00F0FF] font-bold shrink-0">CURRENT PHASE</span>
                 <span className="text-white font-medium truncate">
-                  {preAnalysisProgress
-                    ? `ANALYZE — Pre-analyzing Library (${preAnalysisProgress.current}/${preAnalysisProgress.total})`
-                    : (metrics?.phase || currentPhase || (iteration ? 'BUILD — Constructing Medley' : 'Initializing...'))}
+                  {metricsManager.preAnalysisProgress
+                    ? `ANALYZE — Pre-analyzing Library (${metricsManager.preAnalysisProgress.current}/${metricsManager.preAnalysisProgress.total})`
+                    : (metricsManager.metrics?.phase || sessionManager.currentPhase || (metricsManager.iteration ? 'BUILD — Constructing Medley' : 'Initializing...'))}
                 </span>
               </div>
 
               <div className="flex items-center gap-3">
                 {/* Pre-analysis progress bar */}
-                {preAnalysisProgress && (
+                {metricsManager.preAnalysisProgress && (
                   <div className="flex items-center gap-3 ml-4 min-w-[220px]">
                     <div className="flex-1 h-1.5 bg-[#1A1A1A] rounded-full overflow-hidden">
                       <div
                         className="h-full bg-gradient-to-r from-[#00F0FF] to-[#0080FF] transition-all duration-200"
-                        style={{ width: `${(preAnalysisProgress.current / preAnalysisProgress.total) * 100}%` }}
+                        style={{ width: `${(metricsManager.preAnalysisProgress.current / metricsManager.preAnalysisProgress.total) * 100}%` }}
                       />
                     </div>
                     <div className="text-[#888] tabular-nums w-12 text-right">
-                      {Math.round((preAnalysisProgress.current / preAnalysisProgress.total) * 100)}%
+                      {Math.round((metricsManager.preAnalysisProgress.current / metricsManager.preAnalysisProgress.total) * 100)}%
                     </div>
                   </div>
                 )}
 
                 {/* Render progress bar */}
-                {renderProgress && renderProgress.percent < 100 && (
+                {metricsManager.renderProgress && metricsManager.renderProgress.percent < 100 && (
                   <div className="flex items-center gap-3 ml-4 min-w-[260px] animate-pulse">
                     <span className="text-[#FF00F0] text-[9px] uppercase tracking-wider font-bold">
                       [FFMPEG ENCODING]
@@ -1391,24 +1354,24 @@ export default function App() {
                     <div className="flex-1 h-1.5 bg-[#1A1A1A] rounded-full overflow-hidden relative">
                       <div
                         className="h-full bg-gradient-to-r from-[#FF00F0] to-[#00F0FF] transition-all duration-200"
-                        style={{ width: `${renderProgress.percent}%` }}
+                        style={{ width: `${metricsManager.renderProgress.percent}%` }}
                       />
                     </div>
                     <div className="text-white tabular-nums font-bold w-10 text-right">
-                      {renderProgress.percent}%
+                      {metricsManager.renderProgress.percent}%
                     </div>
-                    {renderProgress.remainingSecondsEstimate !== undefined && renderProgress.remainingSecondsEstimate !== null && (
+                    {metricsManager.renderProgress.remainingSecondsEstimate !== undefined && metricsManager.renderProgress.remainingSecondsEstimate !== null && (
                       <span className="text-[#666] text-[9px] shrink-0">
-                        ~{renderProgress.remainingSecondsEstimate}s left
+                        ~{metricsManager.renderProgress.remainingSecondsEstimate}s left
                       </span>
                     )}
                   </div>
                 )}
 
                 {/* Main loop iteration */}
-                {iteration && !preAnalysisProgress && !renderProgress && (
+                {metricsManager.iteration && !metricsManager.preAnalysisProgress && !metricsManager.renderProgress && (
                   <div className="text-[#666] shrink-0">
-                    Iteration <span className="text-white font-medium">{iteration.current}</span> / {iteration.max}
+                    Iteration <span className="text-white font-medium">{metricsManager.iteration.current}</span> / {metricsManager.iteration.max}
                   </div>
                 )}
 
@@ -1442,7 +1405,7 @@ export default function App() {
               </div>
 
               {/* Upload progress */}
-              {status === 'uploading' && uploadProgress && (
+              {isUploading && uploadProgress && (
                 <div className="mt-8 border border-[#00F0FF]/20 bg-[#00F0FF]/[0.03] p-4 rounded-xl w-full max-w-lg">
                   <div className="flex items-center text-[#00F0FF] text-[11px] font-mono uppercase font-bold mb-2">
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" /> Ingesting...
@@ -1511,14 +1474,14 @@ export default function App() {
               )}
             </div>
           ) : (
-            <LogPanel status={status} logs={logs} iteration={iteration} runStartedAt={runStartedAt} />
+            <LogPanel status={status} logs={logs} iteration={metricsManager.iteration} runStartedAt={runStartedAt} />
           )}
         </section>
 
-        {medleyDesign && activeTab === 'workshop' && status !== 'completed' && status !== 'running' ? (
-          <MedleyMatchPanel design={medleyDesign} />
+        {sessionManager.design && activeTab === 'workshop' && status !== 'completed' && status !== 'running' ? (
+          <MedleyMatchPanel design={sessionManager.design} />
         ) : (
-          <MetricsSidebar metrics={metrics} summary={summary} status={status} sessionId={sessionId} />
+          <MetricsSidebar metrics={metricsManager.metrics} summary={summary} status={status} sessionId={sessionId} />
         )}
       </main>
 
