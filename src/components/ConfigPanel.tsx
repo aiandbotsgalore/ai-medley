@@ -58,6 +58,8 @@ const OPENROUTER_MODELS = [
   { id: 'meta-llama/llama-3.3-70b-instruct:free', label: 'Llama 3.3 70B (free)', desc: 'Efficient 70B that often outperforms larger models' },
 
   // Agentic / Experimental models
+  { id: 'openrouter/owl-alpha', label: 'Owl Alpha', desc: 'High-performance model built for agentic workloads & tool use. Strong at complex workflows. (Prompts & completions may be logged by provider to improve the model)' },
+
   // Paid / higher quality options
   { id: 'google/gemini-2.5-flash', label: 'Gemini 2.5 Flash', desc: 'Gemini routed through OpenRouter' },
   { id: 'google/gemini-2.5-pro', label: 'Gemini 2.5 Pro', desc: 'Higher quality Gemini via OpenRouter' },
@@ -82,7 +84,7 @@ export default function ConfigPanel({ config, onUpdate, onClose }: ConfigPanelPr
   };
 
   const setProvider = (provider: ProviderId) => {
-    const fallbackModel = provider === 'gemini' ? 'gemini-2.5-pro' : 'meta-llama/llama-3.3-70b-instruct:free';
+    const fallbackModel = provider === 'gemini' ? 'gemini-2.5-pro' : 'openrouter/owl-alpha';
     update({ provider, model: fallbackModel });
   };
 
