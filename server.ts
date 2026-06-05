@@ -1553,7 +1553,12 @@ app.post('/api/finalize-medley', async (req, res) => {
   if (!fs.existsSync(sessionWorkDir)) {
     fs.mkdirSync(sessionWorkDir, { recursive: true });
   }
-  const outputPath = path.join(sessionWorkDir, finalMp3Path);
+  // Use path.basename to guard against the model passing an absolute path as finalMp3Path.
+  // path.join(sessionWorkDir, absolutePath) on Windows concatenates instead of resolving,
+  // producing a doubled path that breaks /api/audio serving. Basename-only is also a security
+  // guard: the output file can only land inside sessionWorkDir.
+  const safeMp3Name = path.basename(finalMp3Path) || 'medley_output.mp3';
+  const outputPath = path.join(sessionWorkDir, safeMp3Name);
 
   // Clean up any old confusing filtergraph.txt from previous code paths
   const oldGraph = path.join(sessionWorkDir, 'filtergraph.txt');
@@ -1969,7 +1974,7 @@ app.post('/api/finalize-medley', async (req, res) => {
       '-map', '[master_out]',
       '-c:a', 'libmp3lame',
       '-b:a', '320k',
-      path.basename(outputPath)   // write inside sessionWorkDir (cwd for the run)
+      safeMp3Name   // write inside sessionWorkDir (cwd for the run); safeMp3Name is already the basename
     ];
 
     // === 5. Execute with full artifact logging + hard failure + progress tracking ===
