@@ -42,6 +42,7 @@ import {
   withSessionLock,
   writeCandidateManifestAtomic,
 } from './src/server/candidateStore';
+import { getLocalAccessDenial, isAllowedLocalOrigin } from './src/server/localAccess';
 
 dotenv.config();
 
@@ -59,8 +60,27 @@ const RENDER_CONFIG = {
 
 const app = express();
 const PORT = 3000;
+const HOST = '127.0.0.1';
 
-app.use(cors());
+app.use((req, res, next) => {
+  const denial = getLocalAccessDenial({
+    method: req.method,
+    origin: req.get('origin'),
+    fetchSite: req.get('sec-fetch-site'),
+  });
+
+  if (denial) {
+    res.status(403).json({ error: denial });
+    return;
+  }
+
+  next();
+});
+app.use(cors({
+  origin(origin, callback) {
+    callback(null, isAllowedLocalOrigin(origin) ? origin || false : false);
+  },
+}));
 app.use(express.json({ limit: '50mb' }));
 
 // Ensure working directory exists
@@ -2861,8 +2881,8 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+  app.listen(PORT, HOST, () => {
+    console.log(`Server running on http://${HOST}:${PORT}`);
   });
 }
 

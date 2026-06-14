@@ -9,7 +9,7 @@
     "build": "vite build && esbuild server.ts --platform=node --packages=external --outfile=dist/server.cjs",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "test": "tsx src/engine/medleyIntelligence.test.ts && tsx src/engine/localAudioAnalysis.test.ts && tsx src/types/specialistWorkflow.test.ts && tsx src/utils/configMigration.test.ts && tsx src/server/candidateStore.test.ts && tsx src/engine/providerPayloadAudit.test.ts"
+    "test": "tsx src/engine/medleyIntelligence.test.ts && tsx src/engine/localAudioAnalysis.test.ts && tsx src/types/specialistWorkflow.test.ts && tsx src/utils/configMigration.test.ts && tsx src/server/candidateStore.test.ts && tsx src/server/localAccess.test.ts && tsx src/engine/providerPayloadAudit.test.ts"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",

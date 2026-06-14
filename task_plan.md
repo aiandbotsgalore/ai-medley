@@ -504,3 +504,22 @@ Status: complete
 - Completed a live four-track automatic run and a separate live one-correction-cycle run.
 - Confirmed finalization generated zero provider requests.
 - Verified tests, type-check, production build, browser console, server health, and exact candidate/final hashes.
+
+## Local-Only Security Baseline
+
+Status: complete
+
+### Phase 33: Restrict Network Access
+Status: complete
+
+- Bind the server only to `127.0.0.1`.
+- Allow browser origins only from localhost and loopback addresses.
+- Reject cross-site mutating requests before they reach API handlers.
+
+### Phase 34: Security Verification
+Status: complete
+
+- Add direct tests for valid local origins, invalid outside origins, deceptive hostnames, and cross-site writes.
+- Verify local health and app requests succeed.
+- Verify outside origins and cross-site writes return HTTP 403.
+- Verify the live listener is bound only to `127.0.0.1`.

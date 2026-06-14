@@ -196,3 +196,11 @@ Sources:
 - The first live verification exposed that removing production preview paths prevented authoritative report validation. The compact production result now retains only the required server-issued preview path and excludes it from Quality Review.
 - The full live automatic run completed as session `2oquenv9`; the forced correction run completed as `payload-correction-live`.
 - Both live final files are byte-for-byte identical to their approved candidates.
+
+## Local-Only Security Findings
+
+- The server previously listened on `0.0.0.0`, which exposed the app and its powerful local file and command endpoints to the local network.
+- The server previously used unrestricted CORS, which allowed any website origin to call the API when it could reach the server.
+- Binding to `127.0.0.1` removes local-network access while preserving normal use through `localhost`.
+- Local-origin validation now accepts the app's HTTP port on `localhost`, `127.0.0.1`, and IPv6 loopback only.
+- Mutating requests with a cross-site browser signal are rejected even when the request omits an Origin header.

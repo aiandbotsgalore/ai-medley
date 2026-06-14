@@ -193,3 +193,13 @@
 - Confirmed both approved candidates exactly match their final MP3 files.
 - Verified `npm test`, `npm run lint`, `npm run build`, server health, and a browser console with no errors.
 - Added `provider-payload-verification.md` with automated and live measurements.
+- Committed and pushed the provider payload verification gate as `f0e424c`.
+- Replaced unrestricted CORS with local-origin validation.
+- Bound the server to `127.0.0.1` instead of every network interface.
+- Added cross-site write protection for POST, PUT, PATCH, and DELETE requests.
+- Added `localAccess.test.ts` and included it in `npm test`.
+- Verified `npm test`, `npm run lint`, and `npm run build`.
+- Verified the live app and health endpoint return HTTP 200 locally.
+- Verified outside origins and cross-site writes return HTTP 403.
+- Verified port 3000 listens only on `127.0.0.1`.
+- Restarted the development server at `http://localhost:3000`.
