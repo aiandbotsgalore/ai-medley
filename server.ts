@@ -12,6 +12,36 @@ import MusicTempo from 'music-tempo';
 import { buildMedleyDesignPayload, buildTrackIntelligence, evaluateSectionPair } from './src/engine/medleyIntelligence';
 import type { TrackIntelligence } from './src/engine/medleyIntelligence';
 import { analyzeLocalAudioFile, analyzeMedleyQuality } from './src/engine/localAudioAnalysis';
+import {
+  ArrangementPlanSchema,
+  AutomaticWorkflowCheckpointSchema,
+  ExecutionReportSchema,
+  ProjectBriefSchema,
+  QualityReviewSchema,
+  TransitionExecutionRequestSchema,
+  formatValidationIssues,
+  validateArrangementContext,
+  validateExecutionContext,
+  validateProjectBriefContext,
+  validateTransitionExecutionContext,
+  type ArrangementPlan,
+  type SpecialistContext,
+} from './src/types/specialistWorkflow';
+import {
+  applyCandidateReview,
+  assertCandidateStorageAvailable,
+  cleanupRejectedCandidates,
+  discardAutomaticSessionFiles,
+  getSessionDirectory,
+  nextCandidateIdentity,
+  promoteCandidate,
+  readCandidateManifest,
+  registerCandidate,
+  sha256File,
+  validateSessionId,
+  withSessionLock,
+  writeCandidateManifestAtomic,
+} from './src/server/candidateStore';
 
 dotenv.config();
 
@@ -57,6 +87,16 @@ function isPathInside(childPath: string, parentPath: string) {
   const child = path.resolve(childPath).toLowerCase();
   const parent = path.resolve(parentPath).toLowerCase();
   return child === parent || child.startsWith(parent + path.sep);
+}
+
+function getServerGeneratedPreviewPath(sessionId: string, value: unknown) {
+  if (typeof value !== 'string') return null;
+  const sessionDir = getSessionDirectory(workDir, sessionId);
+  const resolved = path.resolve(value);
+  const name = path.basename(resolved);
+  if (path.dirname(resolved) !== sessionDir) return null;
+  if (!/^transition-exec-\d{3}-[a-zA-Z0-9_-]+\.mp3$/.test(name)) return null;
+  return resolved;
 }
 
 function resolveReadableAudioPath(filePath: string, sessionId?: string) {
@@ -216,11 +256,23 @@ function snapToNearestBeat(time: number, beats: number[]): { snappedTime: number
   return { snappedTime: closest, distance: minDist };
 }
 
-function execFfmpeg(args: string[], timeout = 30000): Promise<string> {
-  return new Promise((resolve) => {
-    execFile(ffmpegPath!, args, { timeout, windowsHide: true }, (_err, stdout, stderr) => {
-      resolve(`${stdout || ''}${stderr || ''}`);
+function execFfmpeg(
+  args: string[],
+  timeout = 30000,
+  options?: { rejectOnError?: boolean; onSpawned?: (proc: any) => void },
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const proc = execFile(ffmpegPath!, args, { timeout, windowsHide: true }, (err, stdout, stderr) => {
+      const output = `${stdout || ''}${stderr || ''}`;
+      if (err && options?.rejectOnError) {
+        const failure = new Error(`FFmpeg exited unsuccessfully: ${err.message}`);
+        (failure as any).output = output;
+        reject(failure);
+        return;
+      }
+      resolve(output);
     });
+    options?.onSpawned?.(proc);
   });
 }
 
@@ -240,11 +292,12 @@ async function runFfmpegWithStrictLogging(
   timeoutMs = 300000,
   sessionId?: string,
   expectedDuration?: number,
-  onSpawned?: (proc: any) => void
-): Promise<void> {
-  const graphFile = path.join(sessionWorkDir, 'temp_filtergraph.txt');
-  const cmdLogFile = path.join(sessionWorkDir, 'ffmpeg_command.txt');
-  const stderrLogFile = path.join(sessionWorkDir, 'ffmpeg_stderr.log');
+  onSpawned?: (proc: any) => void,
+  artifactPrefix = 'final'
+): Promise<{ graphFile: string; commandLog: string; stderrLog: string }> {
+  const graphFile = path.join(sessionWorkDir, `${artifactPrefix}-filtergraph.txt`);
+  const cmdLogFile = path.join(sessionWorkDir, `${artifactPrefix}-command.txt`);
+  const stderrLogFile = path.join(sessionWorkDir, `${artifactPrefix}-stderr.log`);
 
   // 1. Write the filter_complex_script (MANDATORY per production requirements)
   fs.writeFileSync(graphFile, graphScriptContent, 'utf8');
@@ -387,7 +440,7 @@ async function runFfmpegWithStrictLogging(
 
         reject(new Error(JSON.stringify(structuredErr)));
       } else {
-        resolve();
+      resolve({ graphFile, commandLog: cmdLogFile, stderrLog: stderrLogFile });
       }
     });
 
@@ -683,6 +736,34 @@ const sseClients: Record<string, express.Response[]> = {};
 // Active FFmpeg render processes per session — enables cancel support
 const activeRenderProcesses: Record<string, any> = {};
 
+function buildSpecialistContext(): SpecialistContext {
+  const library = getLibrary();
+  const trackIds = new Set<string>();
+  const durationsByTrackId = new Map<string, number>();
+  for (const entry of library) {
+    if (!entry?.id) continue;
+    trackIds.add(entry.id);
+    const duration = Number(
+      entry.localAnalysis?.localAnalysisV2?.durationSec ??
+      entry.localAnalysis?.duration ??
+      entry.analysis?.duration ??
+      0
+    );
+    if (duration > 0) durationsByTrackId.set(entry.id, duration);
+  }
+  const sectionsById = new Map<string, { trackId: string; startSec: number; endSec: number }>();
+  for (const track of cachedTrackIntelligence?.tracks ?? []) {
+    for (const section of track.sections ?? []) {
+      sectionsById.set(section.sectionId, {
+        trackId: section.trackId,
+        startSec: section.startSec,
+        endSec: section.endSec,
+      });
+    }
+  }
+  return { trackIds, durationsByTrackId, sectionsById };
+}
+
 function broadcastToSession(sessionId: string, event: string, data: any) {
   const clients = sseClients[sessionId] || [];
   const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -811,8 +892,47 @@ app.delete('/api/library/:id', (req, res) => {
 app.post('/api/checkpoint', express.json({ limit: '50mb' }), (req: any, res: any) => {
   const { sessionId } = req.body;
   if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+  try {
+    validateSessionId(sessionId);
+  } catch (error: any) {
+    return res.status(400).json({ error: error.message });
+  }
+  if (getHistory().some((entry: any) => entry.id === sessionId)) {
+    return res.json({ ok: true, ignored: 'completed' });
+  }
   const filePath = path.join(checkpointDir, `${sessionId}.json`);
-  fs.writeFileSync(filePath, JSON.stringify({ ...req.body, savedAt: new Date().toISOString() }));
+  let checkpoint = { ...req.body, savedAt: req.body.savedAt || new Date().toISOString() };
+  if (req.body.schemaVersion === 3) {
+    const parsed = AutomaticWorkflowCheckpointSchema.safeParse(checkpoint);
+    if (!parsed.success) {
+      return res.status(400).json({ error: formatValidationIssues(parsed.error).join('; ') });
+    }
+    checkpoint = parsed.data;
+    if (fs.existsSync(filePath)) {
+      try {
+        const existing = AutomaticWorkflowCheckpointSchema.safeParse(
+          JSON.parse(fs.readFileSync(filePath, 'utf8')),
+        );
+        if (
+          existing.success &&
+          (
+            existing.data.activeRequestSequence > checkpoint.activeRequestSequence ||
+            (
+              existing.data.activeRequestSequence === checkpoint.activeRequestSequence &&
+              existing.data.savedAt > checkpoint.savedAt
+            )
+          )
+        ) {
+          return res.json({ ok: true, stale: true });
+        }
+      } catch {
+        // A corrupt older checkpoint is replaced by the validated new checkpoint.
+      }
+    }
+  }
+  const temporary = `${filePath}.tmp`;
+  fs.writeFileSync(temporary, JSON.stringify(checkpoint));
+  fs.renameSync(temporary, filePath);
   res.json({ ok: true });
 });
 
@@ -828,12 +948,22 @@ app.get('/api/checkpoints', (_req: any, res: any) => {
 });
 
 app.get('/api/checkpoint/:sessionId', (req: any, res: any) => {
+  try {
+    validateSessionId(req.params.sessionId);
+  } catch (error: any) {
+    return res.status(400).json({ error: error.message });
+  }
   const p = path.join(checkpointDir, `${req.params.sessionId}.json`);
   if (!fs.existsSync(p)) return res.status(404).json({ error: 'not found' });
   res.json(JSON.parse(fs.readFileSync(p, 'utf8')));
 });
 
 app.delete('/api/checkpoint/:sessionId', (req: any, res: any) => {
+  try {
+    validateSessionId(req.params.sessionId);
+  } catch (error: any) {
+    return res.status(400).json({ error: error.message });
+  }
   const p = path.join(checkpointDir, `${req.params.sessionId}.json`);
   if (fs.existsSync(p)) fs.unlinkSync(p);
   res.json({ ok: true });
@@ -1166,6 +1296,132 @@ app.post('/api/medley-quality', async (req, res) => {
   }
 });
 
+app.post('/api/session/project-brief', (req, res) => {
+  const { sessionId, brief } = req.body || {};
+  try {
+    validateSessionId(sessionId);
+    const parsed = ProjectBriefSchema.parse(brief);
+    if (parsed.projectId !== sessionId) {
+      return res.status(400).json({ error: 'projectId must match sessionId' });
+    }
+    const contextualErrors = validateProjectBriefContext(parsed, buildSpecialistContext());
+    if (contextualErrors.length) {
+      return res.status(400).json({ error: contextualErrors.join('; ') });
+    }
+    if (!sessions[sessionId]) sessions[sessionId] = { status: 'running', logs: [] };
+    sessions[sessionId].projectBrief = parsed;
+    sessions[sessionId].workflowStage = 'arrangement';
+    res.json({ success: true, brief: parsed });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/session/execution-report', (req, res) => {
+  const { sessionId, report } = req.body || {};
+  try {
+    validateSessionId(sessionId);
+    const parsed = ExecutionReportSchema.parse(report);
+    const planResult = ArrangementPlanSchema.safeParse(sessions[sessionId]?.designPlan);
+    if (!planResult.success) {
+      return res.status(400).json({ error: 'No valid locked arrangement exists for this session' });
+    }
+    const contextualErrors = validateExecutionContext(parsed, planResult.data);
+    if (contextualErrors.length) return res.status(400).json({ error: contextualErrors.join('; ') });
+    if (sessions[sessionId]?.projectBrief) {
+      const authoritative = sessions[sessionId]?.executionResults?.[parsed.executionVersion] || {};
+      const authorityErrors: string[] = [];
+      for (const [index, attempt] of parsed.attemptedTransitions.entries()) {
+        const actual = authoritative[attempt.transitionId];
+        if (!actual) {
+          authorityErrors.push(`attemptedTransitions[${index}]: No server execution exists for ${attempt.transitionId}`);
+          continue;
+        }
+        if (attempt.success !== actual.success) {
+          authorityErrors.push(`attemptedTransitions[${index}].success: Does not match server execution`);
+        }
+        if (attempt.previewPath !== actual.previewPath) {
+          authorityErrors.push(`attemptedTransitions[${index}].previewPath: Does not match server execution`);
+        }
+        for (const field of [
+          'fromTrackId',
+          'fromSectionId',
+          'toTrackId',
+          'toSectionId',
+          'style',
+          'duration',
+          'beatAlign',
+        ] as const) {
+          if (attempt[field] !== actual.request[field]) {
+            authorityErrors.push(`attemptedTransitions[${index}].${field}: Does not match server execution`);
+          }
+        }
+        for (const field of ['actualFromExitSec', 'actualToEntrySec'] as const) {
+          const reported = attempt[field];
+          const recorded = actual[field];
+          if (
+            reported !== recorded &&
+            !(typeof reported === 'number' && typeof recorded === 'number' && Math.abs(reported - recorded) < 0.001)
+          ) {
+            authorityErrors.push(`attemptedTransitions[${index}].${field}: Does not match server execution`);
+          }
+        }
+      }
+      if (authorityErrors.length) return res.status(400).json({ error: authorityErrors.join('; ') });
+    }
+    sessions[sessionId].executionReport = parsed;
+    sessions[sessionId].workflowStage = 'review_candidate';
+    res.json({ success: true, report: parsed });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.post('/api/session/quality-review', (req, res) => {
+  const { sessionId, review } = req.body || {};
+  try {
+    validateSessionId(sessionId);
+    const parsed = QualityReviewSchema.parse(review);
+    const existingManifest = readCandidateManifest(workDir, sessionId);
+    const reviewedCandidate = existingManifest.candidates.find(item => item.candidateId === parsed.candidateId);
+    if (!reviewedCandidate) {
+      return res.status(400).json({ error: 'Reviewed candidate is not registered' });
+    }
+    if (
+      reviewedCandidate.candidateVersion !== parsed.candidateVersion ||
+      reviewedCandidate.arrangementVersion !== parsed.arrangementVersion
+    ) {
+      return res.status(400).json({ error: 'Review version does not match the registered candidate' });
+    }
+    if (parsed.approved && parsed.blockingIssues.length) {
+      return res.status(400).json({ error: 'An approved review cannot contain blocking issues' });
+    }
+    const plan = ArrangementPlanSchema.safeParse(sessions[sessionId]?.designPlan);
+    if (plan.success) {
+      const transitionIds = new Set(plan.data.transitions.map(item => item.transitionId));
+      const unknownCorrection = parsed.corrections.find(item => !transitionIds.has(item.transitionId));
+      if (unknownCorrection) {
+        return res.status(400).json({ error: `Unknown correction transition: ${unknownCorrection.transitionId}` });
+      }
+    }
+    const manifest = applyCandidateReview(workDir, sessionId, parsed);
+    sessions[sessionId].qualityReview = parsed;
+    sessions[sessionId].workflowStage = parsed.approved ? 'final_render' : 'correction';
+    res.json({ success: true, review: parsed, manifest });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+app.get('/api/session/:sessionId/candidates', (req, res) => {
+  try {
+    const manifest = readCandidateManifest(workDir, req.params.sessionId);
+    res.json({ success: true, manifest });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
 app.post('/api/session/design-plan', (req, res) => {
   const { sessionId, plan } = req.body || {};
   if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
@@ -1183,38 +1439,68 @@ app.post('/api/session/design-plan', (req, res) => {
   const enrichedTimings = sessions[sessionId].enrichedTimings || {};
   const ENRICHED_FIELDS = ['actualFromExitSec', 'actualToEntrySec', 'actualOverlapSec', 'durationUsed', 'beatSnapApplied', 'outputPath'];
 
-  for (const incoming of plan.transitions) {
-    const key = `${incoming.fromTrackId}:${incoming.fromSectionId}:${incoming.toTrackId}:${incoming.toSectionId}`;
+  if (!sessions[sessionId].projectBrief) {
+    for (const incoming of plan.transitions) {
+      const key = `${incoming.fromTrackId}:${incoming.fromSectionId}:${incoming.toTrackId}:${incoming.toSectionId}`;
 
-    // 1. Merge from session.enrichedTimings (populated by apply_musical_transition)
-    const cached = enrichedTimings[key];
-    if (cached) {
-      for (const f of ENRICHED_FIELDS) {
-        if (cached[f] !== undefined && incoming[f] === undefined) {
-          incoming[f] = cached[f];
+      // 1. Merge from session.enrichedTimings (populated by apply_musical_transition)
+      const cached = enrichedTimings[key];
+      if (cached) {
+        for (const f of ENRICHED_FIELDS) {
+          if (cached[f] !== undefined && incoming[f] === undefined) {
+            incoming[f] = cached[f];
+          }
         }
       }
-    }
 
-    // 2. Merge from old designPlan if transition identity matches
-    if (existingPlan && Array.isArray(existingPlan.transitions)) {
-      const old = existingPlan.transitions.find((t: any) =>
-        t.fromTrackId === incoming.fromTrackId &&
-        t.fromSectionId === incoming.fromSectionId &&
-        t.toTrackId === incoming.toTrackId &&
-        t.toSectionId === incoming.toSectionId
-      );
-      if (old) {
-        for (const f of ENRICHED_FIELDS) {
-          if (old[f] !== undefined && incoming[f] === undefined) {
-            incoming[f] = old[f];
+      // 2. Merge from old designPlan if transition identity matches
+      if (existingPlan && Array.isArray(existingPlan.transitions)) {
+        const old = existingPlan.transitions.find((t: any) =>
+          t.fromTrackId === incoming.fromTrackId &&
+          t.fromSectionId === incoming.fromSectionId &&
+          t.toTrackId === incoming.toTrackId &&
+          t.toSectionId === incoming.toSectionId
+        );
+        if (old) {
+          for (const f of ENRICHED_FIELDS) {
+            if (old[f] !== undefined && incoming[f] === undefined) {
+              incoming[f] = old[f];
+            }
           }
         }
       }
     }
   }
 
-  sessions[sessionId].designPlan = plan;
+  const specialistPlan = ArrangementPlanSchema.safeParse(plan);
+  if (specialistPlan.success) {
+    if (specialistPlan.data.projectId !== sessionId) {
+      return res.status(400).json({ error: 'projectId must match sessionId' });
+    }
+    const contextualErrors = validateArrangementContext(specialistPlan.data, buildSpecialistContext());
+    const expectedTrackIds = new Set<string>(
+      (sessions[sessionId].projectBrief?.recommendedOrderIds || specialistPlan.data.orderedTrackIds) as string[],
+    );
+    const actualTrackIds = new Set(specialistPlan.data.orderedTrackIds);
+    if (
+      expectedTrackIds.size !== actualTrackIds.size ||
+      [...expectedTrackIds].some(trackId => !actualTrackIds.has(trackId))
+    ) {
+      contextualErrors.push('orderedTrackIds: Must include every track from the project brief');
+    }
+    if (contextualErrors.length) {
+      return res.status(400).json({ error: contextualErrors.join('; ') });
+    }
+    sessions[sessionId].designPlan = specialistPlan.data;
+    sessions[sessionId].workflowStage = 'production';
+  } else if (sessions[sessionId].projectBrief) {
+    return res.status(400).json({
+      error: formatValidationIssues(specialistPlan.error).join('; '),
+    });
+  } else {
+    // Legacy/manual sessions retain their existing loose plan format.
+    sessions[sessionId].designPlan = plan;
+  }
 
   // Soft validation: warn about any low-score pairs
   const warnings: string[] = [];
@@ -1236,6 +1522,7 @@ app.post('/api/session/design-plan', (req, res) => {
 // Musical transition endpoint (high-quality blending tool for the agent)
 app.post('/api/apply-transition', async (req, res) => {
   const { 
+    transitionId,
     fromTrackId, 
     fromSectionId, 
     toTrackId, 
@@ -1245,7 +1532,8 @@ app.post('/api/apply-transition', async (req, res) => {
     intensity, 
     beatAlign, 
     notes,
-    sessionId 
+    sessionId,
+    executionVersion = 1,
   } = req.body || {};
 
   if (!fromTrackId || !fromSectionId || !toTrackId || !toSectionId || !style) {
@@ -1259,6 +1547,32 @@ app.post('/api/apply-transition', async (req, res) => {
 
   const session = sessionId ? sessions[sessionId] : null;
   const designPlan = session?.designPlan;
+  let validatedExecutionRequest: any = null;
+  if (session?.projectBrief) {
+    const parsedRequest = TransitionExecutionRequestSchema.safeParse({
+      transitionId,
+      fromTrackId,
+      fromSectionId,
+      toTrackId,
+      toSectionId,
+      style,
+      duration,
+      beatAlign,
+      notes,
+    });
+    if (!parsedRequest.success) {
+      return res.status(400).json({ error: formatValidationIssues(parsedRequest.error).join('; ') });
+    }
+    const lockedPlan = ArrangementPlanSchema.safeParse(designPlan);
+    if (!lockedPlan.success) {
+      return res.status(400).json({ error: 'No valid locked arrangement exists for this session' });
+    }
+    const contextualErrors = validateTransitionExecutionContext(parsedRequest.data, lockedPlan.data);
+    if (contextualErrors.length) {
+      return res.status(400).json({ error: contextualErrors.join('; ') });
+    }
+    validatedExecutionRequest = parsedRequest.data;
+  }
 
   // Try to find the planned transition details
   let plannedTransition = null;
@@ -1282,7 +1596,19 @@ app.post('/api/apply-transition', async (req, res) => {
   const sessionWorkDir = path.join(workDir, sessionId || 'default');
   if (!fs.existsSync(sessionWorkDir)) fs.mkdirSync(sessionWorkDir, { recursive: true });
 
-  const outputTransitionPath = path.join(sessionWorkDir, `transition_${fromSectionId}_to_${toSectionId}.mp3`);
+  const safeTransitionKey = `${fromSectionId}_to_${toSectionId}`
+    .replace(/[^a-zA-Z0-9_-]/g, '_')
+    .slice(0, 140);
+  const outputTransitionPath = path.join(
+    sessionWorkDir,
+    `transition-exec-${String(Number(executionVersion) || 1).padStart(3, '0')}-${safeTransitionKey}.mp3`,
+  );
+  if (session) {
+    if (!Array.isArray(session.registeredFiles)) session.registeredFiles = [];
+    if (!session.registeredFiles.includes(outputTransitionPath)) {
+      session.registeredFiles.push(outputTransitionPath);
+    }
+  }
 
   try {
     // Load rich intelligence data if available (for beats, energy, etc.)
@@ -1349,8 +1675,8 @@ app.post('/api/apply-transition', async (req, res) => {
         beatSnapApplied: useBeatAlign && (beatSnapNotes.length > 0),
         style,
       };
-      // Also patch into designPlan in-place if it already exists
-      if (session.designPlan && Array.isArray(session.designPlan.transitions)) {
+      // Legacy manual sessions still expect execution details on the loose plan.
+      if (!session.projectBrief && session.designPlan && Array.isArray(session.designPlan.transitions)) {
         const matchingTransition = session.designPlan.transitions.find((t: any) =>
           t.fromTrackId === fromTrackId &&
           t.fromSectionId === fromSectionId &&
@@ -1384,10 +1710,27 @@ app.post('/api/apply-transition', async (req, res) => {
       outputTransitionPath
     ];
 
-    await execFfmpeg(cmd, 120000);
+    await execFfmpeg(cmd, 120000, {
+      rejectOnError: true,
+      onSpawned: proc => {
+        if (sessionId) activeRenderProcesses[sessionId] = proc;
+      },
+    });
+    if (sessionId) delete activeRenderProcesses[sessionId];
+
+    if (session) {
+      if (!Array.isArray(session.registeredFiles)) session.registeredFiles = [];
+      if (!session.registeredFiles.includes(outputTransitionPath)) {
+        session.registeredFiles.push(outputTransitionPath);
+      }
+      const timingKey = `${fromTrackId}:${fromSectionId}:${toTrackId}:${toSectionId}`;
+      if (session.enrichedTimings?.[timingKey]) {
+        session.enrichedTimings[timingKey].outputPath = outputTransitionPath;
+      }
+    }
 
     // Only after successful preview render, set the outputPath (preview concern separated)
-    if (session && session.designPlan && Array.isArray(session.designPlan.transitions)) {
+    if (!session?.projectBrief && session?.designPlan && Array.isArray(session.designPlan.transitions)) {
       const matchingTransition = session.designPlan.transitions.find((t: any) =>
         t.fromTrackId === fromTrackId &&
         t.fromSectionId === fromSectionId &&
@@ -1400,6 +1743,18 @@ app.post('/api/apply-transition', async (req, res) => {
     }
 
     const finalNotes = `Applied ${style} transition (${transitionDuration}s).${beatSnapNotes} ${notes ? 'Notes: ' + notes : ''}`;
+    if (session?.projectBrief && transitionId) {
+      if (!session.executionResults) session.executionResults = {};
+      if (!session.executionResults[executionVersion]) session.executionResults[executionVersion] = {};
+      session.executionResults[executionVersion][transitionId] = {
+        request: validatedExecutionRequest,
+        success: true,
+        actualFromExitSec: actualFromExit,
+        actualToEntrySec: actualToEntry,
+        previewPath: outputTransitionPath,
+        error: null,
+      };
+    }
 
     appendWisdom({
       type: 'transition_applied',
@@ -1447,6 +1802,29 @@ app.post('/api/apply-transition', async (req, res) => {
     });
 
   } catch (err: any) {
+    if (sessionId) delete activeRenderProcesses[sessionId];
+    if (session?.projectBrief && transitionId) {
+      if (!session.executionResults) session.executionResults = {};
+      if (!session.executionResults[executionVersion]) session.executionResults[executionVersion] = {};
+      session.executionResults[executionVersion][transitionId] = {
+        request: {
+          transitionId,
+          fromTrackId,
+          fromSectionId,
+          toTrackId,
+          toSectionId,
+          style,
+          duration: transitionDuration,
+          beatAlign: useBeatAlign,
+          notes,
+        },
+        success: false,
+        actualFromExitSec: null,
+        actualToEntrySec: null,
+        previewPath: null,
+        error: err.message,
+      };
+    }
     console.error('[apply-transition] Error:', err);
     res.status(500).json({
       success: false,
@@ -1536,29 +1914,94 @@ export function getTransitionStyleConfig(style: string): TransitionStyleConfig {
 // 7. On any failure the route returns 500 + finalize_error.json with noFallback: true.
 //
 // This is the ONLY production render path for the final medley now.
-app.post('/api/finalize-medley', async (req, res) => {
-  const { sessionId, finalMp3Path, summary } = req.body || {};
+app.post('/api/render-review-candidate', async (req, res) => {
+  const { sessionId, parentCandidateId = null, legacy = false } = req.body || {};
+  let arrangementVersion = Number(req.body?.arrangementVersion || 0);
+  let executionVersion = Number(req.body?.executionVersion || 0);
 
-  if (!sessionId || !finalMp3Path) {
-    return res.status(400).json({ success: false, error: 'sessionId and finalMp3Path are required' });
+  if (!sessionId || (!legacy && (!arrangementVersion || !executionVersion))) {
+    return res.status(400).json({ success: false, error: 'sessionId, arrangementVersion, and executionVersion are required' });
   }
+
+  try {
+    validateSessionId(sessionId);
+  } catch (error: any) {
+    return res.status(400).json({ success: false, error: error.message });
+  }
+
+  return withSessionLock(sessionId, async () => {
 
   const session = sessions[sessionId];
   if (!session || !session.designPlan) {
     return res.status(400).json({ success: false, error: 'No design plan found for this session. Call set_design_plan first.' });
   }
+  if (legacy) {
+    arrangementVersion = 1;
+    executionVersion = 1;
+    const transitions = (session.designPlan.transitions || []).map((transition: any, index: number) => ({
+      transitionId: transition.transitionId || `legacy-transition-${index + 1}`,
+      fromTrackId: transition.fromTrackId,
+      fromSectionId: transition.fromSectionId,
+      toTrackId: transition.toTrackId,
+      toSectionId: transition.toSectionId,
+      fromExitSec: Number(transition.actualFromExitSec ?? transition.fromExitSec ?? transition.exitSec ?? 0),
+      toEntrySec: Number(transition.actualToEntrySec ?? transition.toEntrySec ?? transition.entrySec ?? 0),
+      duration: Number(transition.durationUsed ?? transition.duration ?? 5),
+      style: transition.style || 'smooth_blend',
+      beatAlign: transition.beatAlign ?? true,
+      notes: transition.notes || '',
+      ...transition,
+    }));
+    session.designPlan = {
+      schemaVersion: 1,
+      arrangementVersion,
+      projectId: sessionId,
+      strategy: 'Legacy manual workflow',
+      orderedTrackIds: [
+        transitions[0]?.fromTrackId,
+        ...transitions.map((transition: any) => transition.toTrackId),
+      ].filter(Boolean),
+      transitions,
+      confidence: 0.5,
+      warnings: ['Generated from a legacy manual session'],
+    };
+    session.executionReport = {
+      schemaVersion: 1,
+      executionVersion,
+      arrangementVersion,
+      attemptedTransitions: transitions.map((transition: any) => ({
+        ...transition,
+        success: true,
+        actualFromExitSec: transition.actualFromExitSec ?? transition.fromExitSec,
+        actualToEntrySec: transition.actualToEntrySec ?? transition.toEntrySec,
+        previewPath: transition.outputPath ?? null,
+        error: null,
+      })),
+      technicalWarnings: ['Legacy manual execution report'],
+      unresolvedFailures: [],
+      completedAt: new Date().toISOString(),
+    };
+  }
+  if (!session.executionReport) {
+    return res.status(400).json({ success: false, error: 'No validated execution report found for this session.' });
+  }
+  if (session.designPlan.arrangementVersion !== arrangementVersion ||
+      session.executionReport.executionVersion !== executionVersion) {
+    return res.status(400).json({ success: false, error: 'Arrangement or execution version mismatch.' });
+  }
 
   const designPlan = session.designPlan;
-  const sessionWorkDir = path.join(workDir, sessionId);
+  const sessionWorkDir = getSessionDirectory(workDir, sessionId);
   if (!fs.existsSync(sessionWorkDir)) {
     fs.mkdirSync(sessionWorkDir, { recursive: true });
   }
-  // Use path.basename to guard against the model passing an absolute path as finalMp3Path.
-  // path.join(sessionWorkDir, absolutePath) on Windows concatenates instead of resolving,
-  // producing a doubled path that breaks /api/audio serving. Basename-only is also a security
-  // guard: the output file can only land inside sessionWorkDir.
-  const safeMp3Name = path.basename(finalMp3Path) || 'medley_output.mp3';
+  const manifest = readCandidateManifest(workDir, sessionId);
+  const { candidateId, candidateVersion } = nextCandidateIdentity(manifest);
+  assertCandidateStorageAvailable(workDir, sessionId, 150 * 1024 * 1024);
+  const safeMp3Name = `${candidateId}.mp3.part`;
   const outputPath = path.join(sessionWorkDir, safeMp3Name);
+  const artifactPrefix = candidateId;
+  const graphName = `${artifactPrefix}-filtergraph.txt`;
 
   // Clean up any old confusing filtergraph.txt from previous code paths
   const oldGraph = path.join(sessionWorkDir, 'filtergraph.txt');
@@ -1570,11 +2013,25 @@ app.post('/api/finalize-medley', async (req, res) => {
   console.log(`[finalize-medley] This handler will ONLY produce output via the single-pass filter_complex_script route. Any other output is from outside this path.`);
 
   if (sessionId) {
-    logToSession(sessionId, `[finalize-medley] Progress: Starting pure-clean render for ${finalMp3Path}`);
+    logToSession(sessionId, `[candidate-render] Starting review render for ${candidateId}`);
   }
 
   try {
-    const transitions: any[] = Array.isArray(designPlan.transitions) ? designPlan.transitions : [];
+    const executionByTransitionId = new Map(
+      session.executionReport.attemptedTransitions.map((item: any) => [item.transitionId, item]),
+    );
+    const transitions: any[] = Array.isArray(designPlan.transitions)
+      ? designPlan.transitions.map((planned: any) => {
+          const executed: any = executionByTransitionId.get(planned.transitionId);
+          return {
+            ...planned,
+            actualFromExitSec: executed?.actualFromExitSec ?? planned.actualFromExitSec,
+            actualToEntrySec: executed?.actualToEntrySec ?? planned.actualToEntrySec,
+            durationUsed: executed?.duration ?? planned.durationUsed,
+            outputPath: executed?.previewPath ?? planned.outputPath,
+          };
+        })
+      : [];
     if (transitions.length === 0) {
       throw new Error('MVP finalize_medley requires at least one transition to establish deterministic track ordering and crossfade points. Single-track support is out of current strict scope.');
     }
@@ -1970,10 +2427,11 @@ app.post('/api/finalize-medley', async (req, res) => {
     // === 4. Command using -filter_complex_script (MANDATORY) ===
     const finalArgs = [
       ...inputArgs,
-      '-filter_complex_script', 'temp_filtergraph.txt',
+      '-filter_complex_script', graphName,
       '-map', '[master_out]',
       '-c:a', 'libmp3lame',
       '-b:a', '320k',
+      '-f', 'mp3',
       safeMp3Name   // write inside sessionWorkDir (cwd for the run); safeMp3Name is already the basename
     ];
 
@@ -1983,7 +2441,7 @@ app.post('/api/finalize-medley', async (req, res) => {
     const renderStartTime = Date.now();
 
     try {
-      await runFfmpegWithStrictLogging(
+      var renderArtifacts = await runFfmpegWithStrictLogging(
         finalArgs,
         sessionWorkDir,
         fullGraph,
@@ -1993,7 +2451,8 @@ app.post('/api/finalize-medley', async (req, res) => {
         (proc) => {
           // Store for cancel support
           activeRenderProcesses[sessionId] = proc;
-        }
+        },
+        artifactPrefix
       );
     } catch (ffErr: any) {
       delete activeRenderProcesses[sessionId];
@@ -2004,16 +2463,54 @@ app.post('/api/finalize-medley', async (req, res) => {
     delete activeRenderProcesses[sessionId];
     const renderElapsed = (Date.now() - renderStartTime) / 1000;
 
-    // Success — ONLY reached via the pure-clean single-pass path
-    sessions[sessionId].finalAudioPath = outputPath;
-    sessions[sessionId].summary = summary;
+    const immutableOutputPath = path.join(sessionWorkDir, `${candidateId}.mp3`);
+    if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size <= 0) {
+      throw new Error('Candidate render produced no usable audio file');
+    }
+    const durationSec = await queryTrackDuration(outputPath);
+    if (!(durationSec > 0)) throw new Error('Candidate duration validation failed');
+    const quality = await analyzeMedleyQuality(outputPath, sessionWorkDir);
+    fs.renameSync(outputPath, immutableOutputPath);
+    const sizeBytes = fs.statSync(immutableOutputPath).size;
+    const sha256 = sha256File(immutableOutputPath);
+    const previewPaths = session.executionReport.attemptedTransitions
+      .map((item: any) => item.previewPath)
+      .map((item: unknown) => getServerGeneratedPreviewPath(sessionId, item))
+      .filter((item: string | null): item is string => item !== null);
+    const validationPath = path.join(sessionWorkDir, `${candidateId}-validation.json`);
+    const candidate = {
+      candidateId,
+      candidateVersion,
+      parentCandidateId,
+      arrangementVersion,
+      executionVersion,
+      outputPath: immutableOutputPath,
+      debugPaths: [renderArtifacts.graphFile, renderArtifacts.commandLog, renderArtifacts.stderrLog, validationPath],
+      previewPaths,
+      sizeBytes,
+      sha256,
+      durationSec,
+      technicallyValid: true,
+      metrics: {},
+      reviewStatus: 'pending' as const,
+      warnings: [quality.overallQualityNote],
+      createdAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(
+      validationPath,
+      JSON.stringify({ candidate, quality }, null, 2),
+      'utf8',
+    );
+    const updatedManifest = registerCandidate(workDir, sessionId, candidate);
+    sessions[sessionId].workflowStage = 'quality_review';
+    sessions[sessionId].currentCandidate = candidate;
 
-    console.log(`[finalize-medley] SUCCESS via PURE-CLEAN-MVP path only. Output: ${outputPath} (render took ${renderElapsed.toFixed(1)}s)`);
+    console.log(`[candidate-render] SUCCESS. Output: ${immutableOutputPath} (render took ${renderElapsed.toFixed(1)}s)`);
 
     // === Wisdom logging: Record successful render metrics ===
     try {
       appendWisdom({
-        type: 'render_success',
+        type: 'candidate_render_success',
         sessionId,
         renderDurationSec: Math.round(renderElapsed),
         expectedMedleyDurationSec: Math.round(expectedDuration),
@@ -2021,45 +2518,49 @@ app.post('/api/finalize-medley', async (req, res) => {
         crossfadeCount: xfadeDurations.length,
         mashupBranches: mashupCount,
         styleMix: joinStyles.reduce((acc: Record<string, number>, s) => { acc[s] = (acc[s] || 0) + 1; return acc; }, {}),
-        outputFile: path.basename(outputPath)
+        outputFile: path.basename(immutableOutputPath)
       });
     } catch (e) {
       console.warn('[finalize-medley] Could not log wisdom:', e);
     }
 
     if (sessionId) {
-      logToSession(sessionId, `[finalize-medley] Progress: Render complete in ${renderElapsed.toFixed(1)}s. Final file ready: ${path.basename(outputPath)}`);
-      broadcastToSession(sessionId, 'progress', { stage: 'complete', percent: 100 });
+      logToSession(sessionId, `[candidate-render] Review candidate ${candidateId} complete in ${renderElapsed.toFixed(1)}s.`);
+      broadcastToSession(sessionId, 'progress', { stage: 'quality_review', percent: 100 });
     }
 
     return res.json({
       success: true,
-      outputPath,
+      candidate,
+      manifest: updatedManifest,
+      quality,
+      outputPath: immutableOutputPath,
       renderPath: "pure-clean-mvp-single-pass",   // unambiguous marker
       mashupBranches: mashupCount,
       renderDurationSec: Math.round(renderElapsed),
       expectedMedleyDurationSec: Math.round(expectedDuration),
-      message: 'Produced exclusively by the pure-clean single-pass path (original sources + linear acrossfades + one master loudnorm+limiter). No fallbacks were used.',
+      message: 'Review candidate rendered through the deterministic pure-clean single-pass path.',
       usedPureCleanMVP: true,
-      graphFile: path.join(sessionWorkDir, 'temp_filtergraph.txt'),
-      commandLog: path.join(sessionWorkDir, 'ffmpeg_command.txt'),
-      stderrLog: path.join(sessionWorkDir, 'ffmpeg_stderr.log'),
+      graphFile: renderArtifacts.graphFile,
+      commandLog: renderArtifacts.commandLog,
+      stderrLog: renderArtifacts.stderrLog,
       segments: numSegments,
       crossfades: xfadeDurations.length
     });
 
   } catch (err: any) {
-    console.error('[finalize-medley] HARD FAIL (no fallback, no silent concat):', err.message);
+    fs.rmSync(outputPath, { force: true });
+    console.error('[candidate-render] HARD FAIL (no fallback, no silent concat):', err.message);
 
     // Always attempt to leave a structured error artifact for the user/agent
     try {
-      const errJsonPath = path.join(sessionWorkDir, 'finalize_error.json');
+      const errJsonPath = path.join(sessionWorkDir, `${artifactPrefix}-error.json`);
       fs.writeFileSync(errJsonPath, JSON.stringify({
         timestamp: new Date().toISOString(),
         sessionId,
         error: err.message,
         stack: err.stack,
-        note: 'This was a hard failure in the pure-clean MVP path. No fallback was attempted.'
+        note: 'This was a hard failure while rendering a review candidate. Existing valid candidates were preserved.'
       }, null, 2), 'utf8');
     } catch (logErr) {
       console.error('[finalize-medley] Could not write finalize_error.json:', logErr);
@@ -2067,18 +2568,131 @@ app.post('/api/finalize-medley', async (req, res) => {
 
     res.status(500).json({
       success: false,
-      error: err.message || 'Failed to finalize medley (pure clean MVP path — hard failure, NO OUTPUT PRODUCED)',
+      error: err.message || 'Failed to render review candidate',
       noFallback: true,
       renderPath: "pure-clean-mvp-failed",
       note: "No medley file was written by this handler. Any existing .mp3 in the folder came from outside the pure-clean path.",
       logFiles: {
-        error: path.join(sessionWorkDir, 'finalize_error.json'),
-        graph: path.join(sessionWorkDir, 'temp_filtergraph.txt'),
-        command: path.join(sessionWorkDir, 'ffmpeg_command.txt'),
-        stderr: path.join(sessionWorkDir, 'ffmpeg_stderr.log')
+        error: path.join(sessionWorkDir, `${artifactPrefix}-error.json`),
+        graph: path.join(sessionWorkDir, `${artifactPrefix}-filtergraph.txt`),
+        command: path.join(sessionWorkDir, `${artifactPrefix}-command.txt`),
+        stderr: path.join(sessionWorkDir, `${artifactPrefix}-stderr.log`)
       },
       details: process.env.NODE_ENV === 'development' ? err.stack : undefined
     });
+  }
+  });
+});
+
+app.post('/api/finalize-medley', async (req, res) => {
+  const { sessionId, candidateId, summary } = req.body || {};
+  if (!sessionId || !candidateId || typeof summary !== 'string') {
+    return res.status(400).json({ success: false, error: 'sessionId, candidateId, and summary are required' });
+  }
+  try {
+    validateSessionId(sessionId);
+    return await withSessionLock(sessionId, async () => {
+      const promoted = promoteCandidate(workDir, sessionId, candidateId);
+      const finalAudioPath = promoted.finalPath;
+      const existingHistory = getHistory();
+      const existingEntry = existingHistory.find((entry: any) => entry.id === sessionId);
+      if (!existingEntry) {
+        const session = sessions[sessionId] ?? { status: 'running', logs: [] };
+        sessions[sessionId] = session;
+        session.status = 'completed';
+        session.finalAudioPath = finalAudioPath;
+        session.summary = summary;
+        session.workflowStage = 'completed';
+        existingHistory.unshift({
+          id: sessionId,
+          completedAt: new Date().toISOString(),
+          summary,
+          finalAudioPath,
+          metrics: session.metrics,
+          designPlan: session.designPlan || null,
+          candidateId,
+          candidateManifestVersion: promoted.manifest.schemaVersion,
+        });
+        saveHistory(existingHistory);
+        appendWisdom({
+          type: 'completed_medley',
+          sessionId,
+          summary,
+          metrics: session.metrics || null,
+          designPlan: session.designPlan || null,
+          finalAudioPath,
+          candidateId,
+          tracksInvolved: session.designPlan?.transitions?.map((t: any) => t.fromTrackId) || [],
+        });
+      } else {
+        if (!sessions[sessionId]) sessions[sessionId] = { status: 'completed', logs: [] };
+        sessions[sessionId].status = 'completed';
+        sessions[sessionId].finalAudioPath = finalAudioPath;
+        sessions[sessionId].summary = summary;
+        sessions[sessionId].workflowStage = 'completed';
+      }
+      const checkpointPath = path.join(checkpointDir, `${sessionId}.json`);
+      fs.rmSync(checkpointPath, { force: true });
+      let cleanupWarning: string | null = null;
+      try {
+        cleanupRejectedCandidates(workDir, sessionId);
+      } catch (error: any) {
+        cleanupWarning = error.message;
+      }
+      broadcastToSession(sessionId, 'completed', { summary });
+      return res.json({
+        success: true,
+        outputPath: finalAudioPath,
+        candidateId,
+        sha256: promoted.manifest.candidates.find(item => item.candidateId === candidateId)?.sha256,
+        idempotent: promoted.idempotent,
+        cleanupWarning,
+      });
+    });
+  } catch (error: any) {
+    return res.status(400).json({ success: false, error: error.message });
+  }
+});
+
+app.delete('/api/session/:sessionId/discard', async (req, res) => {
+  const sessionId = req.params.sessionId;
+  try {
+    validateSessionId(sessionId);
+    return await withSessionLock(sessionId, async () => {
+      const proc = activeRenderProcesses[sessionId];
+      if (proc && !proc.killed) proc.kill('SIGKILL');
+      delete activeRenderProcesses[sessionId];
+      const completedEntry = getHistory().find((entry: any) => entry.id === sessionId);
+      if (!completedEntry) {
+        const registeredPreviews = new Set<string>(
+          (sessions[sessionId]?.registeredFiles || [])
+            .map((item: unknown) => getServerGeneratedPreviewPath(sessionId, item))
+            .filter((item: string | null): item is string => item !== null),
+        );
+        const checkpointPath = path.join(checkpointDir, `${sessionId}.json`);
+        if (fs.existsSync(checkpointPath)) {
+          try {
+            const checkpoint = JSON.parse(fs.readFileSync(checkpointPath, 'utf8'));
+            for (const attempt of checkpoint.executionReport?.attemptedTransitions || []) {
+              const preview = getServerGeneratedPreviewPath(sessionId, attempt.previewPath);
+              if (preview) registeredPreviews.add(preview);
+            }
+          } catch {
+            // A corrupt checkpoint must not broaden the set of files eligible for deletion.
+          }
+        }
+        try {
+          discardAutomaticSessionFiles(workDir, sessionId, [...registeredPreviews]);
+        } catch (error: any) {
+          if (!String(error.message).includes('manifest')) throw error;
+        }
+      }
+      fs.rmSync(path.join(checkpointDir, `${sessionId}.json`), { force: true });
+      delete sessions[sessionId];
+      return res.json({ success: true });
+    });
+  } catch (error: any) {
+    return res.status(400).json({ success: false, error: error.message });
   }
 });
 

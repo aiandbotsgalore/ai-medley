@@ -156,3 +156,33 @@ Sources:
 - The live route check against library track `09ffc54c-b8bc-4305-9a85-d28ab4798f88` returned `source=local-ffmpeg-essentia-v2`, `schema=local_audio_analysis_v2`, BPM `128`, estimated key `F major`, 14 V2 segments, 18 local facts, and beat score `1`.
 - Medley design after that route check returned 7 tracks, 1 advanced V2-analyzed track, 32 transition scores, and 6 strategies.
 - As more tracks are re-analyzed, the design payload will contain advanced facts for more tracks.
+
+## Three-Model Specialist Workflow Findings
+
+- The current application uses one selected model for the entire autonomous loop and changes models only after failures.
+- The existing finalization endpoint performs a new FFmpeg render, so it cannot guarantee that a reviewed candidate becomes the final file.
+- Current checkpoints require full chat history and use schema version 2.
+- Current checkpoint discard deletes only the checkpoint JSON.
+- Current render debug files use shared filenames and would be overwritten by later candidates.
+- OpenRouter requests already accept an abort signal in the low-level fetch helper, but `ProviderSession.send()` does not expose it.
+- The safest migration is to keep the current autonomous loop as the version-2/manual path and add a separate version-3 automatic specialist orchestrator.
+- Candidate state needs a server-side atomic manifest because browser state and checkpoints cannot safely authorize file cleanup or final promotion.
+
+## Three-Model Specialist Workflow Implementation Findings
+
+- The full local Medley Design payload was 126,581 UTF-8 bytes and exceeded the new provider limit. The compact specialist handoff is 47,812 bytes; a complete context request with system text and tool schema measured 53,824 bytes and about 17,908 estimated tokens.
+- Transition preview execution previously mutated the locked arrangement with runtime fields. Automatic sessions now keep the arrangement immutable and store actual timings, preview paths, and success/failure in authoritative execution records.
+- The server now rejects execution reports that do not match the exact transition request and FFmpeg result. A forged preview path returned HTTP 400.
+- Real local verification rendered a 57.84-second two-track candidate, recorded its SHA-256 digest, promoted it without FFmpeg, and confirmed the candidate and final MP3 were byte-for-byte identical.
+- Repeating finalization returned the existing final output as an idempotent operation.
+- Version-3 checkpoints are strict, atomic, sequence-aware, and ignored after the session is recorded as completed, preventing delayed browser writes from recreating a deleted checkpoint.
+- Interrupted-session discard removed a registered transition preview and checkpoint while preserving library source audio.
+- Browser verification found and fixed a phone-width clipping issue. At 390 x 844 the app now stacks the library, workspace, and metrics vertically with normal page scrolling.
+- Browser console verification reported zero errors and zero warnings.
+- No OpenRouter key is configured, so the live remote specialist chain remains the only unexecuted integration check.
+- The first live OpenRouter run exposed a timeout-classification edge case: a timed-out fetch could surface as `AbortError`, which the UI treated as user cancellation. Provider sessions now rethrow the request signal's `TimeoutError` reason.
+- The original arrangement handoff was still too large for reliable free-model latency. Keeping essential track facts, one best candidate per directed transition pair, the top eight transition candidates, and four strategies allowed the fallback model to complete.
+- Live session `7s66ce77` verified the complete remote chain. Super produced the brief, Ultra timed out during arrangement, Super completed the fallback arrangement, Nex executed production, Ultra approved the full candidate, and Nex finalized it.
+- The live candidate scored 85 overall, 88 for transition smoothness, 85 for emotional arc, and 80 for performer identity.
+- The approved candidate and final output both contain 25,932,326 bytes with SHA-256 `d56b7b3b1c8b0cf4a8cc0f9c97eb73c11cf6552c22ab6027e2dade7523239d48`.
+- Browser playback and HTTP byte-range streaming both work for the completed 648.09-second MP3.

@@ -2,19 +2,30 @@
 <img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
 </div>
 
-# Run and deploy your AI Studio app
+# AI Medley Architect
 
-This contains everything you need to run your app locally.
+AI Medley Architect analyzes local audio, plans transitions with specialist AI models, and renders deterministic MP3 medleys with FFmpeg.
 
-View your app in AI Studio: https://ai.studio/apps/c226e218-0b98-4f4a-9bd6-f3d9c2cdfb2e
+## Model Modes
+
+- **Automatic Specialist Team:** OpenRouter only. Nemotron 3 Super creates the project brief, Nemotron 3 Ultra handles arrangement and review, and Nex-N2-Pro executes transitions and finalization.
+- **Manual Model:** Preserves the existing Gemini and OpenRouter model choices, including custom OpenRouter model IDs.
+
+Automatic mode analyzes audio locally and requires an OpenRouter API key before a run can start.
 
 ## Run Locally
 
-**Prerequisites:**  Node.js
+Prerequisites: Node.js and FFmpeg support provided by the project dependencies.
 
+1. Run `npm install`.
+2. Optionally create `.env.local` with `OPENROUTER_API_KEY` and/or `GEMINI_API_KEY`. Keys can also be entered in the app configuration.
+3. Run `npm run dev`.
+4. Open [http://localhost:3000](http://localhost:3000).
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+## Verification
+
+- `npm test`
+- `npm run lint`
+- `npm run build`
+
+Automatic sessions use version-3 checkpoints and immutable candidate manifests under `workdir/<sessionId>/`. Older version-2 checkpoints continue through the legacy manual workflow.

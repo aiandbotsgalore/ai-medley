@@ -100,7 +100,7 @@ export default function MetricsSidebar({ metrics, summary, status, sessionId }: 
   };
 
   return (
-    <aside className="w-80 border-l border-[#1A1A1A] bg-[#090909] flex flex-col shrink-0">
+    <aside className="w-full md:w-80 min-h-[360px] md:min-h-0 border-t md:border-t-0 md:border-l border-[#1A1A1A] bg-[#090909] flex flex-col shrink-0">
       <div className="p-5 border-b border-[#1A1A1A]">
         <div className="flex items-center justify-between mb-5">
           <div className="text-[10px] uppercase tracking-widest text-[#555] font-semibold">Refinement Metrics</div>

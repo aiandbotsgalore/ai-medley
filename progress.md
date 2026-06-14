@@ -136,3 +136,43 @@
 - Re-verified `npm run lint` passed.
 - Re-verified `npm test` passed.
 - Re-verified `npm run build` passed; Vite emitted only the existing large chunk warning.
+
+## 2026-06-14
+
+- Logan approved the final Three-Model Specialist Workflow plan.
+- Confirmed the active branch is `payload-optimization`, synchronized with `origin/payload-optimization`.
+- Confirmed the interrupted start made no tracked code changes.
+- Marked specialist workflow implementation as in progress.
+- Chosen implementation strategy: preserve the existing manual/version-2 loop and add a separate automatic/version-3 specialist path.
+- Added Zod 4 and strict contracts for project briefs, arrangements, execution reports, candidates, reviews, handoffs, manifests, transition execution, and automatic checkpoints.
+- Added compact specialist payloads, automatic role routing, one repair per model, role-specific fallback, 120-second request timeouts, one bounded 429 retry, abort signals, request IDs, and stale-request guards.
+- Added config version 2 with automatic/manual mode, OpenRouter-key blocking, preserved manual provider/model choices, and all existing manual models retained.
+- Added the automatic state machine and seven-stage UI.
+- Added server-authoritative transition execution records and exact report validation.
+- Added immutable review candidates, atomic manifests, locks, storage limits, safe path checks, SHA-256/size verification, deterministic selection, exact final promotion without FFmpeg, cleanup, and idempotent discard/finalization.
+- Added version-3 specialist checkpoints with atomic sequence-aware writes and preserved version-2 legacy resume.
+- Added responsive mobile stacking and changed the log label to Activity Log.
+- Added direct tests for schemas, contextual validation, migration, payload limits, candidate selection, integrity tampering, candidate limits, exact promotion, and discard.
+- Verified `npm test`, `npm run lint`, `npm run build`, and `git diff --check`.
+- Verified the dev server and app at `http://localhost:3000`; browser console had zero errors.
+- Verified compact complete provider request size: 53,824 bytes and about 17,908 estimated tokens.
+- Verified real FFmpeg transition and 57.84-second candidate rendering, forged execution-report rejection, version-3 checkpoint acceptance/deletion, delayed checkpoint rejection, exact final SHA-256 match, and idempotent finalization.
+- Verified interrupted discard removed its preview and checkpoint.
+- Removed all temporary Codex verification sessions and history entries; source-library audio was untouched.
+- Live OpenRouter specialist calls were not run because no OpenRouter API key is configured.
+- Marked Three-Model Specialist Workflow phases 24-28 complete.
+- Confirmed Logan's OpenRouter key is configured without exposing it.
+- Started the first real automatic specialist run with four analyzed tracks and session `7s66ce77`.
+- Nemotron 3 Super completed the project brief.
+- Found that browser timeout aborts could surface as user cancellation and stop the workflow silently.
+- Updated provider sessions to preserve the actual timeout reason.
+- Reduced the arrangement handoff to essential track data, the best directed transition pairs, and the top four strategies.
+- Re-verified `npm test`, `npm run lint`, and `npm run build` after the live-run fixes.
+- Resumed the saved version-3 checkpoint at the arrangement stage.
+- Nemotron 3 Ultra timed out at 120 seconds; the workflow correctly fell back to Nemotron 3 Super.
+- Nemotron 3 Super completed the arrangement, and Nex-N2-Pro completed all three planned transitions.
+- Rendered and reviewed immutable `candidate-001`; quality review approved it with overall score 85.
+- Finalized the approved candidate without FFmpeg re-rendering.
+- Confirmed `candidate-001.mp3` and `medley_final.mp3` have the same 25,932,326-byte size and SHA-256 digest.
+- Confirmed `/api/audio/7s66ce77` returns seekable MP3 range responses and browser playback advances without errors.
+- The completed 10:48 medley is available at `workdir/7s66ce77/medley_final.mp3`.

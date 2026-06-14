@@ -26,10 +26,26 @@ import { analyzeAudioWithProvider, createProviderSession } from './engine/provid
 import HistoryBrowser, { type HistoryEntry } from './components/HistoryBrowser';
 import MedleyMatchPanel from './components/MedleyMatchPanel';
 import type { MedleyDesignPayload } from './engine/medleyIntelligence';
+import {
+  runAutomaticSpecialistWorkflow,
+  type AutomaticWorkflowCheckpoint,
+} from './engine/specialistOrchestrator';
+import {
+  AutomaticWorkflowCheckpointSchema,
+  MAX_CORRECTION_RETRIES,
+  type SpecialistRole,
+  type SpecialistStage,
+} from './types/specialistWorkflow';
+import {
+  getProviderKey,
+  getStartConfigurationError,
+  migrateMedleyConfig,
+} from './utils/configMigration';
 
 type AppStatus = 'idle' | 'uploading' | 'running' | 'completed' | 'error';
 
 type CheckpointData = {
+  schemaVersion?: 2;
   sessionId: string;
   savedAt: string;
   provider: string;
@@ -49,6 +65,7 @@ type CheckpointData = {
   sectionPairCacheEntries: [string, unknown][];
   evaluationsPerFromSectionEntries: [string, number][];
 };
+type StoredCheckpoint = CheckpointData | AutomaticWorkflowCheckpoint;
 const CONFIG_STORAGE_KEY = 'ai-medley-config-v1';
 const AUDIO_ANALYSIS_PROMPT = 'Analyze this audio file and provide BPM if discernible, musical key, genre or mood, energy level from 1 to 10, and a concise 2 to 3 sentence structural summary. If this is a medley output, also mention any obvious transition or loudness issues.';
 
@@ -174,7 +191,10 @@ export default function App() {
     sessionManager.updatePhase(phase);
   }, [sessionManager]);
   const modelFallback = useModelFallback(config);
-  const [checkpoints, setCheckpoints] = useState<CheckpointData[]>([]);
+  const [checkpoints, setCheckpoints] = useState<StoredCheckpoint[]>([]);
+  const [specialistModel, setSpecialistModel] = useState<string>('');
+  const [specialistRole, setSpecialistRole] = useState<SpecialistRole | null>(null);
+  const activeRequestSequenceRef = useRef(0);
 
   // Used for manual "Force Model Switch" button from the header
   const forceModelSwitchRef = useRef<(() => void) | null>(null);
@@ -246,12 +266,7 @@ export default function App() {
         const rawStored = localStorage.getItem(CONFIG_STORAGE_KEY);
         const storedConfig = rawStored ? JSON.parse(rawStored) : {};
         const serverConfig = await fetch('/api/config').then(r => r.json()).catch(() => ({}));
-        const nextConfig: MedleyConfig = {
-          ...DEFAULT_CONFIG,
-          ...storedConfig,
-          geminiApiKey: storedConfig?.geminiApiKey || serverConfig?.geminiApiKey || '',
-          openrouterApiKey: storedConfig?.openrouterApiKey || serverConfig?.openrouterApiKey || ''
-        };
+        const nextConfig = migrateMedleyConfig(storedConfig, serverConfig);
 
         if (!cancelled) {
           setConfig(nextConfig);
@@ -338,7 +353,7 @@ export default function App() {
     }
   };
 
-  const activeApiKey = (config.provider === 'gemini' ? config.geminiApiKey : config.openrouterApiKey).trim();
+  const activeApiKey = getProviderKey(config);
   const hasProviderKey = Boolean(activeApiKey);
 
   const shouldUploadAudioForAnalysis = (displayName: string) => {
@@ -993,40 +1008,37 @@ export default function App() {
             }
             else if (call.name === 'finalize_medley') {
               setCurrentPhase('FINISH — Rendering Final Clean Medley');
-              addLog(`  🚀 Calling finalize_medley for clean render: ${args.finalMp3Path}`);
+              addLog(`  🚀 Rendering an immutable final candidate`);
 
+              const candidateRes = await fetch('/api/render-review-candidate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  sessionId: sid,
+                  legacy: true,
+                }),
+                signal
+              });
+              const candidateData = await candidateRes.json();
+              if (!candidateRes.ok || !candidateData.success) {
+                throw new Error(candidateData.error || 'Candidate render failed');
+              }
               const res = await fetch('/api/finalize-medley', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   sessionId: sid,
-                  finalMp3Path: args.finalMp3Path,
-                  summary: args.summary,
-                  useCleanRender: args.useCleanRender ?? true
-                }),
-                signal
-              });
-
-              const data = await res.json();
-
-              if (!res.ok || !data.success) {
-                throw new Error(data.error || 'finalize_medley failed');
-              }
-
-              addLog(`  ✅ Clean final medley rendered: ${data.outputPath}`);
-
-              await fetch('/api/session/finish', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  sessionId: sid,
-                  finalAudioPath: data.outputPath,
+                  candidateId: candidateData.candidate.candidateId,
                   summary: args.summary
                 }),
                 signal
               });
+              const data = await res.json();
+              if (!res.ok || !data.success) {
+                throw new Error(data.error || 'Candidate promotion failed');
+              }
+              addLog(`  ✅ Reviewed candidate promoted byte-for-byte: ${data.outputPath}`);
 
-              fetch(`/api/checkpoint/${sid}`, { method: 'DELETE' }).catch(() => {});
               setSummary(args.summary);
               setStatus('completed');
               loopFinished = true;
@@ -1126,6 +1138,7 @@ export default function App() {
 
   const handleCancel = () => {
     const activeSid = sessionIdRef.current;
+    activeRequestSequenceRef.current++;
     if (activeSid) {
       fetch(`/api/session/${activeSid}/cancel`, { method: 'POST' }).catch(err => {
         console.error('Failed to cancel active render process:', err);
@@ -1138,14 +1151,121 @@ export default function App() {
     setTimeout(fetchCheckpoints, 600);
   };
 
-  const resumeFromCheckpoint = async (rawCheckpoint: CheckpointData) => {
+  const stageLabels: Record<SpecialistStage, string> = {
+    local_analysis: 'LOCAL ANALYSIS',
+    context_brief: 'CONTEXT BRIEF',
+    arrangement: 'ARRANGEMENT',
+    production: 'PRODUCTION',
+    review_candidate: 'REVIEW CANDIDATE',
+    quality_review: 'QUALITY REVIEW',
+    correction: 'CORRECTIONS',
+    final_render: 'FINAL RENDER',
+    completed: 'COMPLETED',
+  };
+
+  const runAutomaticWorkflow = async (
+    lib: LibraryFile[],
+    signal: AbortSignal,
+    design: MedleyDesignPayload,
+    resume?: AutomaticWorkflowCheckpoint | null,
+  ) => {
+    const sid = resume?.sessionId ?? Math.random().toString(36).substring(2, 10);
+    const requestSequence = ++activeRequestSequenceRef.current;
+    setSessionId(sid);
+    sessionIdRef.current = sid;
+    connectSSE(sid, {
+      onLog: message => addLog(`📡 ${message}`),
+      onProgress: data => metricsManager.setRenderProgress(data),
+      onMetrics: data => metricsManager.setMetrics(data),
+      onCompleted: data => { if (data.summary) setSummary(data.summary); },
+    });
+    try {
+      const result = await runAutomaticSpecialistWorkflow({
+        sessionId: sid,
+        config,
+        library: lib,
+        design,
+        signal,
+        requestSequence,
+        resume,
+        onLog: addLog,
+        onStage: (stage, role, model) => {
+          if (activeRequestSequenceRef.current !== requestSequence) return;
+          setCurrentPhase(stageLabels[stage]);
+          setSpecialistRole(role);
+          setSpecialistModel(model ?? '');
+          addLog(`${stageLabels[stage]}${role ? ` · ${role}` : ''}${model ? ` · ${model}` : ''}`);
+        },
+        onCheckpoint: checkpoint => {
+          if (activeRequestSequenceRef.current !== requestSequence) return;
+          fetch('/api/checkpoint', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(checkpoint),
+          }).catch(() => {});
+        },
+        onMetrics: review => {
+          if (activeRequestSequenceRef.current !== requestSequence) return;
+          metricsManager.setMetrics({
+            emotionalArc: review.emotionalArc,
+            transitionSmoothness: review.transitionSmoothness,
+            performerIdentity: review.performerIdentity,
+            overallScore: review.overallScore,
+            iteration: review.candidateVersion,
+            phase: 'QUALITY REVIEW',
+          });
+        },
+      });
+      if (activeRequestSequenceRef.current !== requestSequence) return;
+      setSummary(result.summary);
+      setStatus('completed');
+      setRunStartedAt(null);
+      await fetchCheckpoints();
+    } catch (error: any) {
+      if (error?.name === 'AbortError' || signal.aborted) {
+        setStatus('idle');
+        return;
+      }
+      logDetailedError('Automatic Specialist Workflow', error, { sessionId: sid });
+      setStatus('error');
+      setErrorMessage(error?.message || 'Automatic specialist workflow failed');
+    } finally {
+      disconnectSSE();
+      metricsManager.setRenderProgress(null);
+    }
+  };
+
+  const resumeFromCheckpoint = async (rawCheckpoint: StoredCheckpoint) => {
     if (status !== 'idle') return;
-    if (!validateCheckpoint(rawCheckpoint)) {
+    if ((rawCheckpoint as AutomaticWorkflowCheckpoint).schemaVersion === 3) {
+      const parsedCheckpoint = AutomaticWorkflowCheckpointSchema.safeParse(rawCheckpoint);
+      if (!parsedCheckpoint.success) {
+        setStatus('error');
+        setErrorMessage('This automatic checkpoint is invalid and cannot be resumed.');
+        return;
+      }
+      const checkpoint = parsedCheckpoint.data;
+      const controller = new AbortController();
+      abortRef.current = controller;
+      setStatus('running');
+      setRunStartedAt(Date.now());
+      setCurrentPhase(stageLabels[checkpoint.stage]);
+      try {
+        const design = await buildMedleyDesign(library, controller.signal);
+        await runAutomaticWorkflow(library, controller.signal, design, checkpoint);
+      } catch (error: any) {
+        setStatus('error');
+        setErrorMessage(error?.message || 'Could not rebuild medley intelligence for resume');
+      }
+      return;
+    }
+    const legacyCheckpoint = rawCheckpoint as CheckpointData;
+    if (!validateCheckpoint(legacyCheckpoint)) {
       addLog('❌ Checkpoint failed validation — data may be corrupt. Discarding.');
       setStatus('idle');
       return;
     }
-    const checkpoint = upgradeCheckpoint(rawCheckpoint);
+    const checkpoint = upgradeCheckpoint(legacyCheckpoint);
     const controller = new AbortController();
     abortRef.current = controller;
     setStatus('running');
@@ -1156,7 +1276,9 @@ export default function App() {
   };
 
   const discardCheckpoint = async (sessionId: string) => {
-    await fetch(`/api/checkpoint/${sessionId}`, { method: 'DELETE' });
+    activeRequestSequenceRef.current++;
+    abortRef.current?.abort();
+    await fetch(`/api/session/${encodeURIComponent(sessionId)}/discard`, { method: 'DELETE' });
     await fetchCheckpoints();
   };
 
@@ -1189,7 +1311,7 @@ export default function App() {
         const local = await getLocalAnalysis({ fileId: entry.id, saveToLibrary: true }, signal);
         let analysisText = local.analysisText;
 
-        if (shouldUploadAudioForAnalysis(entry.originalName)) {
+        if (config.modelMode === 'manual' && shouldUploadAudioForAnalysis(entry.originalName)) {
           addLog(`  ☁️ Cloud audio upload allowed for ${entry.originalName}`);
           const audioRes = await fetch(`/api/audio-raw/${entry.id}`, { signal });
           const audioBlob = await audioRes.blob();
@@ -1205,7 +1327,7 @@ export default function App() {
         }
 
         if (analysisText) {
-          if (config.audioAnalysisMode !== 'local') {
+          if (config.modelMode === 'manual' && config.audioAnalysisMode !== 'local') {
             await fetch('/api/library/analysis', {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ fileId: entry.id, analysisText }),
@@ -1241,9 +1363,10 @@ export default function App() {
 
   const startMedley = async () => {
     if (library.length < 2) return;
-    if (!hasProviderKey) {
+    const configurationError = getStartConfigurationError(config);
+    if (configurationError) {
       setStatus('error');
-      setErrorMessage(config.provider === 'gemini' ? 'Add a Gemini API key in Configuration before starting.' : 'Add an OpenRouter API key in Configuration before starting.');
+      setErrorMessage(configurationError);
       return;
     }
     abortRef.current = new AbortController();
@@ -1288,8 +1411,17 @@ export default function App() {
     } catch (e: any) {
       addLog(`⚠️ Medley Intelligence unavailable: ${e.message}`);
     }
-    setCurrentPhase('BUILD — Constructing Medley');
-    runAutonomousLoop(freshLib, abortRef.current.signal, design);
+    if (config.modelMode === 'automatic') {
+      if (!design) {
+        setStatus('error');
+        setErrorMessage('Automatic mode requires local Medley Intelligence. Re-run local analysis and try again.');
+        return;
+      }
+      await runAutomaticWorkflow(freshLib, abortRef.current.signal, design);
+    } else {
+      setCurrentPhase('BUILD — Constructing Medley');
+      runAutonomousLoop(freshLib, abortRef.current.signal, design);
+    }
   };
 
   const isIdle = status === 'idle' || status === 'error';
@@ -1297,21 +1429,22 @@ export default function App() {
   const canStart = library.length >= 2 && hasProviderKey && configLoaded;
 
   return (
-    <div className="h-screen bg-[#060606] text-[#E0E0E0] font-sans flex flex-col overflow-hidden selection:bg-[#00F0FF]/30">
+    <div className="min-h-screen h-auto md:h-screen bg-[#060606] text-[#E0E0E0] font-sans flex flex-col overflow-y-auto overflow-x-hidden md:overflow-hidden selection:bg-[#00F0FF]/30">
       <Header 
         status={status} 
-        provider={config.provider} 
-        currentModel={modelFallback.activeModel}
+        provider={config.modelMode === 'automatic' ? 'openrouter' : config.provider}
+        currentModel={config.modelMode === 'automatic' ? specialistModel : modelFallback.activeModel}
+        currentRole={config.modelMode === 'automatic' ? specialistRole : null}
         onConfigClick={() => setShowConfig(true)} 
         onForceModelSwitch={() => forceModelSwitchRef.current?.()}
         onCancel={handleCancel} 
       />
       {showConfig && <ConfigPanel config={config} onUpdate={setConfig} onClose={() => setShowConfig(false)} />}
 
-      <main className="flex-1 flex overflow-hidden">
-        <LibrarySidebar library={library} status={status} provider={config.provider} apiReady={hasProviderKey} onRemove={removeFile} onReorder={reorderLibrary} />
+      <main className="flex-1 flex flex-col md:flex-row overflow-visible md:overflow-hidden">
+        <LibrarySidebar library={library} status={status} provider={config.modelMode === 'automatic' ? 'openrouter' : config.provider} apiReady={hasProviderKey} onRemove={removeFile} onReorder={reorderLibrary} />
 
-        <section className="flex-1 flex flex-col bg-[#030303] overflow-hidden">
+        <section className="flex-1 min-w-0 min-h-[70vh] md:min-h-0 flex flex-col bg-[#030303] overflow-hidden">
           {/* Tab bar */}
           <div className="h-10 border-b border-[#1A1A1A] flex items-center px-4 gap-1 shrink-0 bg-[#0A0A0A]">
             {(['workshop', 'history'] as const).map(tab => (
@@ -1331,7 +1464,7 @@ export default function App() {
 
           {/* Persistent Activity Status Bar */}
           {status === 'running' && (
-            <div className="shrink-0 border-b border-[#1A1A1A] bg-[#0A0A0A] px-5 py-2.5 flex items-center justify-between text-[11px] font-mono animate-fade-in">
+            <div className="shrink-0 border-b border-[#1A1A1A] bg-[#0A0A0A] px-3 md:px-5 py-2.5 flex flex-col md:flex-row md:items-center justify-between gap-2 text-[11px] font-mono animate-fade-in">
               <div className="flex items-center gap-3 min-w-0">
                 <span className="uppercase tracking-[1.5px] text-[#00F0FF] font-bold shrink-0">CURRENT PHASE</span>
                 <span className="text-white font-medium truncate">
@@ -1341,7 +1474,7 @@ export default function App() {
                 </span>
               </div>
 
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-2 md:gap-3">
                 {/* Pre-analysis progress bar */}
                 {metricsManager.preAnalysisProgress && (
                   <div className="flex items-center gap-3 ml-4 min-w-[220px]">
@@ -1402,13 +1535,13 @@ export default function App() {
           {activeTab === 'history' ? (
             <HistoryBrowser onLoadSession={loadFromHistory} />
           ) : isIdle ? (
-            <div className="flex-1 p-8 flex flex-col items-center justify-center">
+            <div className="flex-1 p-4 md:p-8 flex flex-col items-center justify-center">
               {/* Drop zone */}
               <div
                 onDragOver={e => e.preventDefault()}
                 onDrop={handleFileDrop}
                 onClick={() => fileInputRef.current?.click()}
-                className="w-full max-w-lg border-2 border-dashed border-[#1A1A1A] bg-[#0A0A0A] p-16 text-center cursor-pointer hover:border-[#00F0FF]/40 hover:bg-[#00F0FF]/[0.02] transition-all duration-300 group rounded-xl"
+                className="w-full max-w-lg border-2 border-dashed border-[#1A1A1A] bg-[#0A0A0A] p-8 md:p-16 text-center cursor-pointer hover:border-[#00F0FF]/40 hover:bg-[#00F0FF]/[0.02] transition-all duration-300 group rounded-xl"
               >
                 <Upload className="w-12 h-12 text-[#333] group-hover:text-[#00F0FF] transition-colors mx-auto mb-6" />
                 <h3 className="text-[15px] font-bold uppercase tracking-wider text-white mb-2">Drop Audio Files Here</h3>
@@ -1444,13 +1577,18 @@ export default function App() {
               {checkpoints.length > 0 && (
                 <div className="mt-8 w-full max-w-lg border border-[#00F0FF]/20 bg-[#00F0FF]/[0.03] rounded-xl p-4">
                   <div className="text-[10px] font-mono uppercase tracking-widest text-[#00F0FF] font-bold mb-3">Interrupted Sessions</div>
-                  {checkpoints.map(cp => (
-                    <div key={cp.sessionId} className="flex items-center gap-3 py-2 border-t border-white/5 first:border-t-0">
-                      <div className="flex-1 min-w-0">
-                        <div className="text-[11px] text-white font-mono truncate">{cp.model}</div>
-                        <div className="text-[10px] text-[#555] font-mono">
-                          Iteration {cp.iterations} · {cp.currentPhase || 'Unknown phase'} · {new Date(cp.savedAt).toLocaleString()}
-                        </div>
+                   {checkpoints.map(cp => (
+                     <div key={cp.sessionId} className="flex items-center gap-3 py-2 border-t border-white/5 first:border-t-0">
+                       <div className="flex-1 min-w-0">
+                         <div className="text-[11px] text-white font-mono truncate">
+                           {'workflowMode' in cp ? (cp.activeModel || 'Automatic Specialist Team') : cp.model}
+                         </div>
+                         <div className="text-[10px] text-[#555] font-mono">
+                           {'workflowMode' in cp
+                             ? `${stageLabels[cp.stage]} · correction ${cp.correctionCount}/${MAX_CORRECTION_RETRIES}`
+                             : `Iteration ${cp.iterations} · ${cp.currentPhase || 'Unknown phase'}`}
+                           {' · '}{new Date(cp.savedAt).toLocaleString()}
+                         </div>
                       </div>
                       <button
                         onClick={() => resumeFromCheckpoint(cp)}
@@ -1486,7 +1624,7 @@ export default function App() {
               )}
             </div>
           ) : (
-            <LogPanel status={status} logs={logs} iteration={metricsManager.iteration} runStartedAt={runStartedAt} />
+            <LogPanel status={status} logs={logs} iteration={metricsManager.iteration} runStartedAt={runStartedAt} currentPhase={sessionManager.currentPhase} />
           )}
         </section>
 
@@ -1498,7 +1636,7 @@ export default function App() {
       </main>
 
       {/* Footer Audio Player */}
-      <footer className="h-20 border-t border-[#1A1A1A] bg-[#0A0A0A] flex items-center px-6 gap-6 shrink-0">
+      <footer className="min-h-20 border-t border-[#1A1A1A] bg-[#0A0A0A] flex items-center px-3 md:px-6 gap-3 md:gap-6 shrink-0">
         {status === 'completed' && sessionId ? (
           <audio controls src={`/api/audio/${sessionId}`} className="w-full max-w-5xl h-10 mx-auto" style={{ filter: 'invert(1) hue-rotate(180deg)', opacity: 0.8 }} />
         ) : (
@@ -1513,7 +1651,7 @@ export default function App() {
               </div>
             </div>
             <div className="flex-1 h-1.5 bg-[#111] rounded-full opacity-20" />
-            <div className="text-[10px] font-mono text-[#333] opacity-20">44.1kHz • Stereo • 320kbps</div>
+            <div className="hidden sm:block text-[10px] font-mono text-[#333] opacity-20">44.1kHz • Stereo • 320kbps</div>
           </>
         )}
       </footer>

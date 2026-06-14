@@ -395,3 +395,65 @@ Logan approved this plan on 2026-05-21. Phases 14-23 were completed.
 - Updated Medley Match UI to show local BPM/key confidence, advanced analysis coverage, beat-safe sections, and beat/key transition scores.
 - Added local-only analyzer test coverage.
 - Verified with `npm test`, `npm run lint`, `npm run build`, bounded `npm run dev`, `/api/health`, `/`, `/api/audio-analysis/local`, and `/api/medley-intelligence/design`.
+
+## Three-Model Specialist Workflow
+
+Status: complete
+
+Goal: Replace automatic single-model runs with a validated specialist workflow while preserving the existing manual-model workflow.
+
+### Phase 24: Contracts, Configuration, and Provider Control
+Status: complete
+
+- Add Zod 4 strict schemas for specialist handoffs, execution reports, reviews, candidates, and manifests.
+- Add automatic/manual model mode and preserve the existing selected model for manual runs.
+- Route automatic work only through Nemotron Super, Nemotron Ultra, and Nex-N2-Pro.
+- Add abortable provider sends, request IDs, timeouts, stale-response protection, and complete-request payload limits.
+
+### Phase 25: Candidate Rendering and Persistence
+Status: complete
+
+- Add atomic server-side candidate manifests and immutable candidate/debug files.
+- Add server-side session locks, candidate limits, storage checks, SHA-256 verification, and safe path handling.
+- Add `submit_execution_report`, `render_review_candidate`, and `submit_quality_review` stage boundaries.
+
+### Phase 26: Exact Candidate Finalization and Cleanup
+Status: complete
+
+- Change finalization to promote the exact reviewed candidate without FFmpeg re-rendering.
+- Add deterministic candidate selection and idempotent finalization.
+- Add atomic session discard and registered-file cleanup while preserving source audio and completed outputs.
+
+### Phase 27: Specialist Orchestration and UI
+Status: complete
+
+- Add the explicit specialist state machine and role-specific prompts/tools.
+- Add seven-stage progress, active specialist, candidate, repair, fallback, correction, and warning visibility.
+- Preserve version-2 checkpoints through the legacy manual workflow and add version-3 automatic checkpoints.
+
+### Phase 28: Verification
+Status: complete
+
+- Add direct TypeScript tests using `node:assert/strict`.
+- Run tests, type-check, build, server health checks, candidate lifecycle checks, and manual-mode compatibility checks.
+
+## Three-Model Specialist Workflow Decisions
+
+- Existing saved configurations migrate to automatic OpenRouter mode while preserving both API keys and the saved manual model.
+- Automatic mode is blocked before local analysis when no OpenRouter key is configured.
+- Automatic fallback models are limited to the three approved specialist models.
+- A model gets one structured-output repair attempt before role-specific fallback.
+- At most three complete candidates are retained: initial plus two corrections.
+- The exact reviewed candidate is promoted byte-for-byte using SHA-256 and byte-size verification.
+- Zod 4 is the only new dependency.
+
+## Three-Model Specialist Workflow Implementation Summary
+
+- Added strict shared Zod contracts, contextual validation, exact repair messages, role routing, bounded fallback, request timeouts, cancellation, request sequencing, and complete-request payload limits.
+- Added automatic/manual config migration. Automatic mode uses only Nemotron 3 Super, Nemotron 3 Ultra, and Nex-N2-Pro. Manual mode retains every existing model and custom OpenRouter entries.
+- Added version-3 automatic checkpoints with atomic writes, stale-write rejection, validated resume state, and legacy version-2 manual resume.
+- Added authoritative server execution records so reports cannot claim transitions or files that the server did not produce.
+- Added immutable candidate manifests, three-candidate limit, disk checks, safe registered paths, SHA-256 and byte-size verification, deterministic selection, exact candidate promotion, cleanup, and idempotent discard/finalization.
+- Added a responsive seven-stage UI with specialist role/model, activity, correction state, candidate state, and warnings.
+- Verified direct tests, TypeScript, production build, server health, desktop/mobile browser rendering, real FFmpeg preview/candidate rendering, forged-report rejection, checkpoint lifecycle, exact final-file hashing, idempotent finalization, and interrupted-session discard.
+- Verified a complete live OpenRouter run with four tracks. The workflow handled an Ultra timeout through the approved fallback route, produced and reviewed `candidate-001`, and promoted the approved candidate byte-for-byte to the final MP3.

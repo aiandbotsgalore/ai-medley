@@ -6,12 +6,20 @@ interface LogPanelProps {
   logs: string[];
   iteration?: { current: number; max: number } | null;
   runStartedAt?: number | null;
+  currentPhase?: string;
 }
 
-const PHASES = ['ANALYZE', 'DESIGN', 'BUILD', 'EVALUATE', 'FINISH'] as const;
+const PHASES = ['LOCAL', 'CONTEXT', 'ARRANGE', 'PRODUCE', 'REVIEW', 'CORRECT', 'FINAL'] as const;
 
-function detectPhaseIndex(logs: string[]): number {
-  const recent = logs.slice(-20).join(' ').toLowerCase();
+function detectPhaseIndex(logs: string[], currentPhase?: string): number {
+  const recent = `${currentPhase || ''} ${logs.slice(-20).join(' ')}`.toLowerCase();
+  if (recent.includes('final render') || recent.includes('finalize') || recent.includes('completed')) return 6;
+  if (recent.includes('correction')) return 5;
+  if (recent.includes('quality review') || recent.includes('review candidate')) return 4;
+  if (recent.includes('production') || recent.includes('apply_musical') || recent.includes('build')) return 3;
+  if (recent.includes('arrangement') || recent.includes('design')) return 2;
+  if (recent.includes('context brief')) return 1;
+  if (recent.includes('local analysis') || recent.includes('analy')) return 0;
   if (recent.includes('finalize') || recent.includes('target achieved') || recent.includes('finish')) return 4;
   if (recent.includes('quality') || recent.includes('evaluate') || recent.includes('refin')) return 3;
   if (recent.includes('apply_musical') || recent.includes('render') || recent.includes('build')) return 2;
@@ -31,7 +39,7 @@ function extractTimestamp(log: string): string {
   return match ? match[1] : '';
 }
 
-export default function LogPanel({ status, logs, iteration, runStartedAt }: LogPanelProps) {
+export default function LogPanel({ status, logs, iteration, runStartedAt, currentPhase }: LogPanelProps) {
   const logsEndRef = useRef<HTMLDivElement>(null);
   const [elapsed, setElapsed] = useState(0);
 
@@ -64,7 +72,7 @@ export default function LogPanel({ status, logs, iteration, runStartedAt }: LogP
   const ringRadius = 8;
   const ringCircumference = 2 * Math.PI * ringRadius;
   const ringProgress = iteration ? iteration.current / iteration.max : 0;
-  const currentPhaseIdx = status === 'running' ? detectPhaseIndex(logs) : status === 'completed' ? PHASES.length - 1 : -1;
+  const currentPhaseIdx = status === 'running' ? detectPhaseIndex(logs, currentPhase) : status === 'completed' ? PHASES.length - 1 : -1;
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -159,7 +167,7 @@ export default function LogPanel({ status, logs, iteration, runStartedAt }: LogP
         <div className="flex items-center gap-2 px-5 py-2 border-b border-[#1A1A1A] shrink-0">
           <Terminal className="w-3 h-3 text-[#444]" />
           <span className={`w-1.5 h-1.5 rounded-full ${status === 'running' ? 'bg-amber-400 animate-pulse' : 'bg-[#333]'}`} />
-          <span className="text-[10px] font-mono uppercase text-[#555] tracking-wider">Model Thought Stream</span>
+          <span className="text-[10px] font-mono uppercase text-[#555] tracking-wider">Activity Log</span>
         </div>
         <div className="flex-1 overflow-y-auto px-5 py-3 space-y-0.5 custom-scrollbar font-mono text-[11px]">
           {logs.length === 0 ? (

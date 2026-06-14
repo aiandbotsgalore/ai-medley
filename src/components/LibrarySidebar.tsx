@@ -164,7 +164,7 @@ export default function LibrarySidebar({ library, status, provider, apiReady, on
   };
 
   return (
-    <aside className="w-72 border-r border-[#1A1A1A] bg-[#090909] flex flex-col shrink-0">
+    <aside className="w-full md:w-72 max-h-[55vh] md:max-h-none border-b md:border-b-0 md:border-r border-[#1A1A1A] bg-[#090909] flex flex-col shrink-0">
       <div className="p-4 flex-1 overflow-y-auto custom-scrollbar">
         <div className="flex items-center justify-between mb-4">
           <div className="text-[10px] uppercase tracking-widest text-[#555] font-semibold flex items-center gap-2">

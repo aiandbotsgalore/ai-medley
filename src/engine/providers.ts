@@ -1,5 +1,11 @@
 import { GoogleGenAI } from '@google/genai';
 import type { MedleyConfig } from '../components/ConfigPanel';
+import {
+  MAX_PROVIDER_REQUEST_BYTES,
+  MAX_PROVIDER_ESTIMATED_TOKENS,
+  PROVIDER_REQUEST_TIMEOUT_MS,
+  measureProviderRequest,
+} from '../types/specialistWorkflow';
 
 type ProviderResponse = {
   text?: string;
@@ -18,7 +24,10 @@ type ProviderToolResponse = {
 };
 
 type ProviderSession = {
-  send: (message: string | ProviderToolResponse[]) => Promise<ProviderResponse>;
+  send: (
+    message: string | ProviderToolResponse[],
+    options?: { signal?: AbortSignal; requestId?: string; timeoutMs?: number },
+  ) => Promise<ProviderResponse>;
   getHistory: () => unknown[];
 };
 
@@ -62,29 +71,90 @@ async function blobToBase64(file: Blob) {
 }
 
 async function fetchOpenRouter(config: MedleyConfig, body: Record<string, unknown>, signal?: AbortSignal) {
+  const measurement = measureProviderRequest(body);
+  if (!measurement.withinLimits) {
+    const error = new Error(
+      `Provider request exceeds limits: ${measurement.bytes}/${MAX_PROVIDER_REQUEST_BYTES} bytes, ` +
+      `${measurement.estimatedTokens}/${MAX_PROVIDER_ESTIMATED_TOKENS} estimated tokens`,
+    );
+    (error as any).status = 413;
+    (error as any).payloadMetrics = measurement;
+    throw error;
+  }
   const apiKey = getActiveApiKey(config);
-  const response = await fetch(OPENROUTER_API_URL, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-      'HTTP-Referer': window.location.origin,
-      'X-Title': 'AI Medley Architect'
-    },
-    body: JSON.stringify(body),
-    signal
-  });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const response = await fetch(OPENROUTER_API_URL, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': window.location.origin,
+        'X-Title': 'AI Medley Architect'
+      },
+      body: JSON.stringify(body),
+      signal
+    });
 
-  if (!response.ok) {
+    if (response.ok) return response.json();
     const text = await response.text();
+    if (response.status === 429 && attempt === 0) {
+      await new Promise<void>((resolve, reject) => {
+        const timer = window.setTimeout(() => {
+          signal?.removeEventListener('abort', abort);
+          resolve();
+        }, 2_000);
+        const abort = () => {
+          window.clearTimeout(timer);
+          signal?.removeEventListener('abort', abort);
+          reject(signal?.reason ?? new DOMException('Aborted', 'AbortError'));
+        };
+        if (signal?.aborted) abort();
+        else signal?.addEventListener('abort', abort, { once: true });
+      });
+      continue;
+    }
     const error = new Error(`OpenRouter request failed (${response.status})`);
     (error as any).status = response.status;
     (error as any).rawBody = text;
-    (error as any).requestBody = body; // for debugging
+    (error as any).requestBody = body;
     throw error;
   }
+  throw new Error('OpenRouter request failed after retry');
+}
 
-  return response.json();
+function createRequestSignal(signal?: AbortSignal, timeoutMs = PROVIDER_REQUEST_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => {
+    controller.abort(new DOMException('Provider request timed out', 'TimeoutError'));
+  }, timeoutMs);
+  const abort = () => controller.abort(signal?.reason ?? new DOMException('Aborted', 'AbortError'));
+  if (signal?.aborted) abort();
+  else signal?.addEventListener('abort', abort, { once: true });
+  return {
+    signal: controller.signal,
+    cleanup() {
+      window.clearTimeout(timeout);
+      signal?.removeEventListener('abort', abort);
+    },
+  };
+}
+
+async function abortablePromise<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError');
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+    signal.addEventListener('abort', abort, { once: true });
+    promise.then(
+      value => {
+        signal.removeEventListener('abort', abort);
+        resolve(value);
+      },
+      error => {
+        signal.removeEventListener('abort', abort);
+        reject(error);
+      },
+    );
+  });
 }
 
 export function createProviderSession(
@@ -107,16 +177,27 @@ export function createProviderSession(
     });
 
     return {
-      async send(message) {
-        const result = await chat.sendMessage({ message: message as any });
-        return {
-          text: result.text ?? '',
-          functionCalls: (result.functionCalls ?? []).map(call => ({
-            id: call.id,
-            name: call.name,
-            args: call.args
-          }))
-        };
+      async send(message, options) {
+        const request = createRequestSignal(options?.signal, options?.timeoutMs);
+        try {
+          const result = await abortablePromise(
+            chat.sendMessage({ message: message as any }),
+            request.signal,
+          );
+          return {
+            text: result.text ?? '',
+            functionCalls: (result.functionCalls ?? []).map(call => ({
+              id: call.id,
+              name: call.name,
+              args: call.args
+            }))
+          };
+        } catch (error) {
+          if (request.signal.aborted && request.signal.reason) throw request.signal.reason;
+          throw error;
+        } finally {
+          request.cleanup();
+        }
       },
       getHistory() {
         return chat.getHistory() as unknown[];
@@ -133,7 +214,7 @@ export function createProviderSession(
     getHistory() {
       return messages.slice(1);
     },
-    async send(message) {
+    async send(message, options) {
       if (typeof message === 'string') {
         messages.push({ role: 'user', content: message });
       } else {
@@ -146,13 +227,22 @@ export function createProviderSession(
         }
       }
 
-      const data = await fetchOpenRouter(config, {
-        model: config.model,
-        temperature,
-        messages,
-        tools,
-        tool_choice: 'auto'
-      });
+      const request = createRequestSignal(options?.signal, options?.timeoutMs);
+      let data: any;
+      try {
+        data = await fetchOpenRouter(config, {
+          model: config.model,
+          temperature,
+          messages,
+          tools,
+          tool_choice: 'auto'
+        }, request.signal);
+      } catch (error) {
+        if (request.signal.aborted && request.signal.reason) throw request.signal.reason;
+        throw error;
+      } finally {
+        request.cleanup();
+      }
 
       const choice = data?.choices?.[0];
       const assistantMessage = choice?.message ?? {};

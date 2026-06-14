@@ -72,7 +72,7 @@ export default function MedleyMatchPanel({ design }: { design: MedleyDesignPaylo
   const advancedTracks = design.tracks.filter(track => track.advancedAnalysisAvailable);
 
   return (
-    <aside className="w-96 border-l border-[#1A1A1A] bg-[#090909] flex flex-col shrink-0">
+    <aside className="w-full md:w-96 min-h-[420px] md:min-h-0 border-t md:border-t-0 md:border-l border-[#1A1A1A] bg-[#090909] flex flex-col shrink-0">
       <div className="p-5 border-b border-[#1A1A1A]">
         <div className="text-[10px] uppercase tracking-widest text-[#555] mb-3 font-semibold flex items-center gap-2">
           <Layers className="w-3.5 h-3.5" /> Medley Match

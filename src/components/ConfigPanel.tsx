@@ -9,8 +9,11 @@ interface ConfigPanelProps {
 
 export type ProviderId = 'gemini' | 'openrouter';
 export type AudioAnalysisMode = 'local' | 'clips' | 'ask' | 'cloud';
+export type ModelMode = 'automatic' | 'manual';
 
 export interface MedleyConfig {
+  configVersion: 2;
+  modelMode: ModelMode;
   provider: ProviderId;
   model: string;
   geminiApiKey: string;
@@ -24,8 +27,10 @@ export interface MedleyConfig {
 }
 
 export const DEFAULT_CONFIG: MedleyConfig = {
-  provider: 'gemini',
-  model: 'gemini-2.5-pro',
+  configVersion: 2,
+  modelMode: 'automatic',
+  provider: 'openrouter',
+  model: 'meta-llama/llama-3.3-70b-instruct:free',
   geminiApiKey: '',
   openrouterApiKey: '',
   audioAnalysisMode: 'local',
@@ -50,6 +55,9 @@ const GEMINI_MODELS = [
 ];
 
 const OPENROUTER_MODELS = [
+  // Automatic specialist team
+  { id: 'nvidia/nemotron-3-ultra-550b-a55b:free', label: 'Nemotron 3 Ultra 550B (free)', desc: 'Arrangement, music theory, and quality review specialist' },
+  { id: 'nex-agi/nex-n2-pro:free', label: 'Nex-N2-Pro (free)', desc: 'Tool execution, correction, and production specialist' },
   // Free high-capability models (recommended for testing)
   { id: 'nousresearch/hermes-3-llama-3.1-405b:free', label: 'Hermes 3 405B (free)', desc: 'Massive 405B — strong reasoning & instruction following' },
   { id: 'qwen/qwen3-coder:free', label: 'Qwen3 Coder 480B (free)', desc: 'Very large Qwen — excellent structured output & logic' },
@@ -84,8 +92,7 @@ export default function ConfigPanel({ config, onUpdate, onClose }: ConfigPanelPr
   };
 
   const setProvider = (provider: ProviderId) => {
-    const fallbackModel = provider === 'gemini' ? 'gemini-2.5-pro' : 'openrouter/owl-alpha';
-    update({ provider, model: fallbackModel });
+    update({ provider });
   };
 
   const models = local.provider === 'gemini' ? GEMINI_MODELS : OPENROUTER_MODELS;
@@ -95,9 +102,29 @@ export default function ConfigPanel({ config, onUpdate, onClose }: ConfigPanelPr
       <div className="bg-[#111] border border-[#222] rounded-xl w-full max-w-xl p-6 shadow-2xl max-h-[90vh] overflow-y-auto custom-scrollbar" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-[15px] font-bold text-white uppercase tracking-wider">Configuration</h2>
-          <button onClick={onClose} className="text-[#666] hover:text-white"><X className="w-5 h-5" /></button>
+          <button onClick={onClose} aria-label="Close configuration" className="text-[#666] hover:text-white"><X className="w-5 h-5" /></button>
         </div>
 
+        <div className="mb-5">
+          <label className="block text-[10px] uppercase tracking-widest text-[#666] mb-2 font-semibold">Workflow Mode</label>
+          <div className="grid grid-cols-2 gap-2">
+            {([
+              { id: 'automatic', label: 'Specialist Team', desc: 'Super analyzes, Ultra arranges, Nex produces' },
+              { id: 'manual', label: 'Manual Model', desc: 'Use one selected model for the full run' },
+            ] as const).map(mode => (
+              <button
+                key={mode.id}
+                onClick={() => update({ modelMode: mode.id })}
+                className={`p-3 rounded-lg border text-left transition-all ${local.modelMode === mode.id ? 'border-[#00F0FF] bg-[#00F0FF]/5' : 'border-[#222] bg-[#0A0A0A] hover:border-[#444]'}`}
+              >
+                <div className={`text-[11px] font-bold ${local.modelMode === mode.id ? 'text-[#00F0FF]' : 'text-[#AAA]'}`}>{mode.label}</div>
+                <div className="text-[9px] text-[#555] mt-0.5">{mode.desc}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {local.modelMode === 'manual' && (
         <div className="mb-5">
           <label className="block text-[10px] uppercase tracking-widest text-[#666] mb-2 font-semibold">Provider</label>
           <div className="grid grid-cols-2 gap-2">
@@ -117,8 +144,19 @@ export default function ConfigPanel({ config, onUpdate, onClose }: ConfigPanelPr
             ))}
           </div>
         </div>
+        )}
 
-        {/* Model Selection */}
+        {local.modelMode === 'automatic' ? (
+          <div className="mb-5 border border-[#222] bg-[#0A0A0A] rounded-lg p-3">
+            <div className="text-[10px] uppercase tracking-widest text-[#666] font-semibold mb-2">Automatic Specialists</div>
+            <div className="space-y-1 text-[10px]">
+              <div className="flex justify-between gap-3"><span className="text-[#777]">Context</span><span className="text-[#CCC]">Nemotron 3 Super</span></div>
+              <div className="flex justify-between gap-3"><span className="text-[#777]">Arrangement / Review</span><span className="text-[#CCC]">Nemotron 3 Ultra</span></div>
+              <div className="flex justify-between gap-3"><span className="text-[#777]">Production</span><span className="text-[#CCC]">Nex-N2-Pro</span></div>
+            </div>
+            <p className="mt-2 text-[9px] text-[#555]">Automatic mode always uses OpenRouter and local audio analysis.</p>
+          </div>
+        ) : (
         <div className="mb-5">
           <label className="block text-[10px] uppercase tracking-widest text-[#666] mb-2 font-semibold">AI Model</label>
           <div className="grid grid-cols-2 gap-2">
@@ -145,16 +183,17 @@ export default function ConfigPanel({ config, onUpdate, onClose }: ConfigPanelPr
             </div>
           )}
         </div>
+        )}
 
         <div className="mb-5">
           <label className="block text-[10px] uppercase tracking-widest text-[#666] mb-2 font-semibold">
-            {local.provider === 'gemini' ? 'Gemini API Key' : 'OpenRouter API Key'}
+            {local.modelMode === 'automatic' || local.provider === 'openrouter' ? 'OpenRouter API Key' : 'Gemini API Key'}
           </label>
           <input
             type="password"
-            value={local.provider === 'gemini' ? local.geminiApiKey : local.openrouterApiKey}
-            onChange={e => update(local.provider === 'gemini' ? { geminiApiKey: e.target.value } : { openrouterApiKey: e.target.value })}
-            placeholder={local.provider === 'gemini' ? 'AIza...' : 'sk-or-v1-...'}
+            value={local.modelMode === 'automatic' || local.provider === 'openrouter' ? local.openrouterApiKey : local.geminiApiKey}
+            onChange={e => update(local.modelMode === 'automatic' || local.provider === 'openrouter' ? { openrouterApiKey: e.target.value } : { geminiApiKey: e.target.value })}
+            placeholder={local.modelMode === 'automatic' || local.provider === 'openrouter' ? 'sk-or-v1-...' : 'AIza...'}
             className="w-full bg-[#0A0A0A] border border-[#222] rounded-lg px-3 py-2.5 text-[11px] text-[#CCC] placeholder:text-[#333] focus:border-[#00F0FF]/50 focus:outline-none"
           />
           <div className="mt-1 text-[9px] text-[#555]">
