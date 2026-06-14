@@ -45,6 +45,7 @@ export const MAX_COMPLETE_CANDIDATES = 3;
 export const PROVIDER_REQUEST_TIMEOUT_MS = 120_000;
 export const MAX_PROVIDER_REQUEST_BYTES = 100 * 1024;
 export const MAX_PROVIDER_ESTIMATED_TOKENS = 24_000;
+export const PROVIDER_REGRESSION_TARGET_TOKENS = 16_000;
 
 const Id = z.string().trim().min(1).max(200);
 const ShortText = z.string().trim().max(2_000);

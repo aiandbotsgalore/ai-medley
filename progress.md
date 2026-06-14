@@ -176,3 +176,20 @@
 - Confirmed `candidate-001.mp3` and `medley_final.mp3` have the same 25,932,326-byte size and SHA-256 digest.
 - Confirmed `/api/audio/7s66ce77` returns seekable MP3 range responses and browser playback advances without errors.
 - The completed 10:48 medley is available at `workdir/7s66ce77/medley_final.mp3`.
+- Logan approved the Provider Payload Verification Gate as the only active work.
+- Paused the larger hardening plan until every automatic provider request passes exact size verification.
+- Began implementing shared exact serialization, role-specific compaction, three/four-track regression coverage, and live request measurement.
+- Added `providerRequest.ts` with exact serialized-body measurement and component breakdowns.
+- Added role-specific specialist payloads and tool allowlists.
+- Changed OpenRouter networking to send the exact measured serialized string.
+- Added runtime request auditing with provider-reported prompt-token capture.
+- Added `providerPayloadAudit.test.ts` using the current three-track and four-track library data.
+- Audited 117 initial, repair, fallback, continuation, correction, and quality-review requests.
+- Verified the previous 237,644-byte request shape is rejected before network activity.
+- Fixed a live production-report regression by retaining the required server-issued preview path in compact production tool results.
+- Completed live automatic session `2oquenv9`.
+- Completed forced correction session `payload-correction-live`.
+- Confirmed finalization made no provider request in both runs.
+- Confirmed both approved candidates exactly match their final MP3 files.
+- Verified `npm test`, `npm run lint`, `npm run build`, server health, and a browser console with no errors.
+- Added `provider-payload-verification.md` with automated and live measurements.

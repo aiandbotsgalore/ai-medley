@@ -457,3 +457,50 @@ Status: complete
 - Added a responsive seven-stage UI with specialist role/model, activity, correction state, candidate state, and warnings.
 - Verified direct tests, TypeScript, production build, server health, desktop/mobile browser rendering, real FFmpeg preview/candidate rendering, forged-report rejection, checkpoint lifecycle, exact final-file hashing, idempotent finalization, and interrupted-session discard.
 - Verified a complete live OpenRouter run with four tracks. The workflow handled an Ultra timeout through the approved fallback route, produced and reviewed `candidate-001`, and promoted the approved candidate byte-for-byte to the final MP3.
+
+## Provider Payload Verification Gate
+
+Status: complete
+
+Goal: Prove every complete automatic OpenRouter request remains below 102,400 UTF-8 bytes, 24,000 hard-limit estimated tokens, and the stricter 16,000-token regression target for both three-track and full four-track projects.
+
+### Phase 29: Exact Request Serialization
+Status: complete
+
+- Add one shared builder that returns the request object, exact serialized body, UTF-8 byte count, estimated tokens, and component breakdown.
+- Send the builder's serialized body directly through `fetch`.
+- Capture provider-reported prompt tokens when available.
+
+### Phase 30: Role-Specific Compaction
+Status: complete
+
+- Limit each specialist to its own tools and compact stage data.
+- Remove raw FFmpeg output, debug paths, preview paths, reasoning, unrelated assistant fields, and complete prior-stage history.
+- Keep production continuations bounded with sanitized tool calls and compact tool results.
+
+### Phase 31: Regression Audit
+Status: complete
+
+- Test three-track and full four-track projects, repairs, fallbacks, production continuations, both correction cycles, and the previous oversized failure shape.
+- Fail any current-library request above 16,000 estimated tokens or 102,400 UTF-8 bytes.
+- Confirm finalization sends no provider request.
+
+### Phase 32: Live Verification
+Status: complete
+
+- Run tests, type-check, production build, current-library audit, complete automatic OpenRouter run, and forced correction-cycle run.
+- Report every request measurement and the largest contributing component.
+
+## Provider Payload Verification Result
+
+- Added one exact OpenRouter request builder. The measured `serializedBody` is passed directly to `fetch`.
+- Added component breakdowns for system prompts, stage data, tool schemas, retained history, tool results, repair errors, and request envelope.
+- Added role-specific payload builders and exact tool allowlists.
+- Removed raw FFmpeg output, debug paths, provider reasoning, usage objects, and prior-stage chat history.
+- Kept the server-issued production preview path because it is required for authoritative execution-report validation; it is removed before Quality Review.
+- Added a 117-request regression audit using the current three-track and four-track library data.
+- Largest automated request: 13,607 bytes and 4,528 estimated tokens.
+- Largest live request: 13,553 bytes and 4,509 estimated tokens; successful OpenRouter usage reported 6,455 prompt tokens.
+- Completed a live four-track automatic run and a separate live one-correction-cycle run.
+- Confirmed finalization generated zero provider requests.
+- Verified tests, type-check, production build, browser console, server health, and exact candidate/final hashes.

@@ -179,10 +179,20 @@ Sources:
 - Interrupted-session discard removed a registered transition preview and checkpoint while preserving library source audio.
 - Browser verification found and fixed a phone-width clipping issue. At 390 x 844 the app now stacks the library, workspace, and metrics vertically with normal page scrolling.
 - Browser console verification reported zero errors and zero warnings.
-- No OpenRouter key is configured, so the live remote specialist chain remains the only unexecuted integration check.
+- The initial implementation check occurred before an OpenRouter key was configured; live remote specialist verification has since been completed.
 - The first live OpenRouter run exposed a timeout-classification edge case: a timed-out fetch could surface as `AbortError`, which the UI treated as user cancellation. Provider sessions now rethrow the request signal's `TimeoutError` reason.
 - The original arrangement handoff was still too large for reliable free-model latency. Keeping essential track facts, one best candidate per directed transition pair, the top eight transition candidates, and four strategies allowed the fallback model to complete.
 - Live session `7s66ce77` verified the complete remote chain. Super produced the brief, Ultra timed out during arrangement, Super completed the fallback arrangement, Nex executed production, Ultra approved the full candidate, and Nex finalized it.
 - The live candidate scored 85 overall, 88 for transition smoothness, 85 for emotional arc, and 80 for performer identity.
 - The approved candidate and final output both contain 25,932,326 bytes with SHA-256 `d56b7b3b1c8b0cf4a8cc0f9c97eb73c11cf6552c22ab6027e2dade7523239d48`.
 - Browser playback and HTTP byte-range streaming both work for the completed 648.09-second MP3.
+- The existing provider guard measures the complete OpenRouter request object, but tests only cover a synthetic oversized string and do not prove each workflow stage.
+- Production provider sessions accumulate assistant tool calls and tool results, so every continuation request must be measured.
+- Quality review currently receives the analyzer's raw FFmpeg output and candidate file/debug paths, which are unnecessary payload growth.
+- The completed live Context request was locally estimated below the old hard limit, while OpenRouter reported 24,437 prompt tokens. The 16,000 estimated-token regression ceiling is therefore required as safety headroom.
+- Exact serialization reduced the four-track Context request to 10,391 bytes and 3,464 estimated tokens; OpenRouter reported 4,154 actual prompt tokens.
+- The largest current-library regression request is Arrangement repair at 13,607 bytes and 4,528 estimated tokens.
+- The largest live request is Arrangement at 13,553 bytes and 4,509 estimated tokens; the successful fallback reported 6,455 actual prompt tokens.
+- The first live verification exposed that removing production preview paths prevented authoritative report validation. The compact production result now retains only the required server-issued preview path and excludes it from Quality Review.
+- The full live automatic run completed as session `2oquenv9`; the forced correction run completed as `payload-correction-live`.
+- Both live final files are byte-for-byte identical to their approved candidates.

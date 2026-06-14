@@ -41,6 +41,7 @@ import {
   getStartConfigurationError,
   migrateMedleyConfig,
 } from './utils/configMigration';
+import type { ProviderRequestAudit } from './engine/providerRequest';
 
 type AppStatus = 'idle' | 'uploading' | 'running' | 'completed' | 'error';
 
@@ -195,6 +196,7 @@ export default function App() {
   const [specialistModel, setSpecialistModel] = useState<string>('');
   const [specialistRole, setSpecialistRole] = useState<SpecialistRole | null>(null);
   const activeRequestSequenceRef = useRef(0);
+  const providerRequestAuditsRef = useRef<ProviderRequestAudit[]>([]);
 
   // Used for manual "Force Model Switch" button from the header
   const forceModelSwitchRef = useRef<(() => void) | null>(null);
@@ -1171,6 +1173,8 @@ export default function App() {
   ) => {
     const sid = resume?.sessionId ?? Math.random().toString(36).substring(2, 10);
     const requestSequence = ++activeRequestSequenceRef.current;
+    providerRequestAuditsRef.current = [];
+    (window as any).__providerRequestAudits = providerRequestAuditsRef.current;
     setSessionId(sid);
     sessionIdRef.current = sid;
     connectSSE(sid, {
@@ -1214,6 +1218,20 @@ export default function App() {
             iteration: review.candidateVersion,
             phase: 'QUALITY REVIEW',
           });
+        },
+        onProviderRequestAudit: audit => {
+          const existingIndex = providerRequestAuditsRef.current.findIndex(
+            item => item.requestId === audit.requestId,
+          );
+          if (existingIndex >= 0) providerRequestAuditsRef.current[existingIndex] = audit;
+          else providerRequestAuditsRef.current.push(audit);
+          (window as any).__providerRequestAudits = providerRequestAuditsRef.current;
+          if (audit.status === 'measured') {
+            addLog(
+              `Provider payload ${audit.stage} #${audit.requestNumber}: ` +
+              `${audit.utf8Bytes.toLocaleString()} bytes, ${audit.estimatedTokens.toLocaleString()} estimated tokens`,
+            );
+          }
         },
       });
       if (activeRequestSequenceRef.current !== requestSequence) return;

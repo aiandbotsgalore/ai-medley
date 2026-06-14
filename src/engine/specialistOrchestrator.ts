@@ -3,6 +3,16 @@ import type { MedleyConfig } from '../components/ConfigPanel';
 import type { LibraryFile } from '../components/LibrarySidebar';
 import type { MedleyDesignPayload } from './medleyIntelligence';
 import { createProviderSession } from './providers';
+import type { ProviderRequestAudit } from './providerRequest';
+import {
+  SPECIALIST_SYSTEM_PROMPTS,
+  SPECIALIST_TOOLS,
+  buildArrangementStageData,
+  buildContextStageData,
+  buildProductionStageData,
+  buildQualityReviewStageData,
+  compactTransitionToolResult,
+} from './specialistPayloads';
 import {
   ArrangementPlanSchema,
   ExecutionReportSchema,
@@ -14,7 +24,6 @@ import {
   SPECIALIST_MODELS,
   TransitionExecutionRequestSchema,
   formatValidationIssues,
-  specialistJsonSchemas,
   validateArrangementContext,
   validateExecutionContext,
   validateProjectBriefContext,
@@ -46,6 +55,7 @@ type WorkflowOptions = {
   onStage: (stage: SpecialistStage, role: SpecialistRole | null, model: string | null) => void;
   onCheckpoint: (checkpoint: AutomaticWorkflowCheckpoint) => void;
   onMetrics: (metrics: QualityReview) => void;
+  onProviderRequestAudit?: (audit: ProviderRequestAudit) => void;
 };
 
 type StructuredRequestOptions<T> = {
@@ -56,18 +66,15 @@ type StructuredRequestOptions<T> = {
   signal: AbortSignal;
   schema: z.ZodType<T>;
   toolName: string;
-  toolSchema: unknown;
+  systemInstruction: string;
+  tools: unknown[];
   prompt: string;
   contextualValidate?: (value: T) => string[];
   onLog: (message: string) => void;
   onModel: (model: string) => void;
   onRepair?: () => void;
+  onRequestAudit?: (audit: ProviderRequestAudit) => void;
 };
-
-const functionTool = (name: string, description: string, parameters: unknown) => ({
-  type: 'function' as const,
-  function: { name, description, parameters },
-});
 
 function assertActive(signal: AbortSignal) {
   if (signal.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError');
@@ -94,99 +101,9 @@ function buildContext(design: MedleyDesignPayload): SpecialistContext {
   };
 }
 
-export function compactMedleyDesignForSpecialists(design: MedleyDesignPayload) {
-  return {
-    schemaVersion: design.schemaVersion,
-    userConstraints: design.userConstraints,
-    tracks: design.tracks.map(track => ({
-      trackId: track.trackId,
-      filename: track.filename,
-      durationSec: track.durationSec,
-      tempoEstimate: track.tempoEstimate,
-      tempoConfidence: track.tempoConfidence,
-      keyEstimate: track.keyEstimate,
-      keyConfidence: track.keyConfidence,
-      averageEnergy: track.averageEnergy,
-      peakEnergy: track.peakEnergy,
-      brightnessProxy: track.brightnessProxy,
-      sonicDensityProxy: track.sonicDensityProxy,
-      confidence: track.confidence,
-      warnings: track.warnings,
-    })),
-    sections: design.sections.map(section => ({
-      sectionId: section.sectionId,
-      trackId: section.trackId,
-      startSec: section.startSec,
-      endSec: section.endSec,
-      durationSec: section.durationSec,
-      labels: section.labels,
-      confidence: section.confidence,
-      warnings: section.warnings,
-    })),
-    transitionMatrixSummary: design.transitionMatrixSummary.map(transition => ({
-      fromTrackId: transition.fromTrackId,
-      toTrackId: transition.toTrackId,
-      fromSectionId: transition.fromSectionId,
-      toSectionId: transition.toSectionId,
-      fromExitSec: transition.fromExitSec,
-      toEntrySec: transition.toEntrySec,
-      transitionType: transition.transitionType,
-      score: transition.score,
-      confidence: transition.confidence,
-      reason: transition.reason,
-      warnings: transition.warnings,
-    })),
-    recommendedStrategies: design.recommendedStrategies,
-    warnings: design.warnings,
-  };
-}
-
-function buildArrangementHandoff(projectBrief: ProjectBrief, design: ReturnType<typeof compactMedleyDesignForSpecialists>) {
-  const pairBest = new Map<string, (typeof design.transitionMatrixSummary)[number]>();
-  for (const transition of design.transitionMatrixSummary) {
-    const key = `${transition.fromTrackId}:${transition.toTrackId}`;
-    const existing = pairBest.get(key);
-    if (!existing || transition.score > existing.score) pairBest.set(key, transition);
-  }
-  const selected = new Map<string, (typeof design.transitionMatrixSummary)[number]>();
-  for (const transition of pairBest.values()) {
-    selected.set(
-      `${transition.fromTrackId}:${transition.fromSectionId}:${transition.toTrackId}:${transition.toSectionId}`,
-      transition,
-    );
-  }
-  for (const transition of design.transitionMatrixSummary.slice(0, 8)) {
-    selected.set(
-      `${transition.fromTrackId}:${transition.fromSectionId}:${transition.toTrackId}:${transition.toSectionId}`,
-      transition,
-    );
-  }
-  return {
-    projectBrief: {
-      schemaVersion: projectBrief.schemaVersion,
-      projectId: projectBrief.projectId,
-      targetDurationSec: projectBrief.targetDurationSec,
-      trackSummaries: projectBrief.trackSummaries.map(track => ({
-        trackId: track.trackId,
-        filename: track.filename,
-        durationSec: track.durationSec,
-        tempoEstimate: track.tempoEstimate,
-        keyEstimate: track.keyEstimate,
-        confidence: track.confidence,
-        recommendedSectionIds: track.recommendedSectionIds,
-      })),
-      recommendedOrderIds: projectBrief.recommendedOrderIds,
-      constraints: projectBrief.constraints,
-      summary: projectBrief.summary,
-    },
-    transitionCandidates: [...selected.values()],
-    strategies: design.recommendedStrategies.slice(0, 4),
-  };
-}
-
 async function requestStructuredArtifact<T>(options: StructuredRequestOptions<T>): Promise<T> {
   const {
-    role, config, signal, schema, toolName, toolSchema, prompt,
+    role, config, signal, schema, toolName, systemInstruction, tools, prompt,
     contextualValidate, onLog, onModel,
   } = options;
   let lastError: unknown = null;
@@ -194,20 +111,27 @@ async function requestStructuredArtifact<T>(options: StructuredRequestOptions<T>
     assertActive(signal);
     onModel(model);
     onLog(`Specialist ${role}: ${model}`);
-    const session = createProviderSession(
-      { ...config, provider: 'openrouter', model },
-      `You are the ${role} specialist in a staged music-medley workflow. Return results only by calling ${toolName}. Do not invent track IDs, section IDs, or timestamps.`,
-      [functionTool(toolName, `Submit the validated ${toolName} artifact.`, toolSchema)],
-      0.1,
-    );
     let repairAttempt = 0;
     let message = prompt;
     while (repairAttempt <= 1) {
       try {
+        const session = createProviderSession(
+          { ...config, provider: 'openrouter', model },
+          systemInstruction,
+          tools,
+          0.1,
+          [],
+          {
+            stage: options.stage,
+            role,
+            onRequestAudit: options.onRequestAudit,
+          },
+        );
         const result = await session.send(message, {
           signal,
           requestId: `${options.sessionId}:${options.stage}:${model}:${repairAttempt}`,
           timeoutMs: PROVIDER_REQUEST_TIMEOUT_MS,
+          messageCategory: repairAttempt ? 'repairErrors' : 'stageData',
         });
         assertActive(signal);
         const call = result.functionCalls?.find(item => item.name === toolName);
@@ -219,9 +143,11 @@ async function requestStructuredArtifact<T>(options: StructuredRequestOptions<T>
         if (parsed.success && issues.length === 0) return parsed.data;
         if (repairAttempt === 0) {
           repairAttempt++;
-          message =
-            `Your ${toolName} arguments failed validation. Call ${toolName} again with corrected arguments.\n` +
-            issues.map(issue => `- ${issue}`).join('\n');
+          message = JSON.stringify({
+            task: `Repair the ${toolName} artifact and call ${toolName} again.`,
+            stageData: JSON.parse(prompt),
+            repairErrors: issues,
+          });
           onLog(`Validation repair requested from ${model}: ${issues.join('; ')}`);
           options.onRepair?.();
           continue;
@@ -248,34 +174,6 @@ async function runProductionRole(options: {
   onModel: (model: string) => void;
 }): Promise<ExecutionReport> {
   const { workflow, plan, correctionCount, review, executionVersion } = options;
-  const reportTool = functionTool(
-    'submit_execution_report',
-    'Submit the complete production execution report after every transition has been attempted.',
-    specialistJsonSchemas.executionReport,
-  );
-  const transitionTool = functionTool(
-    'apply_musical_transition',
-    'Apply one transition from the locked arrangement plan.',
-    {
-      type: 'object',
-      additionalProperties: false,
-      required: [
-        'transitionId', 'fromTrackId', 'fromSectionId', 'toTrackId',
-        'toSectionId', 'style', 'duration', 'beatAlign',
-      ],
-      properties: {
-        transitionId: { type: 'string' },
-        fromTrackId: { type: 'string' },
-        fromSectionId: { type: 'string' },
-        toTrackId: { type: 'string' },
-        toSectionId: { type: 'string' },
-        style: { type: 'string' },
-        duration: { type: 'number' },
-        beatAlign: { type: 'boolean' },
-        notes: { type: 'string' },
-      },
-    },
-  );
   let lastError: unknown = null;
   for (const model of SPECIALIST_FALLBACKS.production) {
     assertActive(workflow.signal);
@@ -284,18 +182,23 @@ async function runProductionRole(options: {
     workflow.onLog(`Production specialist: ${model}`);
     const session = createProviderSession(
       { ...workflow.config, provider: 'openrouter', model },
-      'You are the production specialist. Execute every locked transition with apply_musical_transition. After receiving every result, call submit_execution_report exactly once. Do not change track order or invent IDs.',
-      [transitionTool, reportTool],
+      SPECIALIST_SYSTEM_PROMPTS.production,
+      [...SPECIALIST_TOOLS.production],
       0.1,
+      [],
+      {
+        stage: correctionCount ? 'correction' : 'production',
+        role: 'production',
+        onRequestAudit: workflow.onProviderRequestAudit,
+      },
     );
-    const prompt = JSON.stringify({
-      task: correctionCount ? 'Apply the requested corrections and execute the full locked plan.' : 'Execute the locked arrangement.',
+    const prompt = JSON.stringify(buildProductionStageData({
       sessionId: workflow.sessionId,
       executionVersion,
       correctionCount,
       plan,
       review,
-    });
+    }));
     let result: any;
     let repairUsed = false;
     try {
@@ -334,7 +237,11 @@ async function runProductionRole(options: {
               signal: workflow.signal,
             });
             const data = await response.json().catch(() => ({}));
-            responses.push({ name: call.name, id: call.id, response: data });
+            responses.push({
+              name: call.name,
+              id: call.id,
+              response: compactTransitionToolResult(data),
+            });
             continue;
           }
           if (call.name === 'submit_execution_report') {
@@ -407,7 +314,6 @@ function makeCheckpoint(
 
 export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
   const context = buildContext(options.design);
-  const compactDesign = compactMedleyDesignForSpecialists(options.design);
   let checkpoint = options.resume
     ? makeCheckpoint({ ...options.resume, activeRequestSequence: options.requestSequence })
     : makeCheckpoint({
@@ -442,13 +348,13 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
       signal: options.signal,
       schema: ProjectBriefSchema,
       toolName: 'submit_project_brief',
-      toolSchema: specialistJsonSchemas.projectBrief,
-      prompt: JSON.stringify({
-        task: 'Create a compact factual project brief from this local medley intelligence.',
-        projectId: options.sessionId,
-        targetDurationSec: options.config.targetDuration * 60,
-        design: compactDesign,
-      }),
+      systemInstruction: SPECIALIST_SYSTEM_PROMPTS.context,
+      tools: [...SPECIALIST_TOOLS.context],
+      prompt: JSON.stringify(buildContextStageData(
+        options.design,
+        options.sessionId,
+        options.config.targetDuration * 60,
+      )),
       contextualValidate: brief => [
         ...(brief.projectId !== options.sessionId ? ['projectId: Must match the session ID'] : []),
         ...validateProjectBriefContext(brief, context),
@@ -463,6 +369,7 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
         });
       },
       onRepair: () => save({ repairCount: checkpoint.repairCount + 1 }),
+      onRequestAudit: options.onProviderRequestAudit,
     });
     await readJsonResponse(await fetch('/api/session/project-brief', {
       method: 'POST',
@@ -482,7 +389,6 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
 
   let arrangementPlan = checkpoint.arrangementPlan;
   if (!arrangementPlan) {
-    const arrangementHandoff = buildArrangementHandoff(projectBrief, compactDesign);
     options.onStage('arrangement', 'arrangement', SPECIALIST_MODELS.arrangement);
     save({ stage: 'arrangement', activeRole: 'arrangement', activeModel: SPECIALIST_MODELS.arrangement });
     arrangementPlan = await requestStructuredArtifact({
@@ -493,11 +399,9 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
       signal: options.signal,
       schema: ArrangementPlanSchema,
       toolName: 'set_design_plan',
-      toolSchema: specialistJsonSchemas.arrangementPlan,
-      prompt: JSON.stringify({
-        task: 'Create one exact, musically coherent arrangement using only supplied IDs and timestamps.',
-        ...arrangementHandoff,
-      }),
+      systemInstruction: SPECIALIST_SYSTEM_PROMPTS.arrangement,
+      tools: [...SPECIALIST_TOOLS.arrangement],
+      prompt: JSON.stringify(buildArrangementStageData(projectBrief, options.design)),
       contextualValidate: plan => {
         const errors = validateArrangementContext(plan, context);
         if (plan.projectId !== options.sessionId) errors.push('projectId: Must match the session ID');
@@ -518,6 +422,7 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
         });
       },
       onRepair: () => save({ repairCount: checkpoint.repairCount + 1 }),
+      onRequestAudit: options.onProviderRequestAudit,
     });
     await readJsonResponse(await fetch('/api/session/design-plan', {
       method: 'POST',
@@ -604,14 +509,14 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
         signal: options.signal,
         schema: QualityReviewSchema,
         toolName: 'submit_quality_review',
-        toolSchema: specialistJsonSchemas.qualityReview,
-        prompt: JSON.stringify({
-          task: 'Review the assembled candidate using the execution report and objective local quality measurements. Approve it unless specific correctable issues remain.',
+        systemInstruction: SPECIALIST_SYSTEM_PROMPTS.qualityReview,
+        tools: [...SPECIALIST_TOOLS.qualityReview],
+        prompt: JSON.stringify(buildQualityReviewStageData({
           candidate: currentCandidate,
           localQuality: candidateData.quality,
           executionReport,
           correctionCount,
-        }),
+        })),
         contextualValidate: review => {
           const errors: string[] = [];
           if (review.candidateId !== currentCandidate!.candidateId) errors.push('candidateId: Must match the active candidate');
@@ -628,6 +533,7 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
           });
         },
         onRepair: () => save({ repairCount: checkpoint.repairCount + 1 }),
+        onRequestAudit: options.onProviderRequestAudit,
       });
       options.onMetrics(qualityReview);
       await readJsonResponse(await fetch('/api/session/quality-review', {

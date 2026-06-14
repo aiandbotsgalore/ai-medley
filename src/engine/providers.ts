@@ -4,8 +4,14 @@ import {
   MAX_PROVIDER_REQUEST_BYTES,
   MAX_PROVIDER_ESTIMATED_TOKENS,
   PROVIDER_REQUEST_TIMEOUT_MS,
-  measureProviderRequest,
 } from '../types/specialistWorkflow';
+import {
+  buildOpenRouterRequest,
+  sanitizeProviderAssistantMessage,
+  type CategorizedProviderMessage,
+  type ProviderMessageCategory,
+  type ProviderRequestAudit,
+} from './providerRequest';
 
 type ProviderResponse = {
   text?: string;
@@ -26,9 +32,20 @@ type ProviderToolResponse = {
 type ProviderSession = {
   send: (
     message: string | ProviderToolResponse[],
-    options?: { signal?: AbortSignal; requestId?: string; timeoutMs?: number },
+    options?: {
+      signal?: AbortSignal;
+      requestId?: string;
+      timeoutMs?: number;
+      messageCategory?: Extract<ProviderMessageCategory, 'stageData' | 'repairErrors'>;
+    },
   ) => Promise<ProviderResponse>;
   getHistory: () => unknown[];
+};
+
+type ProviderAuditContext = {
+  stage: string;
+  role: string;
+  onRequestAudit?: (audit: ProviderRequestAudit) => void;
 };
 
 type AnalyzeAudioOptions = {
@@ -70,15 +87,18 @@ async function blobToBase64(file: Blob) {
   return btoa(binary);
 }
 
-async function fetchOpenRouter(config: MedleyConfig, body: Record<string, unknown>, signal?: AbortSignal) {
-  const measurement = measureProviderRequest(body);
-  if (!measurement.withinLimits) {
+async function fetchOpenRouter(
+  config: MedleyConfig,
+  request: ReturnType<typeof buildOpenRouterRequest>,
+  signal?: AbortSignal,
+) {
+  if (!request.withinHardLimits) {
     const error = new Error(
-      `Provider request exceeds limits: ${measurement.bytes}/${MAX_PROVIDER_REQUEST_BYTES} bytes, ` +
-      `${measurement.estimatedTokens}/${MAX_PROVIDER_ESTIMATED_TOKENS} estimated tokens`,
+      `Provider request exceeds limits: ${request.utf8Bytes}/${MAX_PROVIDER_REQUEST_BYTES} bytes, ` +
+      `${request.estimatedTokens}/${MAX_PROVIDER_ESTIMATED_TOKENS} estimated tokens`,
     );
     (error as any).status = 413;
-    (error as any).payloadMetrics = measurement;
+    (error as any).payloadMetrics = request;
     throw error;
   }
   const apiKey = getActiveApiKey(config);
@@ -91,7 +111,7 @@ async function fetchOpenRouter(config: MedleyConfig, body: Record<string, unknow
         'HTTP-Referer': window.location.origin,
         'X-Title': 'AI Medley Architect'
       },
-      body: JSON.stringify(body),
+      body: request.serializedBody,
       signal
     });
 
@@ -116,7 +136,7 @@ async function fetchOpenRouter(config: MedleyConfig, body: Record<string, unknow
     const error = new Error(`OpenRouter request failed (${response.status})`);
     (error as any).status = response.status;
     (error as any).rawBody = text;
-    (error as any).requestBody = body;
+    (error as any).requestBody = request.requestBody;
     throw error;
   }
   throw new Error('OpenRouter request failed after retry');
@@ -162,7 +182,8 @@ export function createProviderSession(
   systemInstruction: string,
   tools: unknown[],
   temperature: number,
-  initialHistory?: unknown[]
+  initialHistory?: unknown[],
+  auditContext?: ProviderAuditContext,
 ): ProviderSession {
   if (config.provider === 'gemini') {
     const ai = new GoogleGenAI({ apiKey: config.geminiApiKey });
@@ -205,38 +226,66 @@ export function createProviderSession(
     };
   }
 
-  const messages: Array<Record<string, unknown>> = [
-    { role: 'system', content: systemInstruction },
-    ...((initialHistory as Array<Record<string, unknown>>) ?? [])
+  const messages: CategorizedProviderMessage[] = [
+    {
+      message: { role: 'system', content: systemInstruction },
+      category: 'systemPrompt',
+    },
+    ...((initialHistory as Array<Record<string, unknown>>) ?? []).map(message => ({
+      message,
+      category: 'messageHistory' as const,
+    })),
   ];
+  let requestNumber = 0;
 
   return {
     getHistory() {
-      return messages.slice(1);
+      return messages.slice(1).map(item => item.message);
     },
     async send(message, options) {
       if (typeof message === 'string') {
-        messages.push({ role: 'user', content: message });
+        messages.push({
+          message: { role: 'user', content: message },
+          category: options?.messageCategory ?? 'stageData',
+        });
       } else {
         for (const toolResponse of message) {
           messages.push({
-            role: 'tool',
-            tool_call_id: toolResponse.id,
-            content: JSON.stringify(toolResponse.response)
+            message: {
+              role: 'tool',
+              tool_call_id: toolResponse.id,
+              content: JSON.stringify(toolResponse.response),
+            },
+            category: 'toolResults',
           });
         }
       }
 
+      requestNumber++;
+      const builtRequest = buildOpenRouterRequest({
+        model: config.model,
+        temperature,
+        messages,
+        tools,
+      });
+      const requestId = options?.requestId ?? `${auditContext?.stage ?? 'provider'}:${requestNumber}`;
+      const auditBase: ProviderRequestAudit = {
+        requestId,
+        stage: auditContext?.stage ?? 'unknown',
+        role: auditContext?.role ?? 'unknown',
+        model: config.model,
+        requestNumber,
+        tools: tools.map((tool: any) => String(tool?.function?.name ?? '')).filter(Boolean),
+        utf8Bytes: builtRequest.utf8Bytes,
+        estimatedTokens: builtRequest.estimatedTokens,
+        breakdown: builtRequest.breakdown,
+        status: 'measured',
+      };
+      auditContext?.onRequestAudit?.(auditBase);
       const request = createRequestSignal(options?.signal, options?.timeoutMs);
       let data: any;
       try {
-        data = await fetchOpenRouter(config, {
-          model: config.model,
-          temperature,
-          messages,
-          tools,
-          tool_choice: 'auto'
-        }, request.signal);
+        data = await fetchOpenRouter(config, builtRequest, request.signal);
       } catch (error) {
         if (request.signal.aborted && request.signal.reason) throw request.signal.reason;
         throw error;
@@ -246,7 +295,14 @@ export function createProviderSession(
 
       const choice = data?.choices?.[0];
       const assistantMessage = choice?.message ?? {};
-      messages.push(assistantMessage);
+      const sanitizedAssistantMessage = sanitizeProviderAssistantMessage({
+        ...assistantMessage,
+        content: normalizeTextContent(assistantMessage.content),
+      });
+      messages.push({
+        message: sanitizedAssistantMessage,
+        category: 'messageHistory',
+      });
 
       let functionCalls: any[] = [];
 
@@ -275,6 +331,11 @@ export function createProviderSession(
       }
 
       const usage = data?.usage;
+      auditContext?.onRequestAudit?.({
+        ...auditBase,
+        actualPromptTokens: usage?.prompt_tokens,
+        status: 'completed',
+      });
 
       return {
         text: normalizeTextContent(assistantMessage.content),
@@ -327,23 +388,28 @@ export async function analyzeAudioWithProvider(options: AnalyzeAudioOptions) {
   }
 
   const base64Audio = await blobToBase64(file);
-  const data = await fetchOpenRouter(config, {
+  const request = buildOpenRouterRequest({
     model: config.model,
     temperature: config.temperature,
     messages: [{
-      role: 'user',
-      content: [
-        { type: 'text', text: prompt },
-        {
-          type: 'input_audio',
-          input_audio: {
-            data: base64Audio,
-            format: mimeType.split('/')[1] || 'mpeg'
+      category: 'stageData',
+      message: {
+        role: 'user',
+        content: [
+          { type: 'text', text: prompt },
+          {
+            type: 'input_audio',
+            input_audio: {
+              data: base64Audio,
+              format: mimeType.split('/')[1] || 'mpeg'
+            }
           }
-        }
-      ]
-    }]
-  }, signal);
+        ]
+      },
+    }],
+    tools: [],
+  });
+  const data = await fetchOpenRouter(config, request, signal);
 
   return normalizeTextContent(data?.choices?.[0]?.message?.content);
 }
