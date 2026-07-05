@@ -3,17 +3,21 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=20 <27"
+  },
   "scripts": {
     "dev": "tsx server.ts",
-    "start": "node dist/server.cjs",
-    "build": "vite build && esbuild server.ts --platform=node --packages=external --outfile=dist/server.cjs",
-    "clean": "rm -rf dist",
+    "start": "node dist/server.js",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/server.js",
+    "clean": "node scripts/clean-dist.mjs",
     "lint": "tsc --noEmit",
-    "test": "tsx src/engine/medleyIntelligence.test.ts && tsx src/engine/localAudioAnalysis.test.ts && tsx src/types/specialistWorkflow.test.ts && tsx src/utils/configMigration.test.ts && tsx src/server/candidateStore.test.ts && tsx src/server/localAccess.test.ts && tsx src/engine/providerPayloadAudit.test.ts"
+    "test": "tsx src/engine/medleyIntelligence.test.ts && tsx src/engine/localAudioAnalysis.test.ts && tsx src/types/specialistWorkflow.test.ts && tsx src/engine/specialistPayloads.test.ts && tsx src/engine/providerRequest.test.ts && tsx src/engine/providers.test.ts && tsx src/engine/manualToolContracts.test.ts && tsx src/utils/configMigration.test.ts && tsx src/utils/accessibility.test.ts && tsx src/utils/automaticCheckpoint.test.ts && tsx src/utils/runGeneration.test.ts && tsx src/utils/preAnalysisPipeline.test.ts && tsx src/utils/startMedleyPipeline.test.ts && tsx src/utils/sseStreamController.test.ts && tsx src/server/sessionEventJournal.test.ts && tsx src/server/checkpointBinding.test.ts && tsx src/server/jsonStore.test.ts && tsx src/server/libraryPersistence.test.ts && tsx src/server/analysisContract.test.ts && tsx src/server/analysisJobRegistry.test.ts && tsx src/server/candidateStore.test.ts && tsx src/server/finalizationTransaction.test.ts && tsx src/server/transitionResolution.test.ts && tsx src/server/sessionFinalizationGuard.test.ts && tsx src/server/renderTransitionSelection.test.ts && tsx src/server/transitionGraph.test.ts && tsx src/server/audioArtifactProbe.test.ts && tsx src/server/candidateQualityGate.test.ts && tsx src/server/localAccess.test.ts && tsx src/server/pathPolicy.test.ts && tsx src/server/uploadPolicy.test.ts && tsx src/server/redaction.test.ts && tsx src/server/resourcePolicy.test.ts && tsx src/server/artifactInventory.test.ts && tsx src/server/startupConfig.test.ts && tsx src/engine/specialistOrchestrator.checkpoint.test.ts && tsx src/engine/providerPayloadAudit.test.ts && node scripts/release-contract.mjs",
+    "test:production-start": "node scripts/production-smoke.mjs",
+    "test:release-contract": "node scripts/release-contract.mjs"
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
-    "@google/generative-ai": "^0.21.0",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
     "cors": "^2.8.6",
@@ -22,7 +26,6 @@
     "express": "^4.21.2",
     "ffmpeg-static": "^5.3.0",
     "lucide-react": "^0.546.0",
-    "motion": "^12.23.24",
     "multer": "^2.1.1",
     "music-tempo": "^1.0.3",
     "react": "^19.0.1",
@@ -37,7 +40,6 @@
     "@types/multer": "^2.1.0",
     "@types/node": "^22.14.0",
     "@types/uuid": "^10.0.0",
-    "autoprefixer": "^10.4.21",
     "esbuild": "^0.28.0",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",

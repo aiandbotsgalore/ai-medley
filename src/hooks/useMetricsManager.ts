@@ -1,8 +1,8 @@
-import { useState, useCallback } from 'react';
-import type { ExecutionContextSummary } from '../components/ExecutionContextPanel';
-import { normalizeMetrics, isTerminationThresholdMet } from '../utils/metrics';
-import { EARLY_TERMINATION_SCORE } from '../constants/thresholds';
-import type { CanonicalMetrics } from '../types/autonomousSession';
+import { useState, useCallback } from "react";
+import type { ExecutionContextSummary } from "../components/ExecutionContextPanel";
+import { normalizeMetrics, isTerminationThresholdMet } from "../utils/metrics";
+import { EARLY_TERMINATION_SCORE } from "../constants/thresholds";
+import type { CanonicalMetrics } from "../types/autonomousSession";
 
 const CONVERGENCE_WINDOW = 4;
 const CONVERGENCE_DELTA = 2;
@@ -37,7 +37,7 @@ export function useMetricsManager() {
   const ingestMetrics = useCallback((raw: any): CanonicalMetrics => {
     const normalized = normalizeMetrics(raw) as CanonicalMetrics;
     setMetrics(normalized);
-    setMetricsHistory(prev => [...prev, normalized].slice(-20));
+    setMetricsHistory((prev) => [...prev, normalized].slice(-20));
     return normalized;
   }, []);
 
@@ -49,14 +49,19 @@ export function useMetricsManager() {
   // Accepts latestMetrics so convergence is computed against current data,
   // not stale React state that does not yet include the entry just ingested.
   // Four entries are required to produce three deltas.
-  const isConverged = useCallback((latestMetrics: CanonicalMetrics): boolean => {
-    const combined = [...metricsHistory, latestMetrics].slice(-CONVERGENCE_WINDOW);
-    if (combined.length < CONVERGENCE_WINDOW) return false;
-    const deltas = combined.slice(1).map((m, i) =>
-      Math.abs(m.overallScore - combined[i].overallScore)
-    );
-    return deltas.every(d => d < CONVERGENCE_DELTA);
-  }, [metricsHistory]);
+  const isConverged = useCallback(
+    (latestMetrics: CanonicalMetrics): boolean => {
+      const combined = [...metricsHistory, latestMetrics].slice(
+        -CONVERGENCE_WINDOW,
+      );
+      if (combined.length < CONVERGENCE_WINDOW) return false;
+      const deltas = combined
+        .slice(1)
+        .map((m, i) => Math.abs(m.overallScore - combined[i].overallScore));
+      return deltas.every((d) => d < CONVERGENCE_DELTA);
+    },
+    [metricsHistory],
+  );
 
   const resetMetrics = useCallback(() => {
     setMetrics(null);

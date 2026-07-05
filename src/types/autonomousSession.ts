@@ -1,13 +1,9 @@
-import type { MedleyDesignPayload } from '../engine/medleyIntelligence';
-import type { SemanticMemory } from './semanticMemory';
+import type { MedleyDesignPayload } from "../engine/medleyIntelligence";
+import type { SemanticMemory } from "./semanticMemory";
 
 // Matches the status values currently used in useAutonomousLoop.ts
 // DO NOT add new status values not already tracked
-export type SessionStatus =
-  | 'idle'
-  | 'running'
-  | 'completed'
-  | 'error';
+export type SessionStatus = "idle" | "running" | "completed" | "error";
 
 // Free-form string — values include the detailed phase label used by the UI
 // e.g. 'ANALYZE — Pre-analyzing Library', 'DESIGN — Building Structure', etc.
@@ -15,10 +11,10 @@ export type SessionPhase = string;
 
 // ALL metric values are 0–100 integers. No decimals. No other scale.
 export interface CanonicalMetrics {
-  emotionalArc: number;          // 0–100
-  transitionSmoothness: number;  // 0–100
-  performerIdentity: number;     // 0–100
-  overallScore: number;          // 0–100
+  emotionalArc: number; // 0–100
+  transitionSmoothness: number; // 0–100
+  performerIdentity: number; // 0–100
+  overallScore: number; // 0–100
   iteration: number;
   phase: string;
 }
@@ -48,11 +44,11 @@ export interface AutonomousSessionState {
 
 export function createInitialSessionState(
   sessionId: string,
-  activeModel: string
+  activeModel: string,
 ): AutonomousSessionState {
   return {
     sessionId,
-    status: 'idle',
+    status: "idle",
     activeModel,
     metrics: null,
     design: null,
@@ -64,7 +60,7 @@ export function createInitialSessionState(
     cheapLLMCalls: 0,
     autoAcceptedCount: 0,
     autoRejectedCount: 0,
-    currentPhase: 'Initializing',
+    currentPhase: "Initializing",
     semanticMemory: {
       lockedDecisions: [],
       rejectedApproaches: [],
@@ -73,7 +69,7 @@ export function createInitialSessionState(
       successfulTransitions: [],
       failedTransitions: [],
       timingConstraints: [],
-      recoveryNarrative: '',
+      recoveryNarrative: "",
     },
     lastTool: null,
     lastCheckpointAt: null,

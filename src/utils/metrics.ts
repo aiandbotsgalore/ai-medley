@@ -24,7 +24,9 @@ export function normalizeMetricScore(value: unknown): number {
     return 100;
   }
   if (n > 0 && n <= 1) {
-    console.warn(`[metrics] 0-1 scale input detected (${n}), converting to ${n * 100} — update LLM to use 0-100 scale`);
+    console.warn(
+      `[metrics] 0-1 scale input detected (${n}), converting to ${n * 100} — update LLM to use 0-100 scale`,
+    );
     return n * 100;
   }
   return n;
@@ -33,12 +35,17 @@ export function normalizeMetricScore(value: unknown): number {
 export function assertMetricRange(value: number, name: string): number {
   const normalized = normalizeMetricScore(value);
   if (value < 0 || value > 100) {
-    console.warn(`[metrics] Out-of-range metric "${name}": ${value}. Clamped to ${normalized}.`);
+    console.warn(
+      `[metrics] Out-of-range metric "${name}": ${value}. Clamped to ${normalized}.`,
+    );
   }
   return normalized;
 }
 
-export function isTerminationThresholdMet(overallScore: number, threshold = 88): boolean {
+export function isTerminationThresholdMet(
+  overallScore: number,
+  threshold = 88,
+): boolean {
   return normalizeMetricScore(overallScore) >= threshold;
 }
 
@@ -51,11 +58,17 @@ export function normalizeMetrics(raw: {
   phase?: string;
 }) {
   return {
-    emotionalArc: assertMetricRange(raw.emotionalArc, 'emotionalArc'),
-    transitionSmoothness: assertMetricRange(raw.transitionSmoothness, 'transitionSmoothness'),
-    performerIdentity: assertMetricRange(raw.performerIdentity, 'performerIdentity'),
-    overallScore: assertMetricRange(raw.overallScore, 'overallScore'),
+    emotionalArc: assertMetricRange(raw.emotionalArc, "emotionalArc"),
+    transitionSmoothness: assertMetricRange(
+      raw.transitionSmoothness,
+      "transitionSmoothness",
+    ),
+    performerIdentity: assertMetricRange(
+      raw.performerIdentity,
+      "performerIdentity",
+    ),
+    overallScore: assertMetricRange(raw.overallScore, "overallScore"),
     iteration: raw.iteration,
-    phase: raw.phase ?? 'unknown',
+    phase: raw.phase ?? "unknown",
   };
 }

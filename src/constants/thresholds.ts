@@ -1,9 +1,9 @@
 // ── Storage Keys ──
-export const CONFIG_STORAGE_KEY = 'ai-medley-config-v1';
+export const CONFIG_STORAGE_KEY = "ai-medley-config-v1";
 
 // ── Audio Analysis ──
 export const AUDIO_ANALYSIS_PROMPT =
-  'Analyze this audio file and provide BPM if discernible, musical key, genre or mood, energy level from 1 to 10, and a concise 2 to 3 sentence structural summary. If this is a medley output, also mention any obvious transition or loudness issues.';
+  "Analyze this audio file and provide BPM if discernible, musical key, genre or mood, energy level from 1 to 10, and a concise 2 to 3 sentence structural summary. If this is a medley output, also mention any obvious transition or loudness issues.";
 export const AUDIO_UPLOAD_FILE_LIMIT_MB = 50;
 
 // ── Orchestration Loop ──
@@ -13,7 +13,7 @@ export const MAX_EVALUATE_CALLS_PER_RUN = 25;
 export const MAX_LLM_CALLS_PER_RUN = 40;
 export const EARLY_TERMINATION_SCORE = 88;
 export const LOCAL_REJECTION_THRESHOLD = 0.45;
-export const LOCAL_AUTO_ACCEPT_THRESHOLD = 0.80;
+export const LOCAL_AUTO_ACCEPT_THRESHOLD = 0.8;
 export const TOP_N_PER_SECTION = 5;
 
 // ── Retry / Backoff ──

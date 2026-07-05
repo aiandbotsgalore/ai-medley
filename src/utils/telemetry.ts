@@ -5,8 +5,8 @@ export interface IterationTelemetry {
   model: string;
   toolName?: string;
   durationMs?: number;
-  metricsBefore?: number;  // 0–100
-  metricsAfter?: number;   // 0–100
+  metricsBefore?: number; // 0–100
+  metricsAfter?: number; // 0–100
   fallbackOccurred?: boolean;
   checkpointSaved?: boolean;
   errorType?: string;
@@ -21,11 +21,11 @@ export function logIterationTelemetry(entry: IterationTelemetry): void {
   }
   console.log(
     `[telemetry] iter=${entry.iteration} phase=${entry.phase} model=${entry.model}` +
-    `${entry.toolName ? ` tool=${entry.toolName}` : ''}` +
-    `${entry.durationMs != null ? ` dur=${entry.durationMs}ms` : ''}` +
-    `${entry.metricsAfter != null ? ` score=${entry.metricsAfter}` : ''}` +
-    `${entry.fallbackOccurred ? ' FALLBACK' : ''}` +
-    `${entry.checkpointSaved ? ' CHECKPOINT' : ''}`
+      `${entry.toolName ? ` tool=${entry.toolName}` : ""}` +
+      `${entry.durationMs != null ? ` dur=${entry.durationMs}ms` : ""}` +
+      `${entry.metricsAfter != null ? ` score=${entry.metricsAfter}` : ""}` +
+      `${entry.fallbackOccurred ? " FALLBACK" : ""}` +
+      `${entry.checkpointSaved ? " CHECKPOINT" : ""}`,
   );
 }
 

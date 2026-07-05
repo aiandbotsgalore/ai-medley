@@ -1,23 +1,33 @@
-import fs from 'fs';
-import path from 'path';
-import crypto from 'crypto';
-import { execFile } from 'child_process';
-import { createRequire } from 'module';
-import ffmpegPath from 'ffmpeg-static';
-import MusicTempo from 'music-tempo';
-import { buildTrackIntelligence } from './medleyIntelligence';
+import fs from "fs";
+import path from "path";
+import crypto from "crypto";
+import { assertAnalysisDuration } from "../server/resourcePolicy";
+import { execFile } from "child_process";
+import { createRequire } from "module";
+import ffmpegPath from "ffmpeg-static";
+import MusicTempo from "music-tempo";
+import { buildTrackIntelligence } from "./medleyIntelligence";
+import {
+  LOCAL_ANALYZER_VERSION,
+  LOCAL_ANALYSIS_HASH_ALGORITHM,
+  assertValidLocalAnalysis,
+  buildLocalAnalysisCacheKey,
+  hashAnalysisSource,
+} from "../server/analysisContract";
 
 const require = createRequire(import.meta.url);
-const ANALYZER_VERSION = 'local-analysis-v2.0.0';
 const TARGET_SAMPLE_RATE = 44100;
 const FRAME_SIZE = 2048;
 const SPECTRAL_HOP_SEC = 0.5;
 
 export interface LocalAnalysisV2 {
-  schemaVersion: 'local_audio_analysis_v2';
+  schemaVersion: "local_audio_analysis_v2";
   analyzerVersion: string;
+  baseAnalyzerVersion: string;
   createdAt: string;
   fileHash: string;
+  fileHashAlgorithm: string;
+  cacheKey: string;
   advancedAnalysisAvailable: boolean;
   fallbackUsed: boolean;
   engines: {
@@ -31,20 +41,40 @@ export interface LocalAnalysisV2 {
     confidence: number;
     beats: number[];
     downbeats: number[];
-    tempoSegments: Array<{ startSec: number; endSec: number; bpm: number; confidence: number }>;
+    tempoSegments: Array<{
+      startSec: number;
+      endSec: number;
+      bpm: number;
+      confidence: number;
+    }>;
     warnings: string[];
   };
   onsets: {
     times: number[];
     strongTimes: number[];
     densityPerMinute: number;
-    densityWindows: Array<{ startSec: number; endSec: number; density: number; strongCount: number }>;
+    densityWindows: Array<{
+      startSec: number;
+      endSec: number;
+      density: number;
+      strongCount: number;
+    }>;
     confidence: number;
     warnings: string[];
   };
   spectral: {
-    centroidHz: { average: number; min: number; max: number; confidence: number };
-    rolloffHz: { average: number; min: number; max: number; confidence: number };
+    centroidHz: {
+      average: number;
+      min: number;
+      max: number;
+      confidence: number;
+    };
+    rolloffHz: {
+      average: number;
+      min: number;
+      max: number;
+      confidence: number;
+    };
     flatness: { average: number; confidence: number };
     flux: { average: number; peak: number; confidence: number };
     brightness: { average: number; confidence: number };
@@ -53,13 +83,18 @@ export interface LocalAnalysisV2 {
   tonal: {
     chroma: number[];
     keyEstimate: string | null;
-    scale: 'major' | 'minor' | null;
+    scale: "major" | "minor" | null;
     confidence: number;
-    source: 'internal_chroma' | 'essentia' | 'unavailable';
+    source: "internal_chroma" | "essentia" | "unavailable";
     warnings: string[];
   };
   loudness: {
-    rmsWindows: Array<{ startSec: number; endSec: number; rms: number; peak: number }>;
+    rmsWindows: Array<{
+      startSec: number;
+      endSec: number;
+      rms: number;
+      peak: number;
+    }>;
     integratedRms: number;
     peak: number;
     dynamicRange: number;
@@ -69,14 +104,14 @@ export interface LocalAnalysisV2 {
     startSec: number;
     endSec: number;
     labels: Array<
-      | 'intro_candidate'
-      | 'first_strong_entrance'
-      | 'chorus_like_candidate'
-      | 'breakdown_or_reset_candidate'
-      | 'pre_finale_build_candidate'
-      | 'finale_candidate'
-      | 'clean_exit_candidate'
-      | 'beat_aligned_candidate'
+      | "intro_candidate"
+      | "first_strong_entrance"
+      | "chorus_like_candidate"
+      | "breakdown_or_reset_candidate"
+      | "pre_finale_build_candidate"
+      | "finale_candidate"
+      | "clean_exit_candidate"
+      | "beat_aligned_candidate"
     >;
     confidence: number;
     reason: string;
@@ -119,13 +154,15 @@ function clamp01(value: number) {
 }
 
 function average(values: number[]) {
-  return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+  return values.length
+    ? values.reduce((sum, value) => sum + value, 0) / values.length
+    : 0;
 }
 
 function standardDeviation(values: number[]) {
   if (values.length < 2) return 0;
   const avg = average(values);
-  return Math.sqrt(average(values.map(value => (value - avg) ** 2)));
+  return Math.sqrt(average(values.map((value) => (value - avg) ** 2)));
 }
 
 function minMaxAverage(values: number[]) {
@@ -134,22 +171,78 @@ function minMaxAverage(values: number[]) {
   return {
     average: round(average(finite)),
     min: round(Math.min(...finite)),
-    max: round(Math.max(...finite))
+    max: round(Math.max(...finite)),
   };
 }
 
-function execFfmpeg(args: string[], timeout = 30000): Promise<string> {
-  return new Promise(resolve => {
-    execFile(ffmpegPath!, args, { timeout, windowsHide: true }, (_err, stdout, stderr) => {
-      resolve(`${stdout || ''}${stderr || ''}`);
-    });
+export class AnalysisProcessError extends Error {
+  constructor(
+    message: string,
+    readonly operation: string,
+    readonly code: string | number | null,
+  ) {
+    super(message);
+    this.name = "AnalysisProcessError";
+  }
+}
+
+function abortError() {
+  return new DOMException("Audio analysis cancelled", "AbortError");
+}
+
+function execFfmpeg(
+  args: string[],
+  timeout = 30000,
+  signal?: AbortSignal,
+  operation = "ffmpeg",
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(abortError());
+      return;
+    }
+    let settled = false;
+    const proc = execFile(
+      ffmpegPath!,
+      args,
+      { timeout, windowsHide: true },
+      (err, stdout, stderr) => {
+        if (settled) return;
+        settled = true;
+        signal?.removeEventListener("abort", onAbort);
+        const output = `${stdout || ""}${stderr || ""}`;
+        if (err) {
+          reject(
+            new AnalysisProcessError(
+              `${operation} failed${err.killed ? " or timed out" : ""}`,
+              operation,
+              (err as any).code ?? null,
+            ),
+          );
+          return;
+        }
+        resolve(output);
+      },
+    );
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      proc.kill("SIGKILL");
+      reject(abortError());
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 
 function parseDuration(output: string) {
   const match = output.match(/Duration:\s*(\d+):(\d+):(\d+)\.(\d+)/);
   if (!match) return 0;
-  return parseInt(match[1]) * 3600 + parseInt(match[2]) * 60 + parseInt(match[3]) + parseInt(match[4]) / 100;
+  return (
+    parseInt(match[1]) * 3600 +
+    parseInt(match[2]) * 60 +
+    parseInt(match[3]) +
+    parseInt(match[4]) / 100
+  );
 }
 
 function extractNumber(output: string, pattern: RegExp) {
@@ -168,9 +261,15 @@ function parseSilences(output: string) {
       continue;
     }
 
-    const end = line.match(/silence_end:\s*([\d.]+)\s*\|\s*silence_duration:\s*([\d.]+)/);
+    const end = line.match(
+      /silence_end:\s*([\d.]+)\s*\|\s*silence_duration:\s*([\d.]+)/,
+    );
     if (end) {
-      events.push({ ...(active || {}), end: Number(end[1]), duration: Number(end[2]) });
+      events.push({
+        ...(active || {}),
+        end: Number(end[1]),
+        duration: Number(end[2]),
+      });
       active = null;
     }
   }
@@ -180,47 +279,65 @@ function parseSilences(output: string) {
 
 function readFloat32File(filePath: string) {
   const raw = fs.readFileSync(filePath);
-  return new Float32Array(raw.buffer, raw.byteOffset, Math.floor(raw.byteLength / 4));
+  return new Float32Array(
+    raw.buffer,
+    raw.byteOffset,
+    Math.floor(raw.byteLength / 4),
+  );
 }
 
-function hashFile(filePath: string) {
-  const hash = crypto.createHash('sha1');
-  const fd = fs.openSync(filePath, 'r');
-  const buffer = Buffer.alloc(1024 * 1024);
-  try {
-    let bytes = 0;
-    while ((bytes = fs.readSync(fd, buffer, 0, buffer.length, null)) > 0) {
-      hash.update(buffer.subarray(0, bytes));
-    }
-  } finally {
-    fs.closeSync(fd);
-  }
-  return hash.digest('hex');
-}
-
-async function decodeMonoFloat(filePath: string, workDir: string) {
+async function decodeMonoFloat(
+  filePath: string,
+  workDir: string,
+  signal?: AbortSignal,
+) {
   const pcmPath = path.join(workDir, `analysis_v2_${crypto.randomUUID()}.f32`);
   try {
-    await execFfmpeg([
-      '-y',
-      '-hide_banner',
-      '-i', filePath,
-      '-ac', '1',
-      '-ar', String(TARGET_SAMPLE_RATE),
-      '-f', 'f32le',
-      '-acodec', 'pcm_f32le',
-      pcmPath
-    ], 90000);
-    if (!fs.existsSync(pcmPath)) return new Float32Array();
-    return readFloat32File(pcmPath);
+    await execFfmpeg(
+      [
+        "-y",
+        "-hide_banner",
+        "-i",
+        filePath,
+        "-ac",
+        "1",
+        "-ar",
+        String(TARGET_SAMPLE_RATE),
+        "-f",
+        "f32le",
+        "-acodec",
+        "pcm_f32le",
+        pcmPath,
+      ],
+      90000,
+      signal,
+      "decode PCM",
+    );
+    if (!fs.existsSync(pcmPath)) {
+      throw new AnalysisProcessError("decode PCM produced no output", "decode PCM", null);
+    }
+    const decoded = readFloat32File(pcmPath);
+    if (decoded.length === 0) {
+      throw new AnalysisProcessError("decode PCM produced no frames", "decode PCM", null);
+    }
+    return decoded;
   } finally {
-    try { if (fs.existsSync(pcmPath)) fs.unlinkSync(pcmPath); } catch (_e) {}
+    try {
+      if (fs.existsSync(pcmPath)) fs.unlinkSync(pcmPath);
+    } catch (_e) {}
   }
 }
 
 function computeEnergy(raw: Float32Array, duration: number) {
   if (raw.length < 2 || duration <= 0) {
-    return { energyCurve: [] as number[], candidateSections: [] as Array<{ start: number; end: number; energy: number }> };
+    return {
+      energyCurve: [] as number[],
+      candidateSections: [] as Array<{
+        start: number;
+        end: number;
+        energy: number;
+      }>,
+    };
   }
 
   const frameCount = 120;
@@ -242,15 +359,17 @@ function computeEnergy(raw: Float32Array, duration: number) {
   }
 
   const maxEnergy = Math.max(...energies, 0.0001);
-  const normalized = energies.map(value => Math.round((value / maxEnergy) * 100));
+  const normalized = energies.map((value) =>
+    Math.round((value / maxEnergy) * 100),
+  );
   const frameSeconds = duration / normalized.length;
   const sections = normalized
     .map((energy, index) => ({
       start: Math.max(0, Number((index * frameSeconds).toFixed(1))),
       end: Number(((index + 1) * frameSeconds).toFixed(1)),
-      energy
+      energy,
     }))
-    .filter(section => section.energy >= 75)
+    .filter((section) => section.energy >= 75)
     .sort((a, b) => b.energy - a.energy)
     .slice(0, 8)
     .sort((a, b) => a.start - b.start);
@@ -259,7 +378,10 @@ function computeEnergy(raw: Float32Array, duration: number) {
 }
 
 function hanning(size: number) {
-  return Array.from({ length: size }, (_, index) => 0.5 - 0.5 * Math.cos((2 * Math.PI * index) / (size - 1)));
+  return Array.from(
+    { length: size },
+    (_, index) => 0.5 - 0.5 * Math.cos((2 * Math.PI * index) / (size - 1)),
+  );
 }
 
 function fftMagnitude(samples: number[]) {
@@ -287,8 +409,10 @@ function fftMagnitude(samples: number[]) {
       for (let j = 0; j < len / 2; j++) {
         const uReal = real[i + j];
         const uImag = imag[i + j];
-        const vReal = real[i + j + len / 2] * wReal - imag[i + j + len / 2] * wImag;
-        const vImag = real[i + j + len / 2] * wImag + imag[i + j + len / 2] * wReal;
+        const vReal =
+          real[i + j + len / 2] * wReal - imag[i + j + len / 2] * wImag;
+        const vImag =
+          real[i + j + len / 2] * wImag + imag[i + j + len / 2] * wReal;
         real[i + j] = uReal + vReal;
         imag[i + j] = uImag + vImag;
         real[i + j + len / 2] = uReal - vReal;
@@ -300,14 +424,20 @@ function fftMagnitude(samples: number[]) {
     }
   }
 
-  return real.slice(0, n / 2).map((value, index) => Math.sqrt(value * value + imag[index] * imag[index]));
+  return real
+    .slice(0, n / 2)
+    .map((value, index) =>
+      Math.sqrt(value * value + imag[index] * imag[index]),
+    );
 }
 
 function spectralStats(magnitudes: number[], sampleRate: number) {
   const nyquist = sampleRate / 2;
   const binHz = nyquist / Math.max(1, magnitudes.length);
   const total = magnitudes.reduce((sum, value) => sum + value, 0) || 1e-12;
-  const centroid = magnitudes.reduce((sum, value, index) => sum + value * index * binHz, 0) / total;
+  const centroid =
+    magnitudes.reduce((sum, value, index) => sum + value * index * binHz, 0) /
+    total;
   let cumulative = 0;
   let rolloff = 0;
   for (let i = 0; i < magnitudes.length; i++) {
@@ -317,7 +447,7 @@ function spectralStats(magnitudes: number[], sampleRate: number) {
       break;
     }
   }
-  const nonzero = magnitudes.map(value => Math.max(value, 1e-12));
+  const nonzero = magnitudes.map((value) => Math.max(value, 1e-12));
   const flatness = Math.exp(average(nonzero.map(Math.log))) / average(nonzero);
   return { centroid, rolloff, flatness };
 }
@@ -347,13 +477,23 @@ function analyzeSpectral(raw: Float32Array, duration: number) {
     rolloffs.push(stats.rolloff);
     flatnesses.push(stats.flatness);
 
-    const norm = magnitudes.map(value => value / (Math.max(...magnitudes) || 1));
+    const norm = magnitudes.map(
+      (value) => value / (Math.max(...magnitudes) || 1),
+    );
     if (previous) {
-      fluxes.push(Math.sqrt(average(norm.map((value, index) => Math.max(0, value - previous![index]) ** 2))));
+      fluxes.push(
+        Math.sqrt(
+          average(
+            norm.map(
+              (value, index) => Math.max(0, value - previous![index]) ** 2,
+            ),
+          ),
+        ),
+      );
     }
     previous = norm;
 
-    const binHz = (TARGET_SAMPLE_RATE / 2) / Math.max(1, magnitudes.length);
+    const binHz = TARGET_SAMPLE_RATE / 2 / Math.max(1, magnitudes.length);
     for (let i = 1; i < magnitudes.length; i++) {
       const pitchClass = pitchClassForFrequency(i * binHz);
       if (pitchClass !== null) chroma[pitchClass] += magnitudes[i];
@@ -364,10 +504,12 @@ function analyzeSpectral(raw: Float32Array, duration: number) {
   const rolloffStats = minMaxAverage(rolloffs);
   const fluxAverage = average(fluxes);
   const fluxPeak = Math.max(...fluxes, 0);
-  const brightness = clamp01(centroidStats.average / 4500 * 0.7 + rolloffStats.average / 11000 * 0.3);
+  const brightness = clamp01(
+    (centroidStats.average / 4500) * 0.7 + (rolloffStats.average / 11000) * 0.3,
+  );
   const density = clamp01(fluxAverage * 3 + average(flatnesses) * 0.4);
   const chromaMax = Math.max(...chroma, 1e-12);
-  const normalizedChroma = chroma.map(value => round(value / chromaMax));
+  const normalizedChroma = chroma.map((value) => round(value / chromaMax));
 
   return {
     centroidStats,
@@ -380,20 +522,44 @@ function analyzeSpectral(raw: Float32Array, duration: number) {
     chroma: normalizedChroma,
     frameCount: centroids.length,
     confidence: duration > 0 && centroids.length >= 8 ? 0.72 : 0.25,
-    fluxes
+    fluxes,
   };
 }
 
 function estimateKey(chroma: number[]) {
-  const keys = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-  const major = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88];
-  const minor = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17];
-  const scores: Array<{ key: string; scale: 'major' | 'minor'; score: number }> = [];
-  const centeredChroma = chroma.map(value => value - average(chroma));
+  const keys = [
+    "C",
+    "C#",
+    "D",
+    "D#",
+    "E",
+    "F",
+    "F#",
+    "G",
+    "G#",
+    "A",
+    "A#",
+    "B",
+  ];
+  const major = [
+    6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88,
+  ];
+  const minor = [
+    6.33, 2.68, 3.52, 5.38, 2.6, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17,
+  ];
+  const scores: Array<{
+    key: string;
+    scale: "major" | "minor";
+    score: number;
+  }> = [];
+  const centeredChroma = chroma.map((value) => value - average(chroma));
 
   for (let root = 0; root < 12; root++) {
-    for (const [scale, profile] of [['major', major], ['minor', minor]] as const) {
-      const centeredProfile = profile.map(value => value - average(profile));
+    for (const [scale, profile] of [
+      ["major", major],
+      ["minor", minor],
+    ] as const) {
+      const centeredProfile = profile.map((value) => value - average(profile));
       const score = centeredChroma.reduce((sum, value, index) => {
         const profileIndex = (index - root + 12) % 12;
         return sum + value * centeredProfile[profileIndex];
@@ -405,38 +571,79 @@ function estimateKey(chroma: number[]) {
   scores.sort((a, b) => b.score - a.score);
   const best = scores[0];
   const second = scores[1];
-  const confidence = clamp01((best.score - second.score) / (Math.abs(best.score) + 1e-6));
-  if (!best || confidence < 0.08) return { keyEstimate: null, scale: null, confidence: 0.12 };
+  const confidence = clamp01(
+    (best.score - second.score) / (Math.abs(best.score) + 1e-6),
+  );
+  if (!best || confidence < 0.08)
+    return { keyEstimate: null, scale: null, confidence: 0.12 };
   return {
     keyEstimate: `${best.key} ${best.scale}`,
     scale: best.scale,
-    confidence: round(Math.min(0.72, confidence + 0.18))
+    confidence: round(Math.min(0.72, confidence + 0.18)),
   };
 }
 
 function estimateTempo(raw: Float32Array) {
   try {
-    if (raw.length < TARGET_SAMPLE_RATE * 5) return { bpm: null, beats: [] as number[], confidence: 0, source: 'unavailable' };
-    const limit = raw.length > TARGET_SAMPLE_RATE * 360 ? raw.slice(0, TARGET_SAMPLE_RATE * 360) : raw;
+    if (raw.length < TARGET_SAMPLE_RATE * 5)
+      return {
+        bpm: null,
+        beats: [] as number[],
+        confidence: 0,
+        source: "unavailable",
+      };
+    const limit =
+      raw.length > TARGET_SAMPLE_RATE * 360
+        ? raw.slice(0, TARGET_SAMPLE_RATE * 360)
+        : raw;
     const detector = new MusicTempo(limit, {
       minBeatInterval: 0.3,
       maxBeatInterval: 1.2,
       expiryTime: 20,
-      maxTempos: 12
+      maxTempos: 12,
     });
     const tempo = Number(detector.tempo);
-    const beats = Array.isArray(detector.beats) ? detector.beats.filter((beat: number) => Number.isFinite(beat) && beat >= 0) : [];
-    if (!Number.isFinite(tempo) || tempo <= 0) return { bpm: null, beats: [], confidence: 0.1, source: 'music-tempo' };
-    const intervalStd = beats.length > 3 ? standardDeviation(beats.slice(1).map((beat, index) => beat - beats[index])) : 1;
-    const confidence = clamp01(0.35 + Math.min(beats.length, 80) / 160 + Math.max(0, 0.3 - intervalStd) * 0.6);
-    return { bpm: Math.round(tempo), beats: beats.slice(0, 600).map(beat => round(beat, 3)), confidence: round(confidence), source: 'music-tempo' };
+    const beats = Array.isArray(detector.beats)
+      ? detector.beats.filter(
+          (beat: number) => Number.isFinite(beat) && beat >= 0,
+        )
+      : [];
+    if (!Number.isFinite(tempo) || tempo <= 0)
+      return { bpm: null, beats: [], confidence: 0.1, source: "music-tempo" };
+    const intervalStd =
+      beats.length > 3
+        ? standardDeviation(
+            beats.slice(1).map((beat, index) => beat - beats[index]),
+          )
+        : 1;
+    const confidence = clamp01(
+      0.35 +
+        Math.min(beats.length, 80) / 160 +
+        Math.max(0, 0.3 - intervalStd) * 0.6,
+    );
+    return {
+      bpm: Math.round(tempo),
+      beats: beats.slice(0, 600).map((beat) => round(beat, 3)),
+      confidence: round(confidence),
+      source: "music-tempo",
+    };
   } catch (_e) {
-    return { bpm: null, beats: [] as number[], confidence: 0, source: 'music-tempo_failed' };
+    return {
+      bpm: null,
+      beats: [] as number[],
+      confidence: 0,
+      source: "music-tempo_failed",
+    };
   }
 }
 
 function findOnsets(fluxes: number[], duration: number) {
-  if (!fluxes.length || duration <= 0) return { times: [] as number[], strongTimes: [] as number[], confidence: 0 };
+  if (!fluxes.length || duration <= 0)
+    return {
+      times: [] as number[],
+      strongTimes: [] as number[],
+      confidence: 0,
+    };
   const mean = average(fluxes);
   const std = standardDeviation(fluxes);
   const threshold = mean + std * 0.85;
@@ -447,7 +654,10 @@ function findOnsets(fluxes: number[], duration: number) {
   let lastTime = -1;
 
   for (let i = 1; i < fluxes.length - 1; i++) {
-    const isPeak = fluxes[i] >= fluxes[i - 1] && fluxes[i] >= fluxes[i + 1] && fluxes[i] >= threshold;
+    const isPeak =
+      fluxes[i] >= fluxes[i - 1] &&
+      fluxes[i] >= fluxes[i + 1] &&
+      fluxes[i] >= threshold;
     const time = i * frameSec;
     if (isPeak && time - lastTime >= 0.12) {
       times.push(round(time, 3));
@@ -459,21 +669,28 @@ function findOnsets(fluxes: number[], duration: number) {
   return {
     times: times.slice(0, 500),
     strongTimes: strongTimes.slice(0, 250),
-    confidence: round(clamp01(0.35 + Math.min(times.length, 120) / 240))
+    confidence: round(clamp01(0.35 + Math.min(times.length, 120) / 240)),
   };
 }
 
 function buildDensityWindows(onsetTimes: number[], duration: number) {
   const windowSec = 15;
-  const windows: Array<{ startSec: number; endSec: number; density: number; strongCount: number }> = [];
+  const windows: Array<{
+    startSec: number;
+    endSec: number;
+    density: number;
+    strongCount: number;
+  }> = [];
   for (let start = 0; start < duration; start += windowSec) {
     const end = Math.min(duration, start + windowSec);
-    const count = onsetTimes.filter(time => time >= start && time < end).length;
+    const count = onsetTimes.filter(
+      (time) => time >= start && time < end,
+    ).length;
     windows.push({
       startSec: round(start, 1),
       endSec: round(end, 1),
       density: round(count / Math.max(1, (end - start) / 60)),
-      strongCount: count
+      strongCount: count,
     });
   }
   return windows;
@@ -481,8 +698,16 @@ function buildDensityWindows(onsetTimes: number[], duration: number) {
 
 function buildRmsWindows(raw: Float32Array, duration: number) {
   const windowSec = 5;
-  const samplesPerWindow = Math.max(1, Math.floor(TARGET_SAMPLE_RATE * windowSec));
-  const windows: Array<{ startSec: number; endSec: number; rms: number; peak: number }> = [];
+  const samplesPerWindow = Math.max(
+    1,
+    Math.floor(TARGET_SAMPLE_RATE * windowSec),
+  );
+  const windows: Array<{
+    startSec: number;
+    endSec: number;
+    rms: number;
+    peak: number;
+  }> = [];
   let globalPeak = 0;
   let sumSquares = 0;
 
@@ -501,17 +726,17 @@ function buildRmsWindows(raw: Float32Array, duration: number) {
       startSec: round(start / TARGET_SAMPLE_RATE, 1),
       endSec: round(Math.min(duration, end / TARGET_SAMPLE_RATE), 1),
       rms: round(Math.sqrt(localSquares / Math.max(1, end - start))),
-      peak: round(localPeak)
+      peak: round(localPeak),
     });
   }
 
   const integratedRms = Math.sqrt(sumSquares / Math.max(1, raw.length));
-  const rmsValues = windows.map(window => window.rms);
+  const rmsValues = windows.map((window) => window.rms);
   return {
     windows,
     integratedRms: round(integratedRms),
     peak: round(globalPeak),
-    dynamicRange: round(Math.max(...rmsValues, 0) - Math.min(...rmsValues, 0))
+    dynamicRange: round(Math.max(...rmsValues, 0) - Math.min(...rmsValues, 0)),
   };
 }
 
@@ -531,17 +756,25 @@ function nearestBeat(time: number, beats: number[]) {
 
 function tempoSegments(beats: number[], duration: number) {
   if (beats.length < 8) return [];
-  const segments: Array<{ startSec: number; endSec: number; bpm: number; confidence: number }> = [];
+  const segments: Array<{
+    startSec: number;
+    endSec: number;
+    bpm: number;
+    confidence: number;
+  }> = [];
   const windowBeats = 16;
   for (let i = 0; i + windowBeats < beats.length; i += windowBeats) {
     const slice = beats.slice(i, i + windowBeats);
-    const intervals = slice.slice(1).map((beat, index) => beat - slice[index]).filter(value => value > 0);
+    const intervals = slice
+      .slice(1)
+      .map((beat, index) => beat - slice[index])
+      .filter((value) => value > 0);
     const bpm = Math.round(60 / average(intervals));
     segments.push({
       startSec: round(slice[0], 1),
       endSec: round(Math.min(duration, slice[slice.length - 1]), 1),
       bpm,
-      confidence: round(clamp01(0.75 - standardDeviation(intervals)))
+      confidence: round(clamp01(0.75 - standardDeviation(intervals))),
     });
   }
   return segments.slice(0, 24);
@@ -552,86 +785,149 @@ function buildSegments(input: {
   energySections: Array<{ start: number; end: number; energy: number }>;
   silence: Array<{ start?: number; end?: number; duration?: number }>;
   beats: number[];
-  densityWindows: Array<{ startSec: number; endSec: number; density: number; strongCount: number }>;
+  densityWindows: Array<{
+    startSec: number;
+    endSec: number;
+    density: number;
+    strongCount: number;
+  }>;
   spectralBrightness: number;
 }) {
-  const { duration, energySections, silence, beats, densityWindows, spectralBrightness } = input;
-  const segments: LocalAnalysisV2['segments'] = [];
+  const {
+    duration,
+    energySections,
+    silence,
+    beats,
+    densityWindows,
+    spectralBrightness,
+  } = input;
+  const segments: LocalAnalysisV2["segments"] = [];
   const addSegment = (
     startSec: number,
     endSec: number,
-    labels: LocalAnalysisV2['segments'][number]['labels'],
+    labels: LocalAnalysisV2["segments"][number]["labels"],
     confidence: number,
     reason: string,
     energy: number,
-    warnings: string[] = []
+    warnings: string[] = [],
   ) => {
     const startBeat = nearestBeat(startSec, beats);
     const endBeat = nearestBeat(endSec, beats);
     const beatAligned = startBeat.distance <= 0.12 || endBeat.distance <= 0.12;
-    const density = average(densityWindows.filter(window => window.startSec < endSec && window.endSec > startSec).map(window => window.density));
+    const density = average(
+      densityWindows
+        .filter(
+          (window) => window.startSec < endSec && window.endSec > startSec,
+        )
+        .map((window) => window.density),
+    );
     segments.push({
-      startSec: round(startBeat.distance <= 0.18 && startBeat.time !== null ? startBeat.time : startSec, 1),
-      endSec: round(endBeat.distance <= 0.18 && endBeat.time !== null ? endBeat.time : endSec, 1),
-      labels: beatAligned ? Array.from(new Set([...labels, 'beat_aligned_candidate'])) : labels,
-      confidence: round(beatAligned ? Math.min(1, confidence + 0.08) : confidence),
+      startSec: round(
+        startBeat.distance <= 0.18 && startBeat.time !== null
+          ? startBeat.time
+          : startSec,
+        1,
+      ),
+      endSec: round(
+        endBeat.distance <= 0.18 && endBeat.time !== null
+          ? endBeat.time
+          : endSec,
+        1,
+      ),
+      labels: beatAligned
+        ? Array.from(new Set([...labels, "beat_aligned_candidate"]))
+        : labels,
+      confidence: round(
+        beatAligned ? Math.min(1, confidence + 0.08) : confidence,
+      ),
       reason,
       beatAligned,
       nearestBeatSec: startBeat.time,
       energy,
       spectralBrightness,
       onsetDensity: round(density || 0),
-      warnings
+      warnings,
     });
   };
 
   if (duration > 0) {
-    addSegment(0, Math.min(duration, Math.max(12, duration * 0.1)), ['intro_candidate'], 0.68, 'Opening span from file start; useful as a controlled entry candidate.', 45);
-    addSegment(Math.max(0, duration - Math.max(12, duration * 0.1)), duration, ['clean_exit_candidate'], 0.68, 'Ending span from file end; useful as a clean exit/outro candidate.', 45);
+    addSegment(
+      0,
+      Math.min(duration, Math.max(12, duration * 0.1)),
+      ["intro_candidate"],
+      0.68,
+      "Opening span from file start; useful as a controlled entry candidate.",
+      45,
+    );
+    addSegment(
+      Math.max(0, duration - Math.max(12, duration * 0.1)),
+      duration,
+      ["clean_exit_candidate"],
+      0.68,
+      "Ending span from file end; useful as a clean exit/outro candidate.",
+      45,
+    );
   }
 
   const strongest = [...energySections].sort((a, b) => b.energy - a.energy);
   for (const [index, section] of strongest.slice(0, 8).entries()) {
-    const labels: LocalAnalysisV2['segments'][number]['labels'] = ['chorus_like_candidate'];
-    if (index === 0 || section.start > duration * 0.58) labels.push('finale_candidate');
-    if (section.start > duration * 0.45 && section.energy >= 85) labels.push('pre_finale_build_candidate');
-    if (section.start < duration * 0.25 && section.energy >= 82) labels.push('first_strong_entrance');
+    const labels: LocalAnalysisV2["segments"][number]["labels"] = [
+      "chorus_like_candidate",
+    ];
+    if (index === 0 || section.start > duration * 0.58)
+      labels.push("finale_candidate");
+    if (section.start > duration * 0.45 && section.energy >= 85)
+      labels.push("pre_finale_build_candidate");
+    if (section.start < duration * 0.25 && section.energy >= 82)
+      labels.push("first_strong_entrance");
     addSegment(
       section.start,
-      Math.min(duration || section.end, Math.max(section.end, section.start + 12)),
+      Math.min(
+        duration || section.end,
+        Math.max(section.end, section.start + 12),
+      ),
       labels,
       0.62 + clamp01(section.energy / 100) * 0.22,
-      'High local energy plus spectral/onset support; chorus/hook label is heuristic, not lyric-confirmed.',
+      "High local energy plus spectral/onset support; chorus/hook label is heuristic, not lyric-confirmed.",
       section.energy,
-      ['section_label_is_heuristic']
+      ["section_label_is_heuristic"],
     );
   }
 
   for (const silenceRegion of silence) {
-    if (silenceRegion.start === undefined || silenceRegion.end === undefined || (silenceRegion.duration || 0) < 0.45) continue;
+    if (
+      silenceRegion.start === undefined ||
+      silenceRegion.end === undefined ||
+      (silenceRegion.duration || 0) < 0.45
+    )
+      continue;
     addSegment(
       Math.max(0, silenceRegion.start - 4),
       Math.min(duration, silenceRegion.end + 4),
-      ['breakdown_or_reset_candidate'],
+      ["breakdown_or_reset_candidate"],
       0.76,
-      'Silence-adjacent span can work as a reset or transition moment.',
+      "Silence-adjacent span can work as a reset or transition moment.",
       20,
-      []
+      [],
     );
   }
 
   return segments
-    .filter(segment => segment.endSec > segment.startSec)
+    .filter((segment) => segment.endSec > segment.startSec)
     .sort((a, b) => a.startSec - b.startSec)
     .slice(0, 18);
 }
 
 function tryEssentia(raw: Float32Array) {
   try {
-    const { Essentia, EssentiaWASM } = require('essentia.js') as any;
+    const { Essentia, EssentiaWASM } = require("essentia.js") as any;
     const essentia = new Essentia(EssentiaWASM);
-    const signal = essentia.arrayToVector(raw.length > TARGET_SAMPLE_RATE * 180 ? raw.slice(0, TARGET_SAMPLE_RATE * 180) : raw);
-    const version = String(essentia.version || 'unknown');
+    const signal = essentia.arrayToVector(
+      raw.length > TARGET_SAMPLE_RATE * 180
+        ? raw.slice(0, TARGET_SAMPLE_RATE * 180)
+        : raw,
+    );
+    const version = String(essentia.version || "unknown");
     try {
       const tonal = essentia.TonalExtractor(signal, 4096, 2048, 440);
       return { available: true, version, tonal };
@@ -643,28 +939,81 @@ function tryEssentia(raw: Float32Array) {
   }
 }
 
-function buildAnalysisText(analysis: BasicAnalysis, medleyIntelligence: ReturnType<typeof buildTrackIntelligence>) {
+function buildAnalysisText(
+  analysis: BasicAnalysis,
+  medleyIntelligence: ReturnType<typeof buildTrackIntelligence>,
+) {
   const v2 = analysis.localAnalysisV2;
   return [
-    'Local analysis only. No audio was sent to an AI provider.',
-    `Analyzer: ${v2.schemaVersion} (${v2.analyzerVersion}); advanced local analysis ${v2.advancedAnalysisAvailable ? 'available' : 'fell back to basic mode'}.`,
-    'Layer 1 local facts: duration, sample rate, bitrate, loudness, silence, tempo estimate, beat grid, onset density, spectral descriptors, and key estimate.',
-    'Layer 2 heuristic guesses: hook/entry/exit/reset/finale/chorus-like candidates are guesses with confidence and warnings.',
-    'Layer 3 scoring/ranking: medley usefulness scores are local heuristics, not musical facts.',
-    `Duration: ${analysis.duration ? `${analysis.duration.toFixed(1)}s` : 'unknown'}`,
-    `Technical: ${analysis.sampleRate || 'unknown'} Hz, ${analysis.bitrate || 'unknown'} kbps`,
-    `Volume: mean ${analysis.meanVolumeDb ?? 'unknown'} dB, max ${analysis.maxVolumeDb ?? 'unknown'} dB`,
-    `Estimated BPM: ${analysis.estimatedBpm ?? 'unknown'} (beat confidence ${Math.round(v2.beatGrid.confidence * 100)}%)`,
-    `Estimated key: ${v2.tonal.keyEstimate ?? 'unknown'} (confidence ${Math.round(v2.tonal.confidence * 100)}%; estimate only)`,
+    "Local analysis only. No audio was sent to an AI provider.",
+    `Analyzer: ${v2.schemaVersion} (${v2.analyzerVersion}); advanced local analysis ${v2.advancedAnalysisAvailable ? "available" : "fell back to basic mode"}.`,
+    "Layer 1 local facts: duration, sample rate, bitrate, loudness, silence, tempo estimate, beat grid, onset density, spectral descriptors, and key estimate.",
+    "Layer 2 heuristic guesses: hook/entry/exit/reset/finale/chorus-like candidates are guesses with confidence and warnings.",
+    "Layer 3 scoring/ranking: medley usefulness scores are local heuristics, not musical facts.",
+    `Duration: ${analysis.duration ? `${analysis.duration.toFixed(1)}s` : "unknown"}`,
+    `Technical: ${analysis.sampleRate || "unknown"} Hz, ${analysis.bitrate || "unknown"} kbps`,
+    `Volume: mean ${analysis.meanVolumeDb ?? "unknown"} dB, max ${analysis.maxVolumeDb ?? "unknown"} dB`,
+    `Estimated BPM: ${analysis.estimatedBpm ?? "unknown"} (beat confidence ${Math.round(v2.beatGrid.confidence * 100)}%)`,
+    `Estimated key: ${v2.tonal.keyEstimate ?? "unknown"} (confidence ${Math.round(v2.tonal.confidence * 100)}%; estimate only)`,
     `Spectral: centroid ${Math.round(v2.spectral.centroidHz.average)} Hz, rolloff ${Math.round(v2.spectral.rolloffHz.average)} Hz, brightness ${Math.round(v2.spectral.brightness.average * 100)}%, flux ${Math.round(v2.spectral.flux.average * 100)}%`,
     `Onsets: ${v2.onsets.times.length} detected, ${v2.onsets.strongTimes.length} strong, density ${v2.onsets.densityPerMinute}/min`,
-    `Beat-snapped candidate sections: ${v2.segments.length ? v2.segments.slice(0, 8).map(s => `${s.startSec.toFixed(1)}-${s.endSec.toFixed(1)}s ${s.labels[0]} (${Math.round(s.confidence * 100)}%)`).join(', ') : 'none detected'}`,
-    `Silence regions: ${analysis.silence.length ? analysis.silence.map(s => `${s.start?.toFixed(1) ?? '?'}-${s.end?.toFixed(1) ?? '?'}s`).slice(0, 8).join(', ') : 'none detected'}`,
-    `Top hook candidates: ${medleyIntelligence.rankedHookCandidates.length ? medleyIntelligence.rankedHookCandidates.slice(0, 3).map(s => `${s.sectionId} (${Math.round(s.scores.hookStrength * 100)}%, confidence ${Math.round(s.confidence * 100)}%)`).join(', ') : 'none'}`,
-    `Top entry candidates: ${medleyIntelligence.rankedEntryCandidates.length ? medleyIntelligence.rankedEntryCandidates.slice(0, 3).map(s => `${s.sectionId} (${Math.round(s.scores.entryQuality * 100)}%)`).join(', ') : 'none'}`,
-    `Top exit candidates: ${medleyIntelligence.rankedExitCandidates.length ? medleyIntelligence.rankedExitCandidates.slice(0, 3).map(s => `${s.sectionId} (${Math.round(s.scores.exitQuality * 100)}%)`).join(', ') : 'none'}`,
-    'Key, chorus, hook, and mood labels are estimates unless confirmed by user notes or explicitly allowed cloud listening.'
-  ].join('\n');
+    `Beat-snapped candidate sections: ${
+      v2.segments.length
+        ? v2.segments
+            .slice(0, 8)
+            .map(
+              (s) =>
+                `${s.startSec.toFixed(1)}-${s.endSec.toFixed(1)}s ${s.labels[0]} (${Math.round(s.confidence * 100)}%)`,
+            )
+            .join(", ")
+        : "none detected"
+    }`,
+    `Silence regions: ${
+      analysis.silence.length
+        ? analysis.silence
+            .map(
+              (s) =>
+                `${s.start?.toFixed(1) ?? "?"}-${s.end?.toFixed(1) ?? "?"}s`,
+            )
+            .slice(0, 8)
+            .join(", ")
+        : "none detected"
+    }`,
+    `Top hook candidates: ${
+      medleyIntelligence.rankedHookCandidates.length
+        ? medleyIntelligence.rankedHookCandidates
+            .slice(0, 3)
+            .map(
+              (s) =>
+                `${s.sectionId} (${Math.round(s.scores.hookStrength * 100)}%, confidence ${Math.round(s.confidence * 100)}%)`,
+            )
+            .join(", ")
+        : "none"
+    }`,
+    `Top entry candidates: ${
+      medleyIntelligence.rankedEntryCandidates.length
+        ? medleyIntelligence.rankedEntryCandidates
+            .slice(0, 3)
+            .map(
+              (s) =>
+                `${s.sectionId} (${Math.round(s.scores.entryQuality * 100)}%)`,
+            )
+            .join(", ")
+        : "none"
+    }`,
+    `Top exit candidates: ${
+      medleyIntelligence.rankedExitCandidates.length
+        ? medleyIntelligence.rankedExitCandidates
+            .slice(0, 3)
+            .map(
+              (s) =>
+                `${s.sectionId} (${Math.round(s.scores.exitQuality * 100)}%)`,
+            )
+            .join(", ")
+        : "none"
+    }`,
+    "Key, chorus, hook, and mood labels are estimates unless confirmed by user notes or explicitly allowed cloud listening.",
+  ].join("\n");
 }
 
 export async function analyzeLocalAudioFile(input: {
@@ -672,16 +1021,46 @@ export async function analyzeLocalAudioFile(input: {
   workDir: string;
   trackId?: string;
   filename?: string;
+  signal?: AbortSignal;
+  sourceHash?: string;
 }) {
   const { filePath, workDir } = input;
-  const probeOutput = await execFfmpeg(['-hide_banner', '-i', filePath, '-f', 'null', '-'], 15000);
+  input.signal?.throwIfAborted();
+  const fileHash = input.sourceHash || hashAnalysisSource(filePath);
+  const probeOutput = await execFfmpeg(
+    ["-hide_banner", "-i", filePath, "-f", "null", "-"],
+    15000,
+    input.signal,
+    "probe audio",
+  );
   const duration = parseDuration(probeOutput);
+  assertAnalysisDuration(duration);
   const bitrate = extractNumber(probeOutput, /bitrate:\s*(\d+)\s*kb\/s/);
   const sampleRate = extractNumber(probeOutput, /(\d+)\s*Hz/);
-  const volumeOutput = await execFfmpeg(['-hide_banner', '-i', filePath, '-af', 'volumedetect', '-f', 'null', '-'], 30000);
-  const silenceOutput = await execFfmpeg(['-hide_banner', '-i', filePath, '-af', 'silencedetect=noise=-35dB:d=0.35', '-f', 'null', '-'], 30000);
+  const volumeOutput = await execFfmpeg(
+    ["-hide_banner", "-i", filePath, "-af", "volumedetect", "-f", "null", "-"],
+    30000,
+    input.signal,
+    "measure volume",
+  );
+  const silenceOutput = await execFfmpeg(
+    [
+      "-hide_banner",
+      "-i",
+      filePath,
+      "-af",
+      "silencedetect=noise=-35dB:d=0.35",
+      "-f",
+      "null",
+      "-",
+    ],
+    30000,
+    input.signal,
+    "detect silence",
+  );
   const silence = parseSilences(silenceOutput);
-  const raw = await decodeMonoFloat(filePath, workDir);
+  const raw = await decodeMonoFloat(filePath, workDir, input.signal);
+  input.signal?.throwIfAborted();
   const energy = computeEnergy(raw, duration);
   const tempo = estimateTempo(raw);
   const spectral = analyzeSpectral(raw, duration);
@@ -692,12 +1071,12 @@ export async function analyzeLocalAudioFile(input: {
   const essentia = tryEssentia(raw);
   const keyEstimate = key.keyEstimate;
   const tonalWarnings = [
-    'key_is_local_chroma_estimate_not_confirmed_fact',
-    key.confidence < 0.35 ? 'key_confidence_low' : ''
+    "key_is_local_chroma_estimate_not_confirmed_fact",
+    key.confidence < 0.35 ? "key_confidence_low" : "",
   ].filter(Boolean);
   const beatWarnings = [
-    tempo.confidence < 0.45 ? 'beat_grid_confidence_low' : '',
-    tempo.source === 'music-tempo_failed' ? 'music_tempo_failed' : ''
+    tempo.confidence < 0.45 ? "beat_grid_confidence_low" : "",
+    tempo.source === "music-tempo_failed" ? "music_tempo_failed" : "",
   ].filter(Boolean);
   const segments = buildSegments({
     duration,
@@ -705,30 +1084,39 @@ export async function analyzeLocalAudioFile(input: {
     silence,
     beats: tempo.beats,
     densityWindows,
-    spectralBrightness: spectral.brightness
+    spectralBrightness: spectral.brightness,
   });
-  const clippingRisk = clamp01(rms.peak > 0.99 ? 0.9 : rms.peak > 0.94 ? 0.55 : 0.1);
-  const lowSignalRisk = clamp01(rms.integratedRms < 0.015 ? 0.8 : rms.integratedRms < 0.035 ? 0.45 : 0.1);
+  const clippingRisk = clamp01(
+    rms.peak > 0.99 ? 0.9 : rms.peak > 0.94 ? 0.55 : 0.1,
+  );
+  const lowSignalRisk = clamp01(
+    rms.integratedRms < 0.015 ? 0.8 : rms.integratedRms < 0.035 ? 0.45 : 0.1,
+  );
   const v2: LocalAnalysisV2 = {
-    schemaVersion: 'local_audio_analysis_v2',
-    analyzerVersion: `${ANALYZER_VERSION}${essentia.available ? `+essentia-${essentia.version}` : ''}`,
+    schemaVersion: "local_audio_analysis_v2",
+    analyzerVersion: `${LOCAL_ANALYZER_VERSION}${essentia.available ? `+essentia-${essentia.version}` : ""}`,
+    baseAnalyzerVersion: LOCAL_ANALYZER_VERSION,
     createdAt: new Date().toISOString(),
-    fileHash: hashFile(filePath),
+    fileHash,
+    fileHashAlgorithm: LOCAL_ANALYSIS_HASH_ALGORITHM,
+    cacheKey: buildLocalAnalysisCacheKey(fileHash),
     advancedAnalysisAvailable: raw.length > 0 && spectral.frameCount > 0,
     fallbackUsed: raw.length === 0 || spectral.frameCount === 0,
     engines: {
       ffmpeg: true,
-      musicTempo: tempo.source === 'music-tempo',
+      musicTempo: tempo.source === "music-tempo",
       essentiaJs: essentia.available,
-      internalDsp: true
+      internalDsp: true,
     },
     beatGrid: {
       bpm: tempo.bpm,
       confidence: tempo.confidence,
       beats: tempo.beats,
-      downbeats: tempo.beats.filter((_beat, index) => index % 4 === 0).slice(0, 160),
+      downbeats: tempo.beats
+        .filter((_beat, index) => index % 4 === 0)
+        .slice(0, 160),
       tempoSegments: tempoSegments(tempo.beats, duration),
-      warnings: beatWarnings
+      warnings: beatWarnings,
     },
     onsets: {
       times: onsets.times,
@@ -736,45 +1124,59 @@ export async function analyzeLocalAudioFile(input: {
       densityPerMinute: round(onsets.times.length / Math.max(1, duration / 60)),
       densityWindows,
       confidence: onsets.confidence,
-      warnings: onsets.confidence < 0.4 ? ['onset_detection_confidence_low'] : []
+      warnings:
+        onsets.confidence < 0.4 ? ["onset_detection_confidence_low"] : [],
     },
     spectral: {
-      centroidHz: { ...spectral.centroidStats, confidence: spectral.confidence },
+      centroidHz: {
+        ...spectral.centroidStats,
+        confidence: spectral.confidence,
+      },
       rolloffHz: { ...spectral.rolloffStats, confidence: spectral.confidence },
-      flatness: { average: spectral.flatnessAverage, confidence: spectral.confidence },
-      flux: { average: spectral.fluxAverage, peak: spectral.fluxPeak, confidence: spectral.confidence },
-      brightness: { average: spectral.brightness, confidence: spectral.confidence },
-      density: { average: spectral.density, confidence: spectral.confidence }
+      flatness: {
+        average: spectral.flatnessAverage,
+        confidence: spectral.confidence,
+      },
+      flux: {
+        average: spectral.fluxAverage,
+        peak: spectral.fluxPeak,
+        confidence: spectral.confidence,
+      },
+      brightness: {
+        average: spectral.brightness,
+        confidence: spectral.confidence,
+      },
+      density: { average: spectral.density, confidence: spectral.confidence },
     },
     tonal: {
       chroma: spectral.chroma,
       keyEstimate,
       scale: key.scale,
       confidence: key.confidence,
-      source: 'internal_chroma',
-      warnings: tonalWarnings
+      source: "internal_chroma",
+      warnings: tonalWarnings,
     },
     loudness: {
       rmsWindows: rms.windows.slice(0, 180),
       integratedRms: rms.integratedRms,
       peak: rms.peak,
       dynamicRange: rms.dynamicRange,
-      confidence: raw.length ? 0.78 : 0
+      confidence: raw.length ? 0.78 : 0,
     },
     segments,
     quality: {
       clippingRisk: round(clippingRisk),
       lowSignalRisk: round(lowSignalRisk),
       warnings: [
-        clippingRisk > 0.5 ? 'possible_clipping_or_limiter_ceiling' : '',
-        lowSignalRisk > 0.5 ? 'low_signal_level' : '',
-        'chorus_hook_and_key_labels_are_estimates'
-      ].filter(Boolean)
-    }
+        clippingRisk > 0.5 ? "possible_clipping_or_limiter_ceiling" : "",
+        lowSignalRisk > 0.5 ? "low_signal_level" : "",
+        "chorus_hook_and_key_labels_are_estimates",
+      ].filter(Boolean),
+    },
   };
 
   const analysis: BasicAnalysis = {
-    source: 'local-ffmpeg-essentia-v2',
+    source: "local-ffmpeg-essentia-v2",
     duration,
     bitrate,
     sampleRate,
@@ -784,12 +1186,14 @@ export async function analyzeLocalAudioFile(input: {
     estimatedBpm: tempo.bpm,
     energyCurve: energy.energyCurve,
     candidateSections: energy.candidateSections,
-    localAnalysisV2: v2
+    localAnalysisV2: v2,
   };
+  assertValidLocalAnalysis(analysis, fileHash);
+  input.signal?.throwIfAborted();
   const medleyIntelligence = buildTrackIntelligence({
     trackId: input.trackId || path.basename(filePath, path.extname(filePath)),
     filename: input.filename || path.basename(filePath),
-    analysis
+    analysis,
   });
   const analysisText = buildAnalysisText(analysis, medleyIntelligence);
 
@@ -802,32 +1206,42 @@ export async function analyzeLocalAudioFile(input: {
  * - Loudness compliance (EBU R128 style via loudnorm)
  * - True peak safety
  * - Basic dynamic range information
- * 
+ *
  * Designed for personal project use — pragmatic and informative rather than over-engineered.
  */
-export async function analyzeMedleyQuality(filePath: string, workDir: string): Promise<{
+export async function analyzeMedleyQuality(
+  filePath: string,
+  workDir: string,
+): Promise<{
   integratedLUFS: number | null;
   loudnessRange: number | null;
   truePeak: number | null;
   overallQualityNote: string;
   rawOutput?: string;
 }> {
-  const absolutePath = path.isAbsolute(filePath) ? filePath : path.join(workDir, filePath);
+  const absolutePath = path.isAbsolute(filePath)
+    ? filePath
+    : path.join(workDir, filePath);
 
   if (!fs.existsSync(absolutePath)) {
-    throw new Error(`Medley file not found for quality analysis: ${absolutePath}`);
+    throw new Error(
+      `Medley file not found for quality analysis: ${absolutePath}`,
+    );
   }
 
   // Use ffmpeg loudnorm in measurement mode (most reliable for this use case)
   const loudnormOutput = await execFfmpeg(
     [
-      '-hide_banner',
-      '-i', absolutePath,
-      '-af', 'loudnorm=print_format=json',
-      '-f', 'null',
-      '-'
+      "-hide_banner",
+      "-i",
+      absolutePath,
+      "-af",
+      "loudnorm=print_format=json",
+      "-f",
+      "null",
+      "-",
     ],
-    180000
+    180000,
   );
 
   let stats: any = null;
@@ -842,14 +1256,14 @@ export async function analyzeMedleyQuality(filePath: string, workDir: string): P
   const lra = stats?.input_lra ? Number(stats.input_lra) : null;
   const truePeak = stats?.input_tp ? Number(stats.input_tp) : null;
 
-  let note = 'Quality analysis completed.';
+  let note = "Quality analysis completed.";
   if (integrated !== null) {
-    if (integrated > -11) note = 'Quite loud — watch for fatigue.';
-    else if (integrated < -16) note = 'On the quiet side.';
-    else note = 'Loudness in a comfortable modern range.';
+    if (integrated > -11) note = "Quite loud — watch for fatigue.";
+    else if (integrated < -16) note = "On the quiet side.";
+    else note = "Loudness in a comfortable modern range.";
   }
   if (truePeak !== null && truePeak > -0.8) {
-    note += ' True peak is high — consider limiting.';
+    note += " True peak is high — consider limiting.";
   }
 
   return {
@@ -857,6 +1271,6 @@ export async function analyzeMedleyQuality(filePath: string, workDir: string): P
     loudnessRange: lra !== null ? round(lra, 2) : null,
     truePeak: truePeak !== null ? round(truePeak, 2) : null,
     overallQualityNote: note,
-    rawOutput: loudnormOutput
+    rawOutput: loudnormOutput,
   };
 }

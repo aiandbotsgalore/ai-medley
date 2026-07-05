@@ -1,6 +1,7 @@
-import crypto from 'crypto';
-import fs from 'fs';
-import path from 'path';
+import crypto from "crypto";
+import fs from "fs";
+import path from "path";
+import { isDeepStrictEqual } from "node:util";
 import {
   CandidateManifestSchema,
   MAX_COMPLETE_CANDIDATES,
@@ -8,14 +9,14 @@ import {
   type CandidateManifest,
   type QualityReview,
   type RenderCandidate,
-} from '../types/specialistWorkflow';
+} from "../types/specialistWorkflow";
 
 const SESSION_ID_PATTERN = /^[a-zA-Z0-9_-]{3,80}$/;
 const manifestLocks = new Map<string, Promise<void>>();
 
 export function validateSessionId(sessionId: string) {
   if (!SESSION_ID_PATTERN.test(sessionId)) {
-    throw new Error('Invalid session ID');
+    throw new Error("Invalid session ID");
   }
 }
 
@@ -24,7 +25,7 @@ export function getSessionDirectory(workDir: string, sessionId: string) {
   const root = path.resolve(workDir);
   const sessionDir = path.resolve(root, sessionId);
   if (sessionDir !== root && !sessionDir.startsWith(root + path.sep)) {
-    throw new Error('Session path escapes the work directory');
+    throw new Error("Session path escapes the work directory");
   }
   return sessionDir;
 }
@@ -34,13 +35,19 @@ function ensureDirectory(directory: string) {
 }
 
 function manifestPath(workDir: string, sessionId: string) {
-  return path.join(getSessionDirectory(workDir, sessionId), 'candidate-manifest.json');
+  return path.join(
+    getSessionDirectory(workDir, sessionId),
+    "candidate-manifest.json",
+  );
 }
 
-export async function withSessionLock<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+export async function withSessionLock<T>(
+  sessionId: string,
+  operation: () => Promise<T>,
+): Promise<T> {
   const previous = manifestLocks.get(sessionId) ?? Promise.resolve();
   let release!: () => void;
-  const current = new Promise<void>(resolve => {
+  const current = new Promise<void>((resolve) => {
     release = resolve;
   });
   const queued = previous.then(() => current);
@@ -50,7 +57,8 @@ export async function withSessionLock<T>(sessionId: string, operation: () => Pro
     return await operation();
   } finally {
     release();
-    if (manifestLocks.get(sessionId) === queued) manifestLocks.delete(sessionId);
+    if (manifestLocks.get(sessionId) === queued)
+      manifestLocks.delete(sessionId);
   }
 }
 
@@ -58,6 +66,7 @@ export function createEmptyManifest(sessionId: string): CandidateManifest {
   return {
     schemaVersion: 1,
     sessionId,
+    workflowMode: undefined,
     selectedCandidateId: null,
     finalizedCandidateId: null,
     finalOutputPath: null,
@@ -66,15 +75,84 @@ export function createEmptyManifest(sessionId: string): CandidateManifest {
   };
 }
 
-export function readCandidateManifest(workDir: string, sessionId: string): CandidateManifest {
+export function validateCandidateManifestSemantics(
+  workDir: string,
+  sessionId: string,
+  manifest: CandidateManifest,
+) {
+  if (manifest.sessionId !== sessionId) {
+    throw new Error("Candidate manifest session ID does not match its path");
+  }
+  const candidateIds = new Set<string>();
+  const candidateVersions = new Set<number>();
+  for (const candidate of manifest.candidates) {
+    if (candidateIds.has(candidate.candidateId)) {
+      throw new Error(`Duplicate candidate ID: ${candidate.candidateId}`);
+    }
+    if (candidateVersions.has(candidate.candidateVersion)) {
+      throw new Error(
+        `Duplicate candidate version: ${candidate.candidateVersion}`,
+      );
+    }
+    candidateIds.add(candidate.candidateId);
+    candidateVersions.add(candidate.candidateVersion);
+  }
+  for (const candidate of manifest.candidates) {
+    if (
+      candidate.parentCandidateId &&
+      !candidateIds.has(candidate.parentCandidateId)
+    ) {
+      throw new Error(
+        `Candidate parent is not registered: ${candidate.parentCandidateId}`,
+      );
+    }
+    if (candidate.parentCandidateId === candidate.candidateId) {
+      throw new Error("Candidate cannot be its own parent");
+    }
+  }
+  if (
+    manifest.selectedCandidateId &&
+    !candidateIds.has(manifest.selectedCandidateId)
+  ) {
+    throw new Error("Selected candidate is not registered in the manifest");
+  }
+  if (
+    manifest.finalizedCandidateId &&
+    !candidateIds.has(manifest.finalizedCandidateId)
+  ) {
+    throw new Error("Finalized candidate is not registered in the manifest");
+  }
+  if (Boolean(manifest.finalizedCandidateId) !== Boolean(manifest.finalOutputPath)) {
+    throw new Error(
+      "Finalized candidate and final output path must be recorded together",
+    );
+  }
+  if (manifest.finalOutputPath) {
+    const expectedFinalPath = path.join(
+      getSessionDirectory(workDir, sessionId),
+      "medley_final.mp3",
+    );
+    if (path.resolve(manifest.finalOutputPath) !== path.resolve(expectedFinalPath)) {
+      throw new Error("Final output path must be the fixed session final path");
+    }
+  }
+  return manifest;
+}
+
+export function readCandidateManifest(
+  workDir: string,
+  sessionId: string,
+): CandidateManifest {
   const file = manifestPath(workDir, sessionId);
   if (!fs.existsSync(file)) return createEmptyManifest(sessionId);
-  const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
   const result = CandidateManifestSchema.safeParse(parsed);
   if (!result.success) {
-    throw new Error(`Candidate manifest is corrupt: ${result.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ')}`);
+    throw new Error(
+      `Candidate manifest is corrupt: ${result.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`,
+    );
   }
-  return result.data;
+  return validateCandidateManifestSemantics(workDir, sessionId, result.data);
 }
 
 export function writeCandidateManifestAtomic(
@@ -89,11 +167,12 @@ export function writeCandidateManifestAtomic(
     sessionId,
     updatedAt: new Date().toISOString(),
   });
+  validateCandidateManifestSemantics(workDir, sessionId, validated);
   const target = manifestPath(workDir, sessionId);
   const temporary = `${target}.tmp`;
-  const fd = fs.openSync(temporary, 'w');
+  const fd = fs.openSync(temporary, "w");
   try {
-    fs.writeFileSync(fd, JSON.stringify(validated, null, 2), 'utf8');
+    fs.writeFileSync(fd, JSON.stringify(validated, null, 2), "utf8");
     fs.fsyncSync(fd);
   } finally {
     fs.closeSync(fd);
@@ -102,8 +181,8 @@ export function writeCandidateManifestAtomic(
 }
 
 export function sha256File(filePath: string) {
-  const hash = crypto.createHash('sha256');
-  const fd = fs.openSync(filePath, 'r');
+  const hash = crypto.createHash("sha256");
+  const fd = fs.openSync(filePath, "r");
   const buffer = Buffer.allocUnsafe(1024 * 1024);
   try {
     let bytesRead = 0;
@@ -114,12 +193,13 @@ export function sha256File(filePath: string) {
   } finally {
     fs.closeSync(fd);
   }
-  return hash.digest('hex');
+  return hash.digest("hex");
 }
 
 function assertNoReparsePoint(filePath: string) {
   const stat = fs.lstatSync(filePath);
-  if (stat.isSymbolicLink()) throw new Error('Symbolic links are not allowed for candidate files');
+  if (stat.isSymbolicLink())
+    throw new Error("Symbolic links are not allowed for candidate files");
 }
 
 export function assertRegisteredSafeFile(
@@ -132,13 +212,16 @@ export function assertRegisteredSafeFile(
   ensureDirectory(sessionDir);
   const realSessionDir = fs.realpathSync.native(sessionDir);
   const resolved = path.resolve(filePath);
-  if (!registeredPaths.some(item => path.resolve(item) === resolved)) {
-    throw new Error('File is not registered in the candidate manifest');
+  if (!registeredPaths.some((item) => path.resolve(item) === resolved)) {
+    throw new Error("File is not registered in the candidate manifest");
   }
   const parent = path.dirname(resolved);
   const realParent = fs.realpathSync.native(parent);
-  if (realParent !== realSessionDir && !realParent.startsWith(realSessionDir + path.sep)) {
-    throw new Error('Candidate path escapes the session directory');
+  if (
+    realParent !== realSessionDir &&
+    !realParent.startsWith(realSessionDir + path.sep)
+  ) {
+    throw new Error("Candidate path escapes the session directory");
   }
   if (fs.existsSync(resolved)) assertNoReparsePoint(resolved);
   return resolved;
@@ -163,8 +246,39 @@ export function assertCandidateStorageAvailable(
   const available = getAvailableBytes(sessionDir);
   const required = Math.max(estimatedBytes * 2, 200 * 1024 * 1024);
   if (available !== null && available < required) {
-    throw new Error(`INSUFFICIENT_STORAGE: requires ${required} bytes with safety margin, ${available} available`);
+    throw new Error(
+      `INSUFFICIENT_STORAGE: requires ${required} bytes with safety margin, ${available} available`,
+    );
   }
+}
+
+export function validateLegacyFinalOutput(
+  workDir: string,
+  sessionId: string,
+  filePath: string,
+) {
+  const sessionDir = getSessionDirectory(workDir, sessionId);
+  const resolved = path.resolve(
+    path.isAbsolute(filePath) ? filePath : path.join(sessionDir, filePath),
+  );
+  if (path.dirname(resolved) !== sessionDir) {
+    throw new Error("Legacy final output must be inside its session directory");
+  }
+  if (!fs.existsSync(resolved)) throw new Error("Legacy final output is missing");
+  const stat = fs.lstatSync(resolved);
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    throw new Error("Legacy final output must be a regular non-symlink file");
+  }
+  const realSession = fs.realpathSync.native(sessionDir);
+  const realParent = fs.realpathSync.native(path.dirname(resolved));
+  if (realParent !== realSession) {
+    throw new Error("Legacy final output escapes its session directory");
+  }
+  return {
+    finalPath: resolved,
+    sizeBytes: stat.size,
+    sha256: sha256File(resolved),
+  };
 }
 
 export function nextCandidateIdentity(manifest: CandidateManifest) {
@@ -174,7 +288,7 @@ export function nextCandidateIdentity(manifest: CandidateManifest) {
   const version = manifest.candidates.length + 1;
   return {
     candidateVersion: version,
-    candidateId: `candidate-${String(version).padStart(3, '0')}`,
+    candidateId: `candidate-${String(version).padStart(3, "0")}`,
   };
 }
 
@@ -182,9 +296,20 @@ export function registerCandidate(
   workDir: string,
   sessionId: string,
   candidate: RenderCandidate,
+  workflowMode?: "automatic" | "legacy",
 ) {
   const manifest = readCandidateManifest(workDir, sessionId);
-  if (manifest.candidates.some(item => item.candidateId === candidate.candidateId)) {
+  if (
+    manifest.candidates.some((item) => item.candidateId === candidate.candidateId)
+  ) {
+    const existing = manifest.candidates.find(
+      (item) => item.candidateId === candidate.candidateId,
+    );
+    if (!isDeepStrictEqual(existing, candidate)) {
+      throw new Error(
+        `Candidate ID ${candidate.candidateId} is already registered with a different candidate record`,
+      );
+    }
     return manifest;
   }
   if (manifest.candidates.length >= MAX_COMPLETE_CANDIDATES) {
@@ -192,6 +317,7 @@ export function registerCandidate(
   }
   const next: CandidateManifest = {
     ...manifest,
+    workflowMode: workflowMode ?? manifest.workflowMode,
     candidates: [...manifest.candidates, candidate],
     updatedAt: new Date().toISOString(),
   };
@@ -205,8 +331,13 @@ export function applyCandidateReview(
   review: QualityReview,
 ) {
   const manifest = readCandidateManifest(workDir, sessionId);
-  const index = manifest.candidates.findIndex(item => item.candidateId === review.candidateId);
-  if (index < 0) throw new Error('Reviewed candidate is not registered');
+  const index = manifest.candidates.findIndex(
+    (item) => item.candidateId === review.candidateId,
+  );
+  if (index < 0) throw new Error("Reviewed candidate is not registered");
+  if (review.approved && !manifest.candidates[index].technicallyValid) {
+    throw new Error("A technically invalid candidate cannot be approved");
+  }
   const candidates = manifest.candidates.slice();
   candidates[index] = {
     ...candidates[index],
@@ -216,8 +347,14 @@ export function applyCandidateReview(
       performerIdentity: review.performerIdentity,
       overallScore: review.overallScore,
     },
-    reviewStatus: review.approved ? 'approved' : 'changes_requested',
-    warnings: [...new Set([...candidates[index].warnings, ...review.warnings, ...review.blockingIssues])],
+    reviewStatus: review.approved ? "approved" : "changes_requested",
+    warnings: [
+      ...new Set([
+        ...candidates[index].warnings,
+        ...review.warnings,
+        ...review.blockingIssues,
+      ]),
+    ],
   };
   const selected = chooseBestCandidate(candidates);
   const next: CandidateManifest = {
@@ -234,40 +371,72 @@ export function promoteCandidate(
   workDir: string,
   sessionId: string,
   candidateId: string,
+  options: {
+    requireApproved?: boolean;
+    requireSelected?: boolean;
+  } = {},
 ) {
   const manifest = readCandidateManifest(workDir, sessionId);
-  if (
-    manifest.finalizedCandidateId === candidateId &&
-    manifest.finalOutputPath &&
-    fs.existsSync(manifest.finalOutputPath)
-  ) {
-    return { manifest, finalPath: manifest.finalOutputPath, idempotent: true };
+  const candidate = manifest.candidates.find(
+    (item) => item.candidateId === candidateId,
+  );
+  if (!candidate) {
+    throw new Error("Candidate is missing or technically invalid");
   }
-  const candidate = manifest.candidates.find(item => item.candidateId === candidateId);
-  if (!candidate || !candidate.technicallyValid) {
-    throw new Error('Candidate is missing or technically invalid');
+  if (options.requireApproved && candidate.reviewStatus !== "approved") {
+    throw new Error("Automatic finalization requires an approved candidate");
   }
-  const registered = manifest.candidates.flatMap(item => [
+  if (options.requireSelected && manifest.selectedCandidateId !== candidateId) {
+    throw new Error("Automatic finalization requires the selected candidate");
+  }
+  if (!candidate.technicallyValid) {
+    throw new Error("Candidate is missing or technically invalid");
+  }
+  const registered = manifest.candidates.flatMap((item) => [
     item.outputPath,
     ...item.debugPaths,
     ...item.previewPaths,
   ]);
-  const source = assertRegisteredSafeFile(workDir, sessionId, candidate.outputPath, registered);
-  if (!fs.existsSync(source)) throw new Error('Candidate file is missing');
+  const source = assertRegisteredSafeFile(
+    workDir,
+    sessionId,
+    candidate.outputPath,
+    registered,
+  );
+  if (!fs.existsSync(source)) throw new Error("Candidate file is missing");
   const sizeBytes = fs.statSync(source).size;
   const sourceHash = sha256File(source);
   if (sizeBytes !== candidate.sizeBytes || sourceHash !== candidate.sha256) {
-    throw new Error('Candidate integrity check failed');
+    throw new Error("Candidate integrity check failed");
   }
   const sessionDir = getSessionDirectory(workDir, sessionId);
-  const partPath = path.join(sessionDir, 'medley_final.mp3.part');
-  const finalPath = path.join(sessionDir, 'medley_final.mp3');
+  const finalPath = path.join(sessionDir, "medley_final.mp3");
+  if (
+    manifest.finalizedCandidateId === candidateId &&
+    manifest.finalOutputPath
+  ) {
+    if (path.resolve(manifest.finalOutputPath) !== path.resolve(finalPath)) {
+      throw new Error("Final output path must be the fixed session final path");
+    }
+    if (!fs.existsSync(finalPath)) throw new Error("Final output is missing");
+    assertNoReparsePoint(finalPath);
+    const finalStat = fs.statSync(finalPath);
+    if (
+      !finalStat.isFile() ||
+      finalStat.size !== candidate.sizeBytes ||
+      sha256File(finalPath) !== candidate.sha256
+    ) {
+      throw new Error("Final output integrity check failed");
+    }
+    return { manifest, finalPath, idempotent: true };
+  }
+  const partPath = path.join(sessionDir, "medley_final.mp3.part");
   fs.copyFileSync(source, partPath);
   const copiedSize = fs.statSync(partPath).size;
   const copiedHash = sha256File(partPath);
   if (copiedSize !== sizeBytes || copiedHash !== sourceHash) {
     fs.rmSync(partPath, { force: true });
-    throw new Error('Final copy integrity check failed');
+    throw new Error("Final copy integrity check failed");
   }
   fs.renameSync(partPath, finalPath);
   const next: CandidateManifest = {
@@ -286,10 +455,19 @@ export function cleanupRejectedCandidates(workDir: string, sessionId: string) {
   const selected = manifest.finalizedCandidateId;
   for (const candidate of manifest.candidates) {
     if (candidate.candidateId === selected) continue;
-    const registered = [candidate.outputPath, ...candidate.debugPaths, ...candidate.previewPaths];
+    const registered = [
+      candidate.outputPath,
+      ...candidate.debugPaths,
+      ...candidate.previewPaths,
+    ];
     for (const filePath of registered) {
       try {
-        const safe = assertRegisteredSafeFile(workDir, sessionId, filePath, registered);
+        const safe = assertRegisteredSafeFile(
+          workDir,
+          sessionId,
+          filePath,
+          registered,
+        );
         fs.rmSync(safe, { force: true });
       } catch {
         // Cleanup is best-effort and must not invalidate successful finalization.
@@ -307,7 +485,7 @@ export function discardAutomaticSessionFiles(
   const manifest = readCandidateManifest(workDir, sessionId);
   const historyProtected = manifest.finalOutputPath;
   const registered = [
-    ...manifest.candidates.flatMap(candidate => [
+    ...manifest.candidates.flatMap((candidate) => [
       candidate.outputPath,
       ...candidate.debugPaths,
       ...candidate.previewPaths,
@@ -315,9 +493,18 @@ export function discardAutomaticSessionFiles(
     ...additionalRegisteredPaths,
   ];
   for (const filePath of registered) {
-    if (historyProtected && path.resolve(filePath) === path.resolve(historyProtected)) continue;
+    if (
+      historyProtected &&
+      path.resolve(filePath) === path.resolve(historyProtected)
+    )
+      continue;
     try {
-      const safe = assertRegisteredSafeFile(workDir, sessionId, filePath, registered);
+      const safe = assertRegisteredSafeFile(
+        workDir,
+        sessionId,
+        filePath,
+        registered,
+      );
       fs.rmSync(safe, { force: true });
     } catch {
       // Idempotent discard tolerates already missing files.
@@ -325,7 +512,7 @@ export function discardAutomaticSessionFiles(
   }
   if (fs.existsSync(sessionDir)) {
     for (const name of fs.readdirSync(sessionDir)) {
-      if (!name.endsWith('.part')) continue;
+      if (!name.endsWith(".part")) continue;
       const filePath = path.join(sessionDir, name);
       try {
         const realParent = fs.realpathSync.native(path.dirname(filePath));

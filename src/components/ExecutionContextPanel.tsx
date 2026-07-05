@@ -1,5 +1,11 @@
-import React from 'react';
-import { Activity, HelpCircle, TrendingUp, ArrowRight, Zap } from 'lucide-react';
+import React from "react";
+import {
+  Activity,
+  HelpCircle,
+  TrendingUp,
+  ArrowRight,
+  Zap,
+} from "lucide-react";
 
 export interface ExecutionContextSummary {
   phase: string;
@@ -14,8 +20,11 @@ interface ExecutionContextPanelProps {
   status: string;
 }
 
-export default function ExecutionContextPanel({ context, status }: ExecutionContextPanelProps) {
-  if (!context || status !== 'running') {
+export default function ExecutionContextPanel({
+  context,
+  status,
+}: ExecutionContextPanelProps) {
+  if (!context || status !== "running") {
     return (
       <div className="h-full border border-[#1A1A1A] bg-[#0A0A0A] rounded-xl overflow-hidden flex flex-col">
         <div className="h-12 px-4 flex items-center border-b border-[#1A1A1A] bg-[#050505] shrink-0">
@@ -26,9 +35,9 @@ export default function ExecutionContextPanel({ context, status }: ExecutionCont
         </div>
         <div className="flex-1 flex items-center justify-center p-6 text-center">
           <div className="text-[#444] text-[11px] font-mono">
-            {status === 'running'
-              ? 'Agent is initializing...\nExecution context will appear after the first reasoning step.'
-              : 'Execution context appears during autonomous runs.'}
+            {status === "running"
+              ? "Agent is initializing...\nExecution context will appear after the first reasoning step."
+              : "Execution context appears during autonomous runs."}
           </div>
         </div>
       </div>
@@ -54,8 +63,12 @@ export default function ExecutionContextPanel({ context, status }: ExecutionCont
       <div className="flex-1 overflow-y-auto p-4 space-y-5 custom-scrollbar text-[11px]">
         {/* Phase */}
         <div>
-          <div className="text-[#555] font-mono uppercase tracking-wider text-[9px] mb-1">PHASE</div>
-          <div className="text-white font-medium leading-tight">{phase || '—'}</div>
+          <div className="text-[#555] font-mono uppercase tracking-wider text-[9px] mb-1">
+            PHASE
+          </div>
+          <div className="text-white font-medium leading-tight">
+            {phase || "—"}
+          </div>
         </div>
 
         {/* Current Action */}

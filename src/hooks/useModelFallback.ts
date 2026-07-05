@@ -1,57 +1,93 @@
-import { useState, useRef, useCallback } from 'react';
-import { buildSystemPrompt, getOpenRouterTools, getToolDeclarations } from '../engine/prompts';
-import { createProviderSession } from '../engine/providers';
-import type { MedleyConfig } from '../components/ConfigPanel';
-import type { LibraryFile } from '../components/LibrarySidebar';
-import type { MedleyDesignPayload } from '../engine/medleyIntelligence';
-import type { SemanticMemory } from '../types/semanticMemory';
-import { buildRecoveryNarrative } from '../types/semanticMemory';
+import { useState, useRef, useCallback, useEffect } from "react";
+import {
+  buildSystemPrompt,
+  getOpenRouterTools,
+  getToolDeclarations,
+} from "../engine/prompts";
+import { createProviderSession } from "../engine/providers";
+import type { ProviderRequestAudit } from "../engine/providerRequest";
+import type { MedleyConfig } from "../components/ConfigPanel";
+import type { LibraryFile } from "../components/LibrarySidebar";
+import type { MedleyDesignPayload } from "../engine/medleyIntelligence";
+import type { SemanticMemory } from "../types/semanticMemory";
+import { buildRecoveryNarrative } from "../types/semanticMemory";
 
 export function useModelFallback(config: MedleyConfig) {
-  const [activeModel, setActiveModel] = useState<string>('');
+  const [activeModel, setActiveModel] = useState<string>("");
   const [toolFailureStreak, setToolFailureStreak] = useState(0);
   const currentModelIndexRef = useRef(0);
   const toolFailureStreakRef = useRef(0);
 
   const sessionRef = useRef<any>(null);
   const forceModelSwitchPendingRef = useRef(false);
+  const providerAuditHandlerRef = useRef<
+    ((audit: ProviderRequestAudit) => void) | undefined
+  >(undefined);
+
+  useEffect(() => {
+    currentModelIndexRef.current = 0;
+    toolFailureStreakRef.current = 0;
+    setToolFailureStreak(0);
+    setActiveModel(config.model);
+    sessionRef.current = null;
+  }, [config.provider, config.model]);
+
+  const prepareForRun = useCallback((modelIndex = 0) => {
+    currentModelIndexRef.current = Math.max(0, Math.floor(modelIndex));
+    toolFailureStreakRef.current = 0;
+    setToolFailureStreak(0);
+    forceModelSwitchPendingRef.current = false;
+  }, []);
 
   const getFallbackModels = useCallback(() => {
-    return (config.provider === 'gemini'
-      ? [config.model, 'gemini-2.5-flash', 'gemini-2.5-pro']
-      : [
-          config.model,
-          'qwen/qwen3-coder:free',
-          'deepseek/deepseek-v4-flash:free',
-          'nousresearch/hermes-3-llama-3.1-405b:free',
-          'nvidia/nemotron-3-super-120b-a12b:free',
-          'meta-llama/llama-3.3-70b-instruct:free',
-        ]
+    return (
+      config.provider === "gemini"
+        ? [config.model, "gemini-2.5-flash", "gemini-2.5-pro"]
+        : [
+            config.model,
+            "qwen/qwen3-coder:free",
+            "deepseek/deepseek-v4-flash:free",
+            "nousresearch/hermes-3-llama-3.1-405b:free",
+            "nvidia/nemotron-3-super-120b-a12b:free",
+            "meta-llama/llama-3.3-70b-instruct:free",
+          ]
     ).filter((m, i, arr) => arr.indexOf(m) === i);
   }, [config.provider, config.model]);
 
   const getCurrentModel = useCallback(() => {
     const fallbacks = getFallbackModels();
-    return fallbacks[Math.min(currentModelIndexRef.current, fallbacks.length - 1)];
+    return fallbacks[
+      Math.min(currentModelIndexRef.current, fallbacks.length - 1)
+    ];
   }, [getFallbackModels]);
 
-  const createSessionForModel = useCallback((
-    model: string,
-    lib: LibraryFile[] = [],
-    design?: MedleyDesignPayload | null,
-    sid?: string,
-    history?: unknown[]
-  ) => {
-    const tempConfig = { ...config, model };
-    sessionRef.current = createProviderSession(
-      tempConfig,
-      buildSystemPrompt(lib, tempConfig, design ?? null, sid),
-      tempConfig.provider === 'gemini' ? getToolDeclarations() : getOpenRouterTools(),
-      tempConfig.temperature,
-      history
-    );
-    return sessionRef.current;
-  }, [config]);
+  const createSessionForModel = useCallback(
+    (
+      model: string,
+      lib: LibraryFile[] = [],
+      design?: MedleyDesignPayload | null,
+      sid?: string,
+      history?: unknown[],
+    ) => {
+      const tempConfig = { ...config, model };
+      sessionRef.current = createProviderSession(
+        tempConfig,
+        buildSystemPrompt(lib, tempConfig, design ?? null, sid),
+        tempConfig.provider === "gemini"
+          ? getToolDeclarations()
+          : getOpenRouterTools(),
+        tempConfig.temperature,
+        history,
+        {
+          stage: "manual",
+          role: "manual",
+          onRequestAudit: providerAuditHandlerRef.current,
+        },
+      );
+      return sessionRef.current;
+    },
+    [config],
+  );
 
   const requestForceModelSwitch = useCallback(() => {
     forceModelSwitchPendingRef.current = true;
@@ -63,124 +99,151 @@ export function useModelFallback(config: MedleyConfig) {
     return pending;
   }, []);
 
-  const switchToNextModel = useCallback(async (
-    reason: string,
-    options?: {
-      lib?: LibraryFile[];
-      design?: MedleyDesignPayload | null;
-      sid?: string;
-      semanticMemory?: SemanticMemory;
-      currentPhase?: string;
-      checkpointFn?: () => void;
-      addLog?: (msg: string) => void;
-    }
-  ) => {
-    const { lib = [], design, sid, semanticMemory, currentPhase = '', checkpointFn, addLog: log } = options ?? {};
-    const fallbacks = getFallbackModels();
-    if (currentModelIndexRef.current >= fallbacks.length - 1) {
-      log?.(`⚠️ All fallback models exhausted. Last failure reason: ${reason}`);
-      return false;
-    }
-
-    const previousModel = getCurrentModel();
-
-    // Retrieve chat history for transfer to the new session
-    let history: unknown[] | undefined;
-    let historyTransferred = false;
-    try {
-      const h = sessionRef.current?.getHistory?.();
-      if (Array.isArray(h) && h.length > 0) {
-        history = h;
-        historyTransferred = true;
+  const switchToNextModel = useCallback(
+    async (
+      reason: string,
+      options?: {
+        lib?: LibraryFile[];
+        design?: MedleyDesignPayload | null;
+        sid?: string;
+        semanticMemory?: SemanticMemory;
+        currentPhase?: string;
+        checkpointFn?: () => void;
+        addLog?: (msg: string) => void;
+      },
+    ) => {
+      const {
+        lib = [],
+        design,
+        sid,
+        semanticMemory,
+        currentPhase = "",
+        checkpointFn,
+        addLog: log,
+      } = options ?? {};
+      const fallbacks = getFallbackModels();
+      if (currentModelIndexRef.current >= fallbacks.length - 1) {
+        log?.(
+          `⚠️ All fallback models exhausted. Last failure reason: ${reason}`,
+        );
+        return false;
       }
-    } catch (e) {
-      log?.(`   ⚠️ Could not retrieve chat history for transfer: ${e}`);
-    }
 
-    currentModelIndexRef.current++;
-    const nextModel = getCurrentModel();
+      const previousModel = getCurrentModel();
 
-    log?.(`🔄 Model switch: ${previousModel} → ${nextModel}`);
-    log?.(`   Reason: ${reason} | History transfer: ${historyTransferred ? `${(history as any[]).length} turns` : 'unavailable'}`);
-
-    setActiveModel(nextModel);
-    createSessionForModel(nextModel, lib, design, sid, history);
-    toolFailureStreakRef.current = 0;
-    setToolFailureStreak(0);
-
-    // Build and inject semantic memory recovery narrative
-    let narrative = '';
-    if (semanticMemory) {
+      // Retrieve chat history for transfer to the new session
+      let history: unknown[] | undefined;
+      let historyTransferred = false;
       try {
-        const builtNarrative = buildRecoveryNarrative(semanticMemory, 0, currentPhase);
-        if (builtNarrative) {
-          narrative = ` Context: ${builtNarrative}`;
-          log?.(`   ✅ Semantic memory recovery narrative injected (${builtNarrative.length} chars)`);
+        const h = sessionRef.current?.getHistory?.();
+        if (Array.isArray(h) && h.length > 0) {
+          history = h;
+          historyTransferred = true;
         }
       } catch (e) {
-        log?.(`   ⚠️ Recovery narrative build failed: ${e}`);
+        log?.(`   ⚠️ Could not retrieve chat history for transfer: ${e}`);
       }
-    }
 
-    const recoveryMsg = `Model switched from ${previousModel} to ${nextModel}. Reason: ${reason}. Current phase: "${currentPhase}".${narrative} ${
-      historyTransferred
-        ? `Full conversation history transferred above — continue from where we left off.`
-        : 'No prior history available — assess current state from system prompt and continue.'
-    } Use valid tool calls to make progress.`;
+      currentModelIndexRef.current++;
+      const nextModel = getCurrentModel();
 
-    try {
-      await sessionRef.current?.send(recoveryMsg);
-    } catch (e: any) {
-      log?.(`   ⚠️ Model switch recovery message failed: ${e?.message || e}`);
-    }
+      log?.(`🔄 Model switch: ${previousModel} → ${nextModel}`);
+      log?.(
+        `   Reason: ${reason} | History transfer: ${historyTransferred ? `${(history as any[]).length} turns` : "unavailable"}`,
+      );
 
-    // Persist updated currentModelIndex to checkpoint
-    checkpointFn?.();
+      setActiveModel(nextModel);
+      createSessionForModel(nextModel, lib, design, sid, history);
+      toolFailureStreakRef.current = 0;
+      setToolFailureStreak(0);
 
-    return true;
-  }, [getFallbackModels, getCurrentModel, createSessionForModel]);
+      // Build and inject semantic memory recovery narrative
+      let narrative = "";
+      if (semanticMemory) {
+        try {
+          const builtNarrative = buildRecoveryNarrative(
+            semanticMemory,
+            0,
+            currentPhase,
+          );
+          if (builtNarrative) {
+            narrative = ` Context: ${builtNarrative}`;
+            log?.(
+              `   ✅ Semantic memory recovery narrative injected (${builtNarrative.length} chars)`,
+            );
+          }
+        } catch (e) {
+          log?.(`   ⚠️ Recovery narrative build failed: ${e}`);
+        }
+      }
 
-  const switchToPreviousModel = useCallback(async (addLog?: (msg: string) => void) => {
-    if (currentModelIndexRef.current <= 0) {
-      addLog?.('⚠️ Already on the primary model — cannot switch back further.');
-      return false;
-    }
-    const fromModel = getCurrentModel();
-    currentModelIndexRef.current--;
-    const toModel = getCurrentModel();
-    addLog?.(`🔄 Switching back: ${fromModel} → ${toModel}`);
-    setActiveModel(toModel);
-    createSessionForModel(toModel);
-    try {
-      await sessionRef.current?.send(`Switched back to ${toModel}. Please continue the medley architect process from where we left off.`);
-    } catch (e: any) {
-      addLog?.(`   Switch back recovery failed: ${e?.message || e}`);
-    }
-    toolFailureStreakRef.current = 0;
-    setToolFailureStreak(0);
-    return true;
-  }, [getCurrentModel, createSessionForModel]);
+      if (narrative) {
+        log?.(
+          "   Recovery context retained locally; no hidden provider request was made during fallback.",
+        );
+      }
 
-  const resetToPrimaryModel = useCallback(async (addLog?: (msg: string) => void) => {
-    if (currentModelIndexRef.current === 0) {
-      addLog?.('ℹ️ Already on the primary model.');
-      return false;
-    }
-    const fromModel = getCurrentModel();
-    currentModelIndexRef.current = 0;
-    const toModel = getCurrentModel();
-    addLog?.(`🔄 Resetting to primary model: ${fromModel} → ${toModel}`);
-    setActiveModel(toModel);
-    createSessionForModel(toModel);
-    try {
-      await sessionRef.current?.send(`Reset to primary model (${toModel}). Please continue the medley architect process from where we left off.`);
-    } catch (e: any) {
-      addLog?.(`   Reset recovery failed: ${e?.message || e}`);
-    }
-    toolFailureStreakRef.current = 0;
-    setToolFailureStreak(0);
-    return true;
-  }, [getCurrentModel, createSessionForModel]);
+      // Persist updated currentModelIndex to checkpoint
+      checkpointFn?.();
+
+      return true;
+    },
+    [getFallbackModels, getCurrentModel, createSessionForModel],
+  );
+
+  const switchToPreviousModel = useCallback(
+    async (addLog?: (msg: string) => void) => {
+      if (currentModelIndexRef.current <= 0) {
+        addLog?.(
+          "⚠️ Already on the primary model — cannot switch back further.",
+        );
+        return false;
+      }
+      const fromModel = getCurrentModel();
+      currentModelIndexRef.current--;
+      const toModel = getCurrentModel();
+      addLog?.(`🔄 Switching back: ${fromModel} → ${toModel}`);
+      setActiveModel(toModel);
+      createSessionForModel(toModel);
+      try {
+        await sessionRef.current?.send(
+          `Switched back to ${toModel}. Please continue the medley architect process from where we left off.`,
+        );
+      } catch (e: any) {
+        addLog?.(`   Switch back recovery failed: ${e?.message || e}`);
+      }
+      toolFailureStreakRef.current = 0;
+      setToolFailureStreak(0);
+      return true;
+    },
+    [getCurrentModel, createSessionForModel],
+  );
+
+  const resetToPrimaryModel = useCallback(
+    async (addLog?: (msg: string) => void) => {
+      if (currentModelIndexRef.current === 0) {
+        addLog?.("ℹ️ Already on the primary model.");
+        return false;
+      }
+      const fromModel = getCurrentModel();
+      currentModelIndexRef.current = 0;
+      const toModel = getCurrentModel();
+      addLog?.(`🔄 Resetting to primary model: ${fromModel} → ${toModel}`);
+      setActiveModel(toModel);
+      createSessionForModel(toModel);
+      try {
+        await sessionRef.current?.send(
+          `Reset to primary model (${toModel}). Please continue the medley architect process from where we left off.`,
+        );
+      } catch (e: any) {
+        addLog?.(`   Reset recovery failed: ${e?.message || e}`);
+      }
+      toolFailureStreakRef.current = 0;
+      setToolFailureStreak(0);
+      return true;
+    },
+    [getCurrentModel, createSessionForModel],
+  );
 
   const incrementToolFailure = useCallback(() => {
     toolFailureStreakRef.current++;
@@ -194,6 +257,12 @@ export function useModelFallback(config: MedleyConfig) {
   }, []);
 
   const getSession = useCallback(() => sessionRef.current, []);
+  const setProviderAuditHandler = useCallback(
+    (handler?: (audit: ProviderRequestAudit) => void) => {
+      providerAuditHandlerRef.current = handler;
+    },
+    [],
+  );
 
   return {
     activeModel,
@@ -212,5 +281,7 @@ export function useModelFallback(config: MedleyConfig) {
     resetToPrimaryModel,
     incrementToolFailure,
     resetToolFailure,
+    prepareForRun,
+    setProviderAuditHandler,
   };
 }

@@ -1,12 +1,12 @@
-import type { SemanticMemory } from '../types/semanticMemory';
+import type { SemanticMemory } from "../types/semanticMemory";
 
 export const CHECKPOINT_SCHEMA_VERSION = 2;
 
 export function validateCheckpoint(raw: any): boolean {
-  if (!raw || typeof raw !== 'object') return false;
-  if (!raw.sessionId || typeof raw.sessionId !== 'string') return false;
+  if (!raw || typeof raw !== "object") return false;
+  if (!raw.sessionId || typeof raw.sessionId !== "string") return false;
   if (!raw.chatHistory || !Array.isArray(raw.chatHistory)) return false;
-  if (typeof raw.iterations !== 'number') return false;
+  if (typeof raw.iterations !== "number") return false;
   return true;
 }
 
@@ -25,7 +25,7 @@ export function upgradeCheckpoint(raw: any): any {
       successfulTransitions: [],
       failedTransitions: [],
       timingConstraints: [],
-      recoveryNarrative: '',
+      recoveryNarrative: "",
     },
     metrics: raw.metrics ?? null,
   };
@@ -34,7 +34,7 @@ export function upgradeCheckpoint(raw: any): any {
 export function enrichCheckpointPayload(
   base: any,
   semanticMemory: SemanticMemory | undefined | null,
-  metrics: any | null
+  metrics: any | null,
 ): any {
   return {
     ...base,

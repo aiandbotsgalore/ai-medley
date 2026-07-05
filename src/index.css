@@ -1,1 +1,45 @@
 @import "tailwindcss";
+
+:focus-visible {
+  outline: 3px solid #00f0ff;
+  outline-offset: 3px;
+}
+
+label:has(input[type="file"]:focus-visible) {
+  outline: 3px solid #00f0ff;
+  outline-offset: 4px;
+}
+
+button,
+a[href],
+input,
+select,
+textarea {
+  min-height: 44px;
+}
+
+button,
+a[href] {
+  min-width: 44px;
+}
+
+.text-\[\#2A2A2A\],
+.text-\[\#333\],
+.text-\[\#3A3A3A\],
+.text-\[\#444\],
+.text-\[\#555\],
+.text-\[\#666\],
+.text-\[\#777\] {
+  color: #aaa !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

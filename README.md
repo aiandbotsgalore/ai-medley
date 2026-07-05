@@ -1,31 +1,34 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
-
 # AI Medley Architect
 
-AI Medley Architect analyzes local audio, plans transitions with specialist AI models, and renders deterministic MP3 medleys with FFmpeg.
+AI Medley Architect analyzes local audio, creates a bounded medley plan with Gemini or OpenRouter models, renders immutable review candidates with FFmpeg, and promotes an approved candidate to the final MP3.
 
-## Model Modes
+## Quick start
 
-- **Automatic Specialist Team:** OpenRouter only. Nemotron 3 Super creates the project brief, Nemotron 3 Ultra handles arrangement and review, and Nex-N2-Pro executes transitions and finalization.
-- **Manual Model:** Preserves the existing Gemini and OpenRouter model choices, including custom OpenRouter model IDs.
+Requirements: Windows, Node.js `>=20 <27`, and npm. FFmpeg is bundled by `ffmpeg-static`.
 
-Automatic mode analyzes audio locally and requires an OpenRouter API key before a run can start.
+```powershell
+npm ci
+npm run dev
+```
 
-## Run Locally
+Open `http://localhost:3000`. The server binds to `127.0.0.1` only.
 
-Prerequisites: Node.js and FFmpeg support provided by the project dependencies.
+Configure `OPENROUTER_API_KEY` and/or `GEMINI_API_KEY` in the process environment or `.env`, or enter a key for the current browser session. Browser-entered keys are memory-only. Automatic Specialist Team mode requires OpenRouter; Manual Model mode supports Gemini and OpenRouter.
 
-1. Run `npm install`.
-2. Optionally create `.env.local` with `OPENROUTER_API_KEY` and/or `GEMINI_API_KEY`. Keys can also be entered in the app configuration.
-3. Run `npm run dev`.
-4. Open [http://localhost:3000](http://localhost:3000).
+## Production and verification
 
-## Verification
+```powershell
+npm test
+npm run lint
+npm run build
+npm run test:production-start
+npm run start
+```
 
-- `npm test`
-- `npm run lint`
-- `npm run build`
+The production build emits bundled ESM at `dist/server.js`. `npm run lint` performs TypeScript checking.
 
-Automatic sessions use version-3 checkpoints and immutable candidate manifests under `workdir/<sessionId>/`. Older version-2 checkpoints continue through the legacy manual workflow.
+## Current contract
+
+Read [Current Operations](docs/current-operations.md) for environment variables, models, workflows, capabilities, persistence/recovery, limits, accessibility, and safe operation. The exact current API registration list is in [API Routes](docs/api-routes.md).
+
+Dated files under `docs/plans/` are retained as historical records and are indexed by [Plan Archive Status](docs/plans/README.md). Audit incident history under `docs/audits/` is preserved.

@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { AlertCircle, Download, Loader2 } from 'lucide-react';
+import React, { useState } from "react";
+import { AlertCircle, Download, Loader2 } from "lucide-react";
 
 interface MetricsSidebarProps {
   metrics: {
@@ -14,26 +14,51 @@ interface MetricsSidebarProps {
   sessionId: string | null;
 }
 
-function MetricBar({ label, value, isRunning }: { label: string; value: number | undefined; isRunning?: boolean }) {
+function MetricBar({
+  label,
+  value,
+  isRunning,
+}: {
+  label: string;
+  value: number | undefined;
+  isRunning?: boolean;
+}) {
   const pct = value ?? 0;
   const hasValue = value !== undefined && value > 0;
-  const color = pct >= 80 ? '#00F0FF' : pct >= 50 ? '#F0C800' : '#F27D26';
+  const color = pct >= 80 ? "#00F0FF" : pct >= 50 ? "#F0C800" : "#F27D26";
 
   return (
     <div>
       <div className="flex justify-between text-[10px] mb-1.5">
         <span className="text-[#888] font-medium">{label}</span>
-        <span className="font-mono" style={{ color: hasValue ? color : '#444' }}>
-          {hasValue ? `${pct}%` : isRunning ? <span className="animate-pulse text-[#2A2A2A]">···</span> : '—'}
+        <span
+          className="font-mono"
+          style={{ color: hasValue ? color : "#AAA" }}
+        >
+          {hasValue ? (
+            `${pct}%`
+          ) : isRunning ? (
+            <span className="animate-pulse text-[#2A2A2A]">···</span>
+          ) : (
+            "—"
+          )}
         </span>
       </div>
-      <div className="h-1.5 bg-[#1A1A1A] rounded-full overflow-hidden">
+      <div
+        role="progressbar"
+        aria-label={label}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={hasValue ? pct : undefined}
+        aria-valuetext={hasValue ? `${pct} percent` : isRunning ? "Computing" : "Not available"}
+        className="h-1.5 bg-[#1A1A1A] rounded-full overflow-hidden"
+      >
         {isRunning && !hasValue ? (
           <div
             className="h-full rounded-full animate-pulse"
             style={{
-              width: '45%',
-              background: 'linear-gradient(90deg, #1C1C1C, #2C2C2C, #1C1C1C)',
+              width: "45%",
+              background: "linear-gradient(90deg, #1C1C1C, #2C2C2C, #1C1C1C)",
             }}
           />
         ) : (
@@ -41,8 +66,10 @@ function MetricBar({ label, value, isRunning }: { label: string; value: number |
             className="h-full rounded-full transition-all duration-700 ease-out"
             style={{
               width: `${pct}%`,
-              background: hasValue ? `linear-gradient(90deg, ${color}88, ${color})` : '#222',
-              boxShadow: hasValue ? `0 0 8px ${color}40` : 'none'
+              background: hasValue
+                ? `linear-gradient(90deg, ${color}88, ${color})`
+                : "#222",
+              boxShadow: hasValue ? `0 0 8px ${color}40` : "none",
             }}
           />
         )}
@@ -51,10 +78,15 @@ function MetricBar({ label, value, isRunning }: { label: string; value: number |
   );
 }
 
-export default function MetricsSidebar({ metrics, summary, status, sessionId }: MetricsSidebarProps) {
+export default function MetricsSidebar({
+  metrics,
+  summary,
+  status,
+  sessionId,
+}: MetricsSidebarProps) {
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
-  const isRunning = status === 'running';
+  const isRunning = status === "running";
 
   const exportAudio = async () => {
     if (!sessionId || isExporting) return;
@@ -64,28 +96,30 @@ export default function MetricsSidebar({ metrics, summary, status, sessionId }: 
 
     try {
       const res = await fetch(`/api/audio/${sessionId}/download`);
-      const contentType = res.headers.get('content-type') || '';
+      const contentType = res.headers.get("content-type") || "";
 
-      if (!res.ok || !contentType.toLowerCase().startsWith('audio/')) {
-        let detail = '';
+      if (!res.ok || !contentType.toLowerCase().startsWith("audio/")) {
+        let detail = "";
         try {
           const errorBody = await res.json();
-          detail = errorBody?.error || '';
+          detail = errorBody?.error || "";
         } catch {
-          detail = await res.text().catch(() => '');
+          detail = await res.text().catch(() => "");
         }
-        throw new Error(detail || 'The medley MP3 is not available yet.');
+        throw new Error(detail || "The medley MP3 is not available yet.");
       }
 
-      const disposition = res.headers.get('content-disposition') || '';
-      const filenameMatch = disposition.match(/filename\*?=(?:UTF-8''|")?([^";]+)/i);
+      const disposition = res.headers.get("content-disposition") || "";
+      const filenameMatch = disposition.match(
+        /filename\*?=(?:UTF-8''|")?([^";]+)/i,
+      );
       const filename = filenameMatch
-        ? decodeURIComponent(filenameMatch[1].replace(/"/g, ''))
+        ? decodeURIComponent(filenameMatch[1].replace(/"/g, ""))
         : `medley-${sessionId}.mp3`;
 
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
+      const link = document.createElement("a");
       link.href = url;
       link.download = filename;
       document.body.appendChild(link);
@@ -93,7 +127,7 @@ export default function MetricsSidebar({ metrics, summary, status, sessionId }: 
       link.remove();
       window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (e: any) {
-      setExportError(e?.message || 'Export failed.');
+      setExportError(e?.message || "Export failed.");
     } finally {
       setIsExporting(false);
     }
@@ -103,34 +137,58 @@ export default function MetricsSidebar({ metrics, summary, status, sessionId }: 
     <aside className="w-full md:w-80 min-h-[360px] md:min-h-0 border-t md:border-t-0 md:border-l border-[#1A1A1A] bg-[#090909] flex flex-col shrink-0">
       <div className="p-5 border-b border-[#1A1A1A]">
         <div className="flex items-center justify-between mb-5">
-          <div className="text-[10px] uppercase tracking-widest text-[#555] font-semibold">Refinement Metrics</div>
+          <div className="text-[10px] uppercase tracking-widest text-[#555] font-semibold">
+            Refinement Metrics
+          </div>
           {isRunning && (
             <div className="flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
-              <span className="text-[9px] font-mono text-[#444] uppercase tracking-wide">Computing</span>
+              <span className="text-[9px] font-mono text-[#444] uppercase tracking-wide">
+                Computing
+              </span>
             </div>
           )}
         </div>
         <div className="space-y-4">
-          <MetricBar label="EMOTIONAL ARC" value={metrics?.emotionalArc} isRunning={isRunning} />
-          <MetricBar label="TRANSITION SMOOTHNESS" value={metrics?.transitionSmoothness} isRunning={isRunning} />
-          <MetricBar label="PERFORMER IDENTITY" value={metrics?.performerIdentity} isRunning={isRunning} />
+          <MetricBar
+            label="EMOTIONAL ARC"
+            value={metrics?.emotionalArc}
+            isRunning={isRunning}
+          />
+          <MetricBar
+            label="TRANSITION SMOOTHNESS"
+            value={metrics?.transitionSmoothness}
+            isRunning={isRunning}
+          />
+          <MetricBar
+            label="PERFORMER IDENTITY"
+            value={metrics?.performerIdentity}
+            isRunning={isRunning}
+          />
         </div>
         {metrics?.overallScore !== undefined && metrics.overallScore > 0 && (
           <div className="mt-5 pt-4 border-t border-[#1A1A1A]">
             <div className="flex items-center justify-between">
-              <span className="text-[10px] uppercase text-[#888] font-semibold">Overall Score</span>
-              <span className="text-2xl font-bold text-[#00F0FF] font-mono">{metrics.overallScore}</span>
+              <span className="text-[10px] uppercase text-[#888] font-semibold">
+                Overall Score
+              </span>
+              <span className="text-2xl font-bold text-[#00F0FF] font-mono">
+                {metrics.overallScore}
+              </span>
             </div>
             {metrics.iteration && (
-              <span className="text-[9px] font-mono text-[#444]">Iteration #{metrics.iteration}</span>
+              <span className="text-[9px] font-mono text-[#444]">
+                Iteration #{metrics.iteration}
+              </span>
             )}
           </div>
         )}
       </div>
 
       <div className="flex-1 p-5 overflow-y-auto custom-scrollbar flex flex-col">
-        <div className="text-[10px] uppercase tracking-widest text-[#555] mb-4 font-semibold">Decision Summary</div>
+        <div className="text-[10px] uppercase tracking-widest text-[#555] mb-4 font-semibold">
+          Decision Summary
+        </div>
         <div className="flex-1">
           {summary ? (
             <div className="text-[12px] leading-relaxed text-[#999] italic">
@@ -151,7 +209,7 @@ export default function MetricsSidebar({ metrics, summary, status, sessionId }: 
           )}
         </div>
 
-        {status === 'completed' && sessionId && (
+        {status === "completed" && sessionId && (
           <div className="mt-6 pt-4 border-t border-[#1A1A1A] space-y-2">
             <button
               type="button"
@@ -159,11 +217,15 @@ export default function MetricsSidebar({ metrics, summary, status, sessionId }: 
               disabled={isExporting}
               className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-[#00F0FF] to-[#0080FF] text-black text-[11px] font-bold uppercase rounded-lg hover:shadow-lg hover:shadow-[#00F0FF]/20 transition-all duration-200 disabled:opacity-60 disabled:cursor-wait"
             >
-              {isExporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+              {isExporting ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Download className="w-3.5 h-3.5" />
+              )}
               Download MP3
             </button>
             {exportError && (
-              <div className="flex items-start gap-2 text-[10px] leading-relaxed text-red-300 bg-red-950/20 border border-red-900/40 rounded-md px-2.5 py-2">
+              <div role="alert" className="flex items-start gap-2 text-[10px] leading-relaxed text-red-300 bg-red-950/20 border border-red-900/40 rounded-md px-2.5 py-2">
                 <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
                 <span>{exportError}</span>
               </div>
