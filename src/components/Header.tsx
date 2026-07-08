@@ -1,5 +1,5 @@
 import React from "react";
-import { Settings, Square } from "lucide-react";
+import { FilePlus2, Settings, Square } from "lucide-react";
 import type { ProviderId } from "./ConfigPanel";
 import type { SpecialistRole } from "../types/specialistWorkflow";
 
@@ -11,6 +11,7 @@ interface HeaderProps {
   onConfigClick: () => void;
   onForceModelSwitch?: () => void;
   onCancel?: () => void;
+  onNewSession: () => void;
 }
 
 const statusLabels: Record<string, string> = {
@@ -29,6 +30,7 @@ export default function Header({
   onForceModelSwitch,
   onConfigClick,
   onCancel,
+  onNewSession,
 }: HeaderProps) {
   const isActive = status === "running" || status === "uploading";
   return (
@@ -93,6 +95,19 @@ export default function Header({
             {statusLabels[status] || "Unknown"}
           </span>
         </div>
+
+        <button
+          type="button"
+          onClick={onNewSession}
+          aria-label="Start a new session"
+          title="Start a new session (keeps library and history)"
+          className="min-w-11 h-11 px-3 rounded-lg border border-[#00F0FF]/35 bg-[#00F0FF]/5 flex items-center justify-center gap-2 text-[#8BEAF2] hover:text-white hover:border-[#00F0FF]/70 hover:bg-[#00F0FF]/10 transition-all duration-200"
+        >
+          <FilePlus2 aria-hidden="true" className="w-4 h-4" />
+          <span className="hidden xl:inline text-[10px] font-mono font-bold uppercase tracking-wider">
+            New session
+          </span>
+        </button>
 
         <button
           type="button"

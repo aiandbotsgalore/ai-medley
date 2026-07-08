@@ -173,6 +173,10 @@ export default function ConfigPanel({
   onClose,
 }: ConfigPanelProps) {
   const [local, setLocal] = useState(config);
+  const [keySaveState, setKeySaveState] = useState<
+    "idle" | "saving" | "saved" | "error"
+  >("idle");
+  const [keySaveError, setKeySaveError] = useState("");
   const overlayRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -247,6 +251,27 @@ export default function ConfigPanel({
 
   const models =
     local.provider === "gemini" ? GEMINI_MODELS : OPENROUTER_MODELS;
+
+  const saveOpenRouterKey = async () => {
+    const apiKey = local.openrouterApiKey.trim();
+    if (!apiKey || apiKey === SERVER_MANAGED_API_KEY) return;
+    setKeySaveState("saving");
+    setKeySaveError("");
+    try {
+      const response = await fetch("/api/config/openrouter-key", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not save API key");
+      update({ openrouterApiKey: SERVER_MANAGED_API_KEY });
+      setKeySaveState("saved");
+    } catch (error: any) {
+      setKeySaveError(error.message || "Could not save API key");
+      setKeySaveState("error");
+    }
+  };
 
   return (
     <div
@@ -477,6 +502,31 @@ export default function ConfigPanel({
               ? " A server-managed credential is available."
               : ""}
           </div>
+          {(local.modelMode === "automatic" || local.provider === "openrouter") && (
+            <div className="mt-2 flex items-center gap-3">
+              <button
+                type="button"
+                onClick={saveOpenRouterKey}
+                disabled={
+                  keySaveState === "saving" ||
+                  !local.openrouterApiKey ||
+                  local.openrouterApiKey === SERVER_MANAGED_API_KEY
+                }
+                className="min-h-11 px-3 rounded-lg border border-[#00F0FF]/35 bg-[#00F0FF]/5 text-[10px] font-mono font-bold uppercase tracking-wider text-[#8BEAF2] hover:text-white hover:border-[#00F0FF]/70 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                {keySaveState === "saving" ? "Saving…" : "Save on this computer"}
+              </button>
+              <span
+                role="status"
+                aria-live="polite"
+                className={`text-[10px] ${keySaveState === "error" ? "text-red-300" : "text-emerald-300"}`}
+              >
+                {keySaveState === "saved"
+                  ? "Saved server-side for future sessions."
+                  : keySaveError}
+              </span>
+            </div>
+          )}
         </div>
 
         <div className="mb-5">

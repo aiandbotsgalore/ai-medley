@@ -20,6 +20,7 @@ const app = read("src/App.tsx");
 const config = read("src/components/ConfigPanel.tsx");
 const library = read("src/components/LibrarySidebar.tsx");
 const history = read("src/components/HistoryBrowser.tsx");
+const header = read("src/components/Header.tsx");
 const css = read("src/index.css");
 
 for (const contract of [
@@ -47,10 +48,14 @@ assert.ok(library.includes("Remove ${file.originalName}"));
 assert.ok(history.includes("Load session from"));
 assert.ok(history.includes("Download MP3 from"));
 assert.ok(history.includes("Delete session from"));
+assert.ok(header.includes('aria-label="Start a new session"'));
+assert.ok(header.includes("keeps library and history"));
 assert.ok(css.includes(":focus-visible"));
 assert.ok(css.includes("prefers-reduced-motion: reduce"));
 assert.ok(app.includes("const isInputStage = isIdle || isUploading"));
 assert.ok(app.includes('role="progressbar"'));
+assert.ok(app.includes('data-testid="new-session-ready"'));
+assert.ok(app.includes("Fresh session ready"));
 assert.ok(app.includes("<h2 className=\"text-[15px]"));
 assert.ok(!app.includes("fonts.googleapis.com"));
 assert.ok(config.includes('element.setAttribute("inert", "")'));

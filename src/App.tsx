@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
-import { Upload, Play, Loader2, AlertCircle } from "lucide-react";
+import { Upload, Play, Loader2, AlertCircle, CircleCheck } from "lucide-react";
 import Header from "./components/Header";
 import LibrarySidebar, { type LibraryFile } from "./components/LibrarySidebar";
 import MetricsSidebar from "./components/MetricsSidebar";
@@ -252,6 +252,7 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [summary, setSummary] = useState<string | null>(null);
+  const [newSessionReady, setNewSessionReady] = useState(false);
   const metricsManager = useMetricsManager();
   const sessionManager = useSessionState();
   const [config, setConfig] = useState<MedleyConfig>(DEFAULT_CONFIG);
@@ -1620,6 +1621,49 @@ export default function App() {
     setTimeout(fetchCheckpoints, 600);
   };
 
+  const handleNewSession = () => {
+    const isActive = status === "running" || status === "uploading";
+    if (
+      isActive &&
+      !window.confirm(
+        "Stop the current run and start a new session? Your library, history, and completed audio will be kept.",
+      )
+    ) {
+      return;
+    }
+
+    const activeSid = sessionIdRef.current;
+    activeRequestSequenceRef.current++;
+    cancelRunGeneration(runGenerationRef, abortRef.current);
+    if (isActive && activeSid) {
+      fetch(`/api/session/${activeSid}/cancel`, { method: "POST" }).catch(
+        (err) => console.error("Failed to cancel active session:", err),
+      );
+    }
+    disconnectSSE();
+    abortRef.current = null;
+    forceModelSwitchRef.current = null;
+    providerRequestAuditsRef.current = [];
+    (window as any).__providerRequestAudits = [];
+
+    setStatus("idle");
+    setRunStartedAt(null);
+    setUploadProgress(null);
+    setCurrentPhase("");
+    setSpecialistRole(null);
+    setSpecialistModel("");
+    setLogs([]);
+    setSummary(null);
+    setErrorMessage(null);
+    setSessionId(null);
+    sessionIdRef.current = null;
+    metricsManager.resetMetrics();
+    sessionManager.resetSession();
+    setActiveTab("workshop");
+    setNewSessionReady(true);
+    setTimeout(fetchCheckpoints, 600);
+  };
+
   const stageLabels: Record<SpecialistStage, string> = {
     local_analysis: "LOCAL ANALYSIS",
     context_brief: "CONTEXT BRIEF",
@@ -1980,6 +2024,7 @@ export default function App() {
 
   const startMedley = async () => {
     if (library.length < 2) return;
+    setNewSessionReady(false);
     const configurationError = getStartConfigurationError(config);
     if (configurationError) {
       setStatus("error");
@@ -2048,6 +2093,7 @@ export default function App() {
         onConfigClick={() => setShowConfig(true)}
         onForceModelSwitch={() => forceModelSwitchRef.current?.()}
         onCancel={handleCancel}
+        onNewSession={handleNewSession}
       />
       {showConfig && (
         <ConfigPanel
@@ -2099,6 +2145,28 @@ export default function App() {
               </button>
             ))}
           </div>
+
+          {newSessionReady && (
+            <div
+              role="status"
+              aria-live="polite"
+              data-testid="new-session-ready"
+              className="shrink-0 border-b border-[#00F0FF]/20 bg-[#071316] px-4 md:px-5 py-3 flex items-center gap-3 animate-fade-in"
+            >
+              <CircleCheck
+                aria-hidden="true"
+                className="w-4 h-4 text-[#00F0FF] shrink-0"
+              />
+              <div className="min-w-0">
+                <div className="text-[11px] font-mono font-bold uppercase tracking-wider text-[#B8F8FC]">
+                  Fresh session ready
+                </div>
+                <div className="text-[10px] text-[#699499] mt-0.5">
+                  Previous run state cleared. Your library and history are still available.
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Persistent Activity Status Bar */}
           {status === "running" && (

@@ -128,12 +128,14 @@ import {
   buildResumeBinding,
   compareResumeBinding,
 } from "./src/server/checkpointBinding";
+import { persistOpenRouterApiKey } from "./src/server/credentialStore";
 import {
   executeFinalizationTransaction,
   listFinalizationJournals,
 } from "./src/server/finalizationTransaction";
 
-dotenv.config();
+const localEnvPath = path.join(process.cwd(), ".env.local");
+dotenv.config({ path: [localEnvPath, path.join(process.cwd(), ".env")] });
 
 const RENDER_CONFIG = {
   DEFAULT_TAIL_SEC: 30,
@@ -1250,13 +1252,23 @@ function broadcastToSession(sessionId: string, event: string, data: any) {
 }
 
 const geminiApiKey = process.env.GEMINI_API_KEY || "";
-const openrouterApiKey = process.env.OPENROUTER_API_KEY || "";
+let openrouterApiKey = process.env.OPENROUTER_API_KEY || "";
 
 app.get("/api/config", (req, res) => {
   res.json({
     hasGeminiApiKey: Boolean(geminiApiKey),
     hasOpenrouterApiKey: Boolean(openrouterApiKey),
   });
+});
+
+app.put("/api/config/openrouter-key", (req, res) => {
+  try {
+    openrouterApiKey = persistOpenRouterApiKey(localEnvPath, req.body?.apiKey);
+    process.env.OPENROUTER_API_KEY = openrouterApiKey;
+    res.json({ success: true, hasOpenrouterApiKey: true });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
 });
 
 app.post(
@@ -1322,9 +1334,15 @@ function logToSession(sessionId: string, msg: string) {
 // SSE endpoint for real-time session streaming
 app.get("/api/session/:id/stream", (req, res) => {
   const sessionId = req.params.id;
-  if (!sessions[sessionId]) {
-    return res.status(404).json({ error: "Session not found" });
+  try {
+    validateSessionId(sessionId);
+  } catch (error: any) {
+    return res.status(400).json({ error: error.message });
   }
+  // The UI intentionally opens progress streaming before its first workflow
+  // request. Establish the pending session here so startup order cannot race
+  // the design/tool endpoints and produce a spurious 404.
+  if (!sessions[sessionId]) sessions[sessionId] = { status: "running", logs: [] };
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
