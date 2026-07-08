@@ -15,7 +15,14 @@ import {
   validateLegacyFinalOutput,
   writeCandidateManifestAtomic,
 } from "./candidateStore";
-import type { RenderCandidate } from "../types/specialistWorkflow";
+import {
+  MAX_COMPLETE_CANDIDATES,
+  MAX_CORRECTION_RETRIES,
+  type RenderCandidate,
+} from "../types/specialistWorkflow";
+
+assert.equal(MAX_CORRECTION_RETRIES, 3);
+assert.equal(MAX_COMPLETE_CANDIDATES, 4);
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "ai-medley-candidates-"));
 const sessionId = "session-test";
@@ -183,7 +190,7 @@ writeCandidateManifestAtomic(
   limitSession,
   createEmptyManifest(limitSession),
 );
-for (let version = 1; version <= 3; version++) {
+for (let version = 1; version <= MAX_COMPLETE_CANDIDATES; version++) {
   const outputPath = path.join(
     limitDir,
     `candidate-${String(version).padStart(3, "0")}.mp3`,
@@ -198,6 +205,18 @@ for (let version = 1; version <= 3; version++) {
 }
 assert.throws(
   () => nextCandidateIdentity(readCandidateManifest(root, limitSession)),
+  /Candidate limit reached/,
+);
+const fifthCandidatePath = path.join(limitDir, "candidate-005.mp3");
+fs.writeFileSync(fifthCandidatePath, "candidate 5");
+assert.throws(
+  () =>
+    registerCandidate(root, limitSession, {
+      ...makeCandidate(5, "source 5", 75),
+      outputPath: fifthCandidatePath,
+      sizeBytes: fs.statSync(fifthCandidatePath).size,
+      sha256: sha256File(fifthCandidatePath),
+    }),
   /Candidate limit reached/,
 );
 

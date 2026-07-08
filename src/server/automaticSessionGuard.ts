@@ -13,6 +13,22 @@ export type SessionWorkflowHints = {
   workflowMode?: unknown;
 };
 
+export function selectSessionTrackIntelligence<
+  T extends { profile: { trackId: string } },
+>(
+  existingSessionTracks: readonly T[],
+  currentTracks: readonly T[],
+  recommendedOrderIds: readonly string[],
+): T[] {
+  const allowedTrackIds = new Set(recommendedOrderIds);
+  const sourceTracks = existingSessionTracks.length
+    ? existingSessionTracks
+    : currentTracks;
+  return structuredClone(
+    sourceTracks.filter((track) => allowedTrackIds.has(track.profile.trackId)),
+  );
+}
+
 export function readAutomaticWorkflowCheckpoint(
   checkpointDir: string,
   sessionId: string,

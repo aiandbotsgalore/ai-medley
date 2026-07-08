@@ -40,8 +40,8 @@ export const WORKFLOW_STAGES = [
 
 export type SpecialistStage = (typeof WORKFLOW_STAGES)[number];
 
-export const MAX_CORRECTION_RETRIES = 2;
-export const MAX_COMPLETE_CANDIDATES = 3;
+export const MAX_CORRECTION_RETRIES = 3;
+export const MAX_COMPLETE_CANDIDATES = 4;
 export const PROVIDER_REQUEST_TIMEOUT_MS = 120_000;
 export const MAX_PROVIDER_REQUEST_BYTES = 100 * 1024;
 export const MAX_PROVIDER_ESTIMATED_TOKENS = 24_000;

@@ -100,7 +100,10 @@ import {
   getLocalAccessDenial,
   isAllowedLocalOrigin,
 } from "./src/server/localAccess";
-import { requiresAutomaticCandidateApproval } from "./src/server/automaticSessionGuard";
+import {
+  requiresAutomaticCandidateApproval,
+  selectSessionTrackIntelligence,
+} from "./src/server/automaticSessionGuard";
 import { selectRenderTransitions } from "./src/server/renderTransitionSelection";
 import {
   buildCanonicalAcrossfade,
@@ -1796,13 +1799,17 @@ app.post("/api/session/metrics", (req, res) => {
     };
     broadcastToSession(sessionId, "metrics", sessions[sessionId].metrics);
 
-    // Accumulate evaluation wisdom permanently
-    appendWisdom({
-      type: "evaluation",
-      sessionId,
-      metrics,
-      designPlan: sessions[sessionId].designPlan || null,
-    });
+    // Accumulate evaluation wisdom permanently without failing the primary update.
+    try {
+      appendWisdom({
+        type: "evaluation",
+        sessionId,
+        metrics,
+        designPlan: sessions[sessionId].designPlan || null,
+      });
+    } catch (wisdomError) {
+      console.warn("[session-metrics] Wisdom logging failed:", wisdomError);
+    }
   }
   res.json({ success: true });
 });
@@ -2119,10 +2126,11 @@ app.post("/api/session/project-brief", (req, res) => {
     if (!sessions[sessionId])
       sessions[sessionId] = { status: "running", logs: [] };
     sessions[sessionId].projectBrief = parsed;
-    sessions[sessionId].trackIntelligence = structuredClone(
-      getCurrentTrackIntelligence().filter((track) =>
-        parsed.recommendedOrderIds.includes(track.profile.trackId),
-      ),
+    const existingSessionTracks = getSessionTrackIntelligence(sessionId);
+    sessions[sessionId].trackIntelligence = selectSessionTrackIntelligence(
+      existingSessionTracks,
+      getCurrentTrackIntelligence(),
+      parsed.recommendedOrderIds,
     );
     sessions[sessionId].workflowMode = "automatic";
     sessions[sessionId].workflowStage = "arrangement";
@@ -2744,27 +2752,31 @@ app.post("/api/apply-transition", async (req, res) => {
       };
     }
 
-    appendWisdom({
-      type: "transition_applied",
-      sessionId,
-      style,
-      fromTrackId,
-      fromSectionId,
-      toTrackId,
-      toSectionId,
-      duration: transitionDuration,
-      beatAlign: useBeatAlign,
-      intensity: intensity || 0.6,
-      notes: notes || null,
-      actualFromExitSec: actualFromExit,
-      actualToEntrySec: actualToEntry,
-      beatSnapApplied: useBeatAlign && beatSnapNotes.length > 0,
-      curvesUsed: { curve1, curve2 },
-      extraProcessing: extraFilters ? [extraFilters] : [],
-      estimatedQuality: Math.round(
-        75 + (useBeatAlign ? 8 : 0) + (style === "mashup_layer" ? -5 : 5),
-      ),
-    });
+    try {
+      appendWisdom({
+        type: "transition_applied",
+        sessionId,
+        style,
+        fromTrackId,
+        fromSectionId,
+        toTrackId,
+        toSectionId,
+        duration: transitionDuration,
+        beatAlign: useBeatAlign,
+        intensity: intensity || 0.6,
+        notes: notes || null,
+        actualFromExitSec: actualFromExit,
+        actualToEntrySec: actualToEntry,
+        beatSnapApplied: useBeatAlign && beatSnapNotes.length > 0,
+        curvesUsed: { curve1, curve2 },
+        extraProcessing: extraFilters ? [extraFilters] : [],
+        estimatedQuality: Math.round(
+          75 + (useBeatAlign ? 8 : 0) + (style === "mashup_layer" ? -5 : 5),
+        ),
+      });
+    } catch (wisdomError) {
+      console.warn("[apply-transition] Wisdom logging failed:", wisdomError);
+    }
 
     // Build rich return data for the agent and future evaluation
     const curvesUsed = { curve1, curve2 };
@@ -3546,27 +3558,25 @@ app.post("/api/render-review-candidate", async (req, res) => {
       );
       const renderStartTime = Date.now();
 
-      try {
-        var renderArtifacts = await runFfmpegWithStrictLogging(
-          finalArgs,
-          sessionWorkDir,
-          fullGraph,
-          watchdogTimeout,
-          sessionId,
-          expectedDuration,
-          (proc) => {
-            // Store for cancel support
-            activeRenderProcesses[sessionId] = proc;
-          },
-          artifactPrefix,
-        );
-      } catch (ffErr: any) {
+      const renderArtifacts = await runFfmpegWithStrictLogging(
+        finalArgs,
+        sessionWorkDir,
+        fullGraph,
+        watchdogTimeout,
+        sessionId,
+        expectedDuration,
+        (proc) => {
+          // Store for cancel support
+          activeRenderProcesses[sessionId] = proc;
+        },
+        artifactPrefix,
+      ).catch((ffErr: any) => {
         delete activeRenderProcesses[sessionId];
         // Hard fail — caller sees the three log files + clear cause
         throw new Error(
           `FFmpeg render failed: ${ffErr.message}. Inspect temp_filtergraph.txt, ffmpeg_command.txt, and ffmpeg_stderr.log in the session folder.`,
         );
-      }
+      });
 
       delete activeRenderProcesses[sessionId];
       const renderElapsed = (Date.now() - renderStartTime) / 1000;
@@ -4041,7 +4051,7 @@ app.post("/api/exec", (req, res) => {
 
   exec(
     sanitizedCmd,
-    { cwd: sessionDir, timeout: 120000 },
+    { cwd: sessionDir, timeout: 120000, maxBuffer: 10 * 1024 * 1024 },
     (err, stdout, stderr) => {
       const exitCode = err?.code ?? (err ? 1 : 0);
       const success = !err;

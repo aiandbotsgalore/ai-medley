@@ -5,9 +5,11 @@ import path from "node:path";
 import { DEFAULT_CONFIG } from "../components/ConfigPanel";
 import type { MedleyDesignPayload } from "./medleyIntelligence";
 import {
+  normalizeRenderFailureFeedback,
   runAutomaticSpecialistWorkflow,
   type AutomaticWorkflowCheckpoint,
 } from "./specialistOrchestrator";
+import { SERVER_MANAGED_API_KEY } from "../constants/provider";
 import type {
   ArrangementPlan,
   ProjectBrief,
@@ -274,6 +276,203 @@ await assert.rejects(
     !/Checkpoint persistence/.test(error.message),
 );
 
+assert.deepEqual(
+  normalizeRenderFailureFeedback(
+    {
+      error: "render failed",
+      note: "candidate was not created",
+      details: "ffmpeg exited 1",
+      logFiles: {
+        error: "render-error.json",
+        graph: "filtergraph.txt",
+        command: "command.txt",
+        stderr: "stderr.log",
+      },
+      renderPath: "pure-clean-mvp-failed",
+    },
+    new Error("request failed"),
+  ),
+  [
+    "error: render failed",
+    "note: candidate was not created",
+    "details: ffmpeg exited 1",
+    "logFiles.error: render-error.json",
+    "logFiles.graph: filtergraph.txt",
+    "logFiles.command: command.txt",
+    "logFiles.stderr: stderr.log",
+    "renderPath: pure-clean-mvp-failed",
+  ],
+);
+
+const originalWindow = (globalThis as any).window;
+(globalThis as any).window = {
+  setTimeout,
+  clearTimeout,
+  location: { origin: "http://localhost" },
+};
+const recoveryController = new AbortController();
+const recoveryLogs: string[] = [];
+const recoveryCheckpoints: AutomaticWorkflowCheckpoint[] = [];
+let providerCall = 0;
+let renderCallCount = 0;
+let correctionRequestBody = "";
+
+function openRouterToolCall(id: string, name: string, args: unknown) {
+  return new Response(
+    JSON.stringify({
+      choices: [
+        {
+          message: {
+            role: "assistant",
+            content: "",
+            tool_calls: [
+              {
+                id,
+                type: "function",
+                function: { name, arguments: JSON.stringify(args) },
+              },
+            ],
+          },
+        },
+      ],
+    }),
+    { status: 200, headers: { "Content-Type": "application/json" } },
+  );
+}
+
+globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+  const target = String(url);
+  if (target === "/api/session/project-brief" || target === "/api/session/design-plan") {
+    return new Response(JSON.stringify({ success: true }), { status: 200 });
+  }
+  if (target === "/api/provider/openrouter") {
+    providerCall++;
+    if (providerCall === 1) {
+      return openRouterToolCall("transition-call", "apply_musical_transition", {
+        transitionId: "t1",
+        fromTrackId: "a",
+        fromSectionId: "a-1",
+        toTrackId: "b",
+        toSectionId: "b-1",
+        style: "smooth_blend",
+        duration: 5,
+        beatAlign: true,
+        notes: "",
+      });
+    }
+    if (providerCall === 2) {
+      return openRouterToolCall("report-call", "submit_execution_report", {
+        schemaVersion: 1,
+        executionVersion: 1,
+        arrangementVersion: 1,
+        attemptedTransitions: [
+          {
+            ...arrangementPlan.transitions[0],
+            success: true,
+            actualFromExitSec: 80,
+            actualToEntrySec: 10,
+            previewPath: "transition.mp3",
+            error: null,
+          },
+        ],
+        technicalWarnings: [],
+        unresolvedFailures: [],
+        completedAt: new Date().toISOString(),
+      });
+    }
+    correctionRequestBody = String(init?.body ?? "");
+    recoveryController.abort(new DOMException("Test complete", "AbortError"));
+    throw recoveryController.signal.reason;
+  }
+  if (target === "/api/apply-transition") {
+    return new Response(
+      JSON.stringify({
+        success: true,
+        previewPath: "transition.mp3",
+        actualFromExitSec: 80,
+        actualToEntrySec: 10,
+        styleUsed: "smooth_blend",
+        durationUsed: 5,
+      }),
+      { status: 200 },
+    );
+  }
+  if (target === "/api/session/execution-report") {
+    return new Response(JSON.stringify({ success: true }), { status: 200 });
+  }
+  if (target === "/api/render-review-candidate") {
+    renderCallCount++;
+    return new Response(
+      JSON.stringify({
+        success: false,
+        error: "FFmpeg render exploded",
+        note: "Existing candidates were preserved",
+        details: "filter graph rejected",
+        logFiles: {
+          error: "render-error.json",
+          graph: "filtergraph.txt",
+          command: "command.txt",
+          stderr: "stderr.log",
+        },
+        renderPath: "pure-clean-mvp-failed",
+      }),
+      { status: 500, headers: { "Content-Type": "application/json" } },
+    );
+  }
+  throw new Error(`Unexpected recovery fetch: ${target}`);
+}) as typeof fetch;
+
+await assert.rejects(
+  runAutomaticSpecialistWorkflow({
+    sessionId,
+    config: {
+      ...DEFAULT_CONFIG,
+      openrouterApiKey: SERVER_MANAGED_API_KEY,
+    },
+    library: [],
+    design,
+    signal: recoveryController.signal,
+    requestSequence: 13,
+    resume: resumeCheckpoint(),
+    onLog: (message) => recoveryLogs.push(message),
+    onStage: () => {},
+    onCheckpoint: async (checkpoint) => {
+      recoveryCheckpoints.push(structuredClone(checkpoint));
+    },
+    onMetrics: () => {},
+  }),
+  (error: any) => error?.name === "AbortError",
+);
+assert.equal(renderCallCount, 1);
+assert.ok(
+  recoveryLogs.includes(
+    "Render candidate failed; starting correction cycle 1/3.",
+  ),
+);
+assert.ok(
+  recoveryCheckpoints.some(
+    (checkpoint) =>
+      checkpoint.stage === "correction" && checkpoint.correctionCount === 1,
+  ),
+);
+const correctionRequest = JSON.parse(correctionRequestBody);
+const correctionPrompt = JSON.parse(
+  correctionRequest.messages.findLast((message: any) => message.role === "user")
+    .content,
+);
+assert.equal(correctionPrompt.correctionCount, 1);
+assert.ok(
+  correctionPrompt.repairErrors.some((item: string) =>
+    item.includes("FFmpeg render exploded"),
+  ),
+);
+assert.ok(
+  correctionPrompt.repairErrors.some((item: string) =>
+    item.includes("filtergraph.txt"),
+  ),
+);
+
 globalThis.fetch = originalFetch;
+(globalThis as any).window = originalWindow;
 fs.rmSync(artifactDir, { recursive: true, force: true });
 console.log("specialistOrchestrator checkpoint tests passed");

@@ -43,6 +43,8 @@ import {
 
 type ToolResponse = { name: string; id: string; response: unknown };
 
+export const PRODUCTION_MAX_TURNS = 48;
+
 export type { AutomaticWorkflowCheckpoint } from "../types/specialistWorkflow";
 
 type WorkflowOptions = {
@@ -94,6 +96,52 @@ function isAbortLike(error: unknown) {
     (error as any)?.name === "AbortError" ||
     (error instanceof DOMException && error.name === "AbortError")
   );
+}
+
+function renderDiagnosticValue(value: unknown) {
+  if (value === undefined || value === null || value === "") return null;
+  const text =
+    typeof value === "string"
+      ? value
+      : (() => {
+          try {
+            return JSON.stringify(value);
+          } catch {
+            return String(value);
+          }
+        })();
+  return text.slice(0, 1_000);
+}
+
+export function normalizeRenderFailureFeedback(
+  payload: unknown,
+  error?: unknown,
+): string[] {
+  const data =
+    payload && typeof payload === "object"
+      ? (payload as Record<string, any>)
+      : {};
+  const logFiles =
+    data.logFiles && typeof data.logFiles === "object" ? data.logFiles : {};
+  const fallbackError =
+    error instanceof Error ? error.message : error ? String(error) : null;
+  const diagnostics: Array<[string, unknown]> = [
+    ["error", data.error ?? fallbackError],
+    ["note", data.note],
+    ["details", data.details],
+    ["logFiles.error", logFiles.error],
+    ["logFiles.graph", logFiles.graph],
+    ["logFiles.command", logFiles.command],
+    ["logFiles.stderr", logFiles.stderr],
+    ["renderPath", data.renderPath],
+  ];
+  const feedback = diagnostics.flatMap(([label, value]) => {
+    const normalized = renderDiagnosticValue(value);
+    return normalized ? [`${label}: ${normalized}`] : [];
+  });
+  return feedback.length
+    ? feedback
+    : ["error: Render candidate failed without diagnostics"];
 }
 
 async function readJsonResponse(response: Response) {
@@ -236,6 +284,7 @@ async function runProductionRole(options: {
   plan: ArrangementPlan;
   correctionCount: number;
   review: QualityReview | null;
+  repairErrors?: string[];
   executionVersion: number;
   onRepair: () => void;
   onModel: (model: string) => void;
@@ -270,6 +319,7 @@ async function runProductionRole(options: {
         correctionCount,
         plan,
         review,
+        repairErrors: options.repairErrors,
       }),
     );
     let result: any;
@@ -280,7 +330,7 @@ async function runProductionRole(options: {
         requestId: `${workflow.sessionId}:production:${model}:start`,
         timeoutMs: PROVIDER_REQUEST_TIMEOUT_MS,
       });
-      for (let turn = 0; turn < 24; turn++) {
+      for (let turn = 0; turn < PRODUCTION_MAX_TURNS; turn++) {
         assertActive(workflow.signal);
         const calls = result.functionCalls ?? [];
         if (!calls.length)
@@ -611,6 +661,7 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
   let correctionCount = checkpoint.correctionCount;
   let currentCandidate = checkpoint.currentCandidate;
   let qualityReview = checkpoint.qualityReview;
+  let productionRepairErrors: string[] = [];
   while (true) {
     let executionReport = checkpoint.executionReport;
     let candidateData: {
@@ -636,6 +687,7 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
         plan: arrangementPlan,
         correctionCount,
         review: qualityReview,
+        repairErrors: productionRepairErrors,
         executionVersion,
         onRepair: () =>
           saveProgress({ repairCount: checkpoint.repairCount + 1 }),
@@ -650,8 +702,9 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
       });
       await saveRequired({ stage: "review_candidate", executionReport });
       options.onStage("review_candidate", null, null);
-      candidateData = await readJsonResponse(
-        await fetch("/api/render-review-candidate", {
+      let renderPayload: unknown = null;
+      try {
+        const response = await fetch("/api/render-review-candidate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -661,8 +714,41 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
             parentCandidateId: currentCandidate?.candidateId ?? null,
           }),
           signal: options.signal,
-        }),
-      );
+        });
+        renderPayload = await response.json().catch(() => ({}));
+        if (
+          !response.ok ||
+          (renderPayload as any)?.success === false ||
+          !(renderPayload as any)?.candidate
+        ) {
+          const renderError = new Error(
+            (renderPayload as any)?.error ||
+              `Render candidate request failed (${response.status})`,
+          );
+          (renderError as any).status = response.status;
+          throw renderError;
+        }
+        candidateData = renderPayload as typeof candidateData;
+      } catch (error) {
+        if (options.signal.aborted || isAbortLike(error)) throw error;
+        const repairErrors = normalizeRenderFailureFeedback(
+          renderPayload,
+          error,
+        );
+        if (correctionCount >= MAX_CORRECTION_RETRIES) {
+          throw new Error(
+            `Render candidate failed after ${MAX_CORRECTION_RETRIES} correction cycle(s): ${repairErrors.join("; ")}`,
+          );
+        }
+        correctionCount++;
+        productionRepairErrors = repairErrors;
+        options.onLog(
+          `Render candidate failed; starting correction cycle ${correctionCount}/${MAX_CORRECTION_RETRIES}.`,
+        );
+        await saveRequired({ stage: "correction", correctionCount });
+        continue;
+      }
+      productionRepairErrors = [];
       currentCandidate = candidateData.candidate;
       if (!currentCandidate.resolvedTransitions?.length) {
         throw new Error(

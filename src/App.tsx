@@ -618,7 +618,7 @@ export default function App() {
     });
 
     // === Phase 1 Hard Limits (Optimization + Stabilization) ===
-    const MAX_LOOP_TURNS = 10; // counts every assistant/tool round-trip, not just refinement turns
+    const MAX_LOOP_TURNS = 30; // counts every assistant/tool round-trip, not just refinement turns
 
     // Stability guards
     const recentToolCallHashes = new Set<string>();

@@ -8,9 +8,9 @@ export const AUDIO_UPLOAD_FILE_LIMIT_MB = 50;
 
 // ── Orchestration Loop ──
 export const MAX_ITERATIONS = 50;
-export const MAX_TOOL_FAILURE_STREAK = 3;
-export const MAX_EVALUATE_CALLS_PER_RUN = 25;
-export const MAX_LLM_CALLS_PER_RUN = 40;
+export const MAX_TOOL_FAILURE_STREAK = 5;
+export const MAX_EVALUATE_CALLS_PER_RUN = 40;
+export const MAX_LLM_CALLS_PER_RUN = 60;
 export const EARLY_TERMINATION_SCORE = 88;
 export const LOCAL_REJECTION_THRESHOLD = 0.45;
 export const LOCAL_AUTO_ACCEPT_THRESHOLD = 0.8;
