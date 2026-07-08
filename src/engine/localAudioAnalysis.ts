@@ -821,19 +821,23 @@ function buildSegments(input: {
         )
         .map((window) => window.density),
     );
+    const roundedStartSec = round(
+      startBeat.distance <= 0.18 && startBeat.time !== null
+        ? startBeat.time
+        : startSec,
+      1,
+    );
+    const roundedEndSec = round(
+      endBeat.distance <= 0.18 && endBeat.time !== null
+        ? endBeat.time
+        : endSec,
+      1,
+    );
     segments.push({
-      startSec: round(
-        startBeat.distance <= 0.18 && startBeat.time !== null
-          ? startBeat.time
-          : startSec,
-        1,
-      ),
-      endSec: round(
-        endBeat.distance <= 0.18 && endBeat.time !== null
-          ? endBeat.time
-          : endSec,
-        1,
-      ),
+      // Rounding to tenths can otherwise move a boundary just beyond the
+      // probed duration (for example 227.45 -> 227.5).
+      startSec: Math.max(0, Math.min(duration, roundedStartSec)),
+      endSec: Math.max(0, Math.min(duration, roundedEndSec)),
       labels: beatAligned
         ? Array.from(new Set([...labels, "beat_aligned_candidate"]))
         : labels,

@@ -219,6 +219,86 @@ const TOOL_DEFINITIONS = [
   },
 ] as const;
 
+export function buildManualDesignContext(design: MedleyDesignPayload) {
+  return {
+    schemaVersion: design.schemaVersion,
+    source: design.source,
+    userConstraints: design.userConstraints,
+    tracks: design.tracks.map((track) => ({
+      trackId: track.trackId,
+      filename: track.filename,
+      durationSec: track.durationSec,
+      tempoEstimate: track.tempoEstimate,
+      tempoConfidence: track.tempoConfidence,
+      keyEstimate: track.keyEstimate ?? null,
+      keyConfidence: track.keyConfidence ?? null,
+      averageEnergy: track.averageEnergy,
+      peakEnergy: track.peakEnergy,
+      confidence: track.confidence,
+      warnings: track.warnings.slice(0, 4),
+    })),
+    sections: design.tracks.flatMap((track) =>
+      design.sections
+        .filter((section) => section.trackId === track.trackId)
+        .slice(0, 8)
+        .map((section) => ({
+          sectionId: section.sectionId,
+          trackId: section.trackId,
+          startSec: section.startSec,
+          endSec: section.endSec,
+          labels: section.labels.slice(0, 4),
+          confidence: section.confidence,
+          warnings: section.warnings.slice(0, 2),
+        })),
+    ),
+    transitionCandidates: design.transitionMatrixSummary
+      .slice(0, 16)
+      .map((transition) => ({
+        fromTrackId: transition.fromTrackId,
+        toTrackId: transition.toTrackId,
+        fromSectionId: transition.fromSectionId,
+        toSectionId: transition.toSectionId,
+        fromExitSec: transition.fromExitSec,
+        toEntrySec: transition.toEntrySec,
+        transitionType: transition.transitionType,
+        score: transition.score,
+        confidence: transition.confidence,
+        reason: transition.reason,
+        warnings: transition.warnings.slice(0, 2),
+      })),
+    recommendedStrategies: design.recommendedStrategies
+      .slice(0, 4)
+      .map((strategy) => ({
+        strategyId: strategy.strategyId,
+        title: strategy.title,
+        score: strategy.score,
+        confidence: strategy.confidence,
+        estimatedDurationSec: strategy.estimatedDurationSec,
+        orderedTracks: strategy.orderedTracks,
+        tradeoffs: strategy.tradeoffs.slice(0, 3),
+        warnings: strategy.warnings.slice(0, 3),
+      })),
+    recommendedGlobalIntros: design.recommendedGlobalIntros
+      .slice(0, 6)
+      .map((section) => ({
+        sectionId: section.sectionId,
+        trackId: section.trackId,
+        scores: section.scores,
+        confidence: section.confidence,
+      })),
+    recommendedGlobalFinales: design.recommendedGlobalFinales
+      .slice(0, 6)
+      .map((section) => ({
+        sectionId: section.sectionId,
+        trackId: section.trackId,
+        scores: section.scores,
+        confidence: section.confidence,
+      })),
+    warnings: design.warnings.slice(0, 12),
+    aiRules: design.aiRules,
+  };
+}
+
 export function buildSystemPrompt(
   lib: LibraryFile[],
   config: MedleyConfig,
@@ -239,7 +319,7 @@ export function buildSystemPrompt(
   };
 
   const medleyDesignBlock = medleyDesign
-    ? `# Medley Design JSON\n${JSON.stringify(medleyDesign, null, 2)}`
+    ? `# Medley Design JSON\n${JSON.stringify(buildManualDesignContext(medleyDesign))}`
     : "# Medley Design JSON\nUnavailable.";
 
   return `You are AI Medley Architect.

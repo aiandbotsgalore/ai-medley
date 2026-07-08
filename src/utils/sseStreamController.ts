@@ -54,8 +54,17 @@ export class SSEStreamController {
     this.createEventSource = options.createEventSource;
     this.setStatus = options.setStatus;
     this.setCurrentSource = options.setCurrentSource;
-    this.setTimeoutImpl = options.setTimeoutImpl ?? setTimeout;
-    this.clearTimeoutImpl = options.clearTimeoutImpl ?? clearTimeout;
+    // Chromium's timer functions require the Window receiver. Storing the
+    // native function and later invoking it as a class property changes that
+    // receiver and can throw "Illegal invocation" during reconnects.
+    this.setTimeoutImpl =
+      options.setTimeoutImpl ??
+      (((...args: Parameters<typeof setTimeout>) =>
+        globalThis.setTimeout(...args)) as typeof setTimeout);
+    this.clearTimeoutImpl =
+      options.clearTimeoutImpl ??
+      (((...args: Parameters<typeof clearTimeout>) =>
+        globalThis.clearTimeout(...args)) as typeof clearTimeout);
     this.random = options.random ?? Math.random;
     this.closedReadyState = options.closedReadyState ?? 2;
   }

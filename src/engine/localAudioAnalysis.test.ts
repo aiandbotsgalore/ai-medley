@@ -12,7 +12,9 @@ import {
 
 function writeTestWav(filePath: string) {
   const sampleRate = 44100;
-  const durationSec = 12;
+  // A duration that rounds upward to one decimal reproduces the production
+  // boundary bug (227.45 -> 227.5) on a small fixture.
+  const durationSec = 12.05;
   const sampleCount = sampleRate * durationSec;
   const dataSize = sampleCount * 2;
   const buffer = Buffer.alloc(44 + dataSize);
@@ -78,6 +80,14 @@ try {
   assert.ok(result.analysis.localAnalysisV2.spectral.brightness.confidence > 0);
   assert.ok(result.analysis.localAnalysisV2.onsets.densityPerMinute >= 0);
   assert.ok(result.analysis.localAnalysisV2.segments.length > 0);
+  assert.ok(
+    result.analysis.localAnalysisV2.segments.every(
+      (segment) =>
+        segment.startSec >= 0 &&
+        segment.endSec > segment.startSec &&
+        segment.endSec <= result.analysis.duration,
+    ),
+  );
   assert.ok(
     result.analysisText.includes("No audio was sent to an AI provider"),
   );

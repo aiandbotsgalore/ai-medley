@@ -83,4 +83,40 @@ controller.disconnect();
 assert.equal(runB.closed, true);
 assert.equal(statuses.at(-1), "closed");
 
+// Browser timer functions are receiver-sensitive. Verify the controller's
+// default wrappers call them through globalThis instead of as class methods.
+const originalSetTimeout = globalThis.setTimeout;
+const originalClearTimeout = globalThis.clearTimeout;
+let receiverSafeTimerCalled = false;
+try {
+  globalThis.setTimeout = function (this: unknown, callback: TimerHandler) {
+    assert.equal(this, globalThis);
+    receiverSafeTimerCalled = true;
+    return callback as unknown as ReturnType<typeof setTimeout>;
+  } as typeof setTimeout;
+  globalThis.clearTimeout = function (this: unknown) {
+    assert.equal(this, globalThis);
+  } as typeof clearTimeout;
+
+  const nativeTimerSources: FakeEventSource[] = [];
+  const nativeTimerController = new SSEStreamController({
+    createEventSource: () => {
+      const source = new FakeEventSource();
+      nativeTimerSources.push(source);
+      return source;
+    },
+    setStatus: () => {},
+    random: () => 0,
+    closedReadyState: 2,
+  });
+  nativeTimerController.connect("receiver-safe");
+  nativeTimerSources[0].close();
+  nativeTimerSources[0].onerror?.();
+  assert.equal(receiverSafeTimerCalled, true);
+  nativeTimerController.disconnect();
+} finally {
+  globalThis.setTimeout = originalSetTimeout;
+  globalThis.clearTimeout = originalClearTimeout;
+}
+
 console.log("sseStreamController tests passed");
