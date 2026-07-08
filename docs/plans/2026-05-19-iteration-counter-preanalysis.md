@@ -14,6 +14,7 @@ Task 3 adds an `iteration` state to App.tsx, pipes it into LogPanel, and renders
 ## Task 3: Iteration Progress Indicator
 
 **Files:**
+
 - Modify: `src/App.tsx` — add state, set in loop, pass to LogPanel
 - Modify: `src/components/LogPanel.tsx` — accept prop, render ring + counter
 
@@ -24,7 +25,10 @@ Task 3 adds an `iteration` state to App.tsx, pipes it into LogPanel, and renders
 In `src/App.tsx`, find the block of `useState` calls near the top of the component (around line 14–29). Add one line after the `uploadProgress` state:
 
 ```tsx
-const [iteration, setIteration] = useState<{ current: number; max: number } | null>(null);
+const [iteration, setIteration] = useState<{
+  current: number;
+  max: number;
+} | null>(null);
 ```
 
 ### Step 2: Reset `iteration` at loop start
@@ -126,6 +130,7 @@ Expected: same 2 pre-existing errors, nothing new. If new TS errors appear, fix 
 ### Step 9: Verify visually
 
 Run `npm run dev`, open `http://localhost:3000`, start a session with 2+ tracks. Confirm:
+
 - The SVG ring arc grows with each iteration
 - "12/50" style counter appears in the header right edge
 - Ring and counter disappear when session is cancelled or a new session starts
@@ -142,6 +147,7 @@ git commit -m "feat: add iteration progress ring and counter to LogPanel"
 ## Task 5: Pre-Analysis Pipeline
 
 **Files:**
+
 - Modify: `src/App.tsx` — add `preAnalyzeLibrary` function, call from `startMedley`
 
 ---
@@ -149,6 +155,7 @@ git commit -m "feat: add iteration progress ring and counter to LogPanel"
 ### Step 1: Understand what pre-analysis replaces
 
 The AI loop's Phase 1 calls `listen_to_audio` for each unanalyzed track. That tool:
+
 1. Checks if a cached Gemini File URI exists and is unexpired
 2. If not, uploads via `ai.files.upload` + polls until ACTIVE
 3. Caches the URI via `/api/library/cache`
@@ -163,11 +170,16 @@ Pre-analysis replicates this using `ai.models.generateContent` (one-shot, no cha
 Add this function in `src/App.tsx` directly above the `startMedley` function. It uses `addLog`, `fetchLibrary`, and the already-imported `GoogleGenAI`:
 
 ```tsx
-const preAnalyzeLibrary = async (lib: LibraryFile[], signal: AbortSignal): Promise<void> => {
-  const unanalyzed = lib.filter(f => !f.analysis);
+const preAnalyzeLibrary = async (
+  lib: LibraryFile[],
+  signal: AbortSignal,
+): Promise<void> => {
+  const unanalyzed = lib.filter((f) => !f.analysis);
   if (unanalyzed.length === 0) return;
 
-  addLog(`🔬 Pre-analyzing ${unanalyzed.length} track(s) before session starts...`);
+  addLog(
+    `🔬 Pre-analyzing ${unanalyzed.length} track(s) before session starts...`,
+  );
   const ai = new GoogleGenAI({ apiKey: geminiApiKey });
 
   for (const entry of unanalyzed) {
@@ -177,7 +189,11 @@ const preAnalyzeLibrary = async (lib: LibraryFile[], signal: AbortSignal): Promi
     try {
       // Check cache first
       let geminiUri: string | null = null;
-      if (entry.geminiFileUri && entry.geminiFileExpires && Date.now() < entry.geminiFileExpires) {
+      if (
+        entry.geminiFileUri &&
+        entry.geminiFileExpires &&
+        Date.now() < entry.geminiFileExpires
+      ) {
         geminiUri = entry.geminiFileUri;
         addLog(`  ✓ Using cached URI for ${entry.originalName}`);
       } else {
@@ -185,29 +201,38 @@ const preAnalyzeLibrary = async (lib: LibraryFile[], signal: AbortSignal): Promi
         const audioRes = await fetch(`/api/audio-raw/${entry.id}`, { signal });
         const audioBlob = await audioRes.blob();
         const uploadedFile = await ai.files.upload({
-          file: new File([audioBlob], entry.originalName, { type: entry.mimeType }),
-          config: { mimeType: entry.mimeType, displayName: entry.originalName }
+          file: new File([audioBlob], entry.originalName, {
+            type: entry.mimeType,
+          }),
+          config: { mimeType: entry.mimeType, displayName: entry.originalName },
         });
 
         // Poll until ACTIVE
         let fileInfo = uploadedFile;
-        while (fileInfo.state === 'PROCESSING') {
+        while (fileInfo.state === "PROCESSING") {
           if (signal.aborted) return;
-          await new Promise(r => setTimeout(r, 2000));
+          await new Promise((r) => setTimeout(r, 2000));
           fileInfo = await ai.files.get(uploadedFile.name!);
         }
 
-        if (fileInfo.state !== 'ACTIVE') {
-          addLog(`  ⚠️ Upload failed for ${entry.originalName} (state: ${fileInfo.state})`);
+        if (fileInfo.state !== "ACTIVE") {
+          addLog(
+            `  ⚠️ Upload failed for ${entry.originalName} (state: ${fileInfo.state})`,
+          );
           continue;
         }
 
         geminiUri = fileInfo.uri!;
-        const expires = Date.now() + (48 * 60 * 60 * 1000) - (60 * 1000);
-        await fetch('/api/library/cache', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fileId: entry.id, geminiFileUri: geminiUri, geminiFileExpires: expires }),
-          signal
+        const expires = Date.now() + 48 * 60 * 60 * 1000 - 60 * 1000;
+        await fetch("/api/library/cache", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fileId: entry.id,
+            geminiFileUri: geminiUri,
+            geminiFileExpires: expires,
+          }),
+          signal,
         });
       }
 
@@ -215,33 +240,40 @@ const preAnalyzeLibrary = async (lib: LibraryFile[], signal: AbortSignal): Promi
       addLog(`  🎵 Analyzing: ${entry.originalName}`);
       const result = await ai.models.generateContent({
         model: config.model,
-        contents: [{
-          role: 'user',
-          parts: [
-            { text: 'Analyze this audio track and provide: BPM (if discernible), musical key, mood/genre, energy level (1-10), and a 2-3 sentence structural summary. Be concise.' },
-            { fileData: { fileUri: geminiUri, mimeType: entry.mimeType } }
-          ]
-        }]
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                text: "Analyze this audio track and provide: BPM (if discernible), musical key, mood/genre, energy level (1-10), and a 2-3 sentence structural summary. Be concise.",
+              },
+              { fileData: { fileUri: geminiUri, mimeType: entry.mimeType } },
+            ],
+          },
+        ],
       });
-      const analysisText = result.text ?? '';
+      const analysisText = result.text ?? "";
 
       if (analysisText) {
-        await fetch('/api/library/analysis', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
+        await fetch("/api/library/analysis", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ fileId: entry.id, analysisText }),
-          signal
+          signal,
         });
         addLog(`  ✅ Analyzed: ${entry.originalName}`);
       }
     } catch (e: any) {
-      if (e.name === 'AbortError') return;
-      addLog(`  ⚠️ Pre-analysis failed for ${entry.originalName}: ${e.message}`);
+      if (e.name === "AbortError") return;
+      addLog(
+        `  ⚠️ Pre-analysis failed for ${entry.originalName}: ${e.message}`,
+      );
       // Non-fatal: the AI loop will analyze it normally
     }
   }
 
   await fetchLibrary(); // Refresh so runAutonomousLoop gets updated lib with analysis data
-  addLog('✅ Pre-analysis complete. Handing off to Architect...');
+  addLog("✅ Pre-analysis complete. Handing off to Architect...");
 };
 ```
 
@@ -250,18 +282,20 @@ const preAnalyzeLibrary = async (lib: LibraryFile[], signal: AbortSignal): Promi
 In `startMedley`, find the lines after the health check succeeds (around line 371–372):
 
 ```tsx
-addLog('✅ System online. Initializing Architect...');
+addLog("✅ System online. Initializing Architect...");
 runAutonomousLoop(library, abortRef.current.signal);
 ```
 
 Replace with:
 
 ```tsx
-addLog('✅ System online. Initializing Architect...');
+addLog("✅ System online. Initializing Architect...");
 await preAnalyzeLibrary(library, abortRef.current.signal);
 if (abortRef.current?.signal.aborted) return;
 // Re-read library so the loop gets fresh analysis data
-const freshLib = await fetch('/api/library').then(r => r.json()).catch(() => library);
+const freshLib = await fetch("/api/library")
+  .then((r) => r.json())
+  .catch(() => library);
 runAutonomousLoop(freshLib, abortRef.current.signal);
 ```
 
@@ -274,6 +308,7 @@ npm run lint
 ```
 
 Expected: same 2 pre-existing errors only. Common issues to watch for:
+
 - `ai.models.generateContent` return type — `result.text` may need `result.text ?? ''`
 - `entry.geminiFileUri`/`entry.geminiFileExpires` — these are optional on `LibraryFile`; use `&&` guards (already done in the code above)
 
@@ -282,6 +317,7 @@ Expected: same 2 pre-existing errors only. Common issues to watch for:
 Run `npm run dev`. Load 2+ tracks where at least one has no analysis (check `library/db.json` — `analysis` field absent or null).
 
 Start a session. In the log stream, confirm you see:
+
 ```
 🔬 Pre-analyzing 2 track(s) before session starts...
   📡 Uploading: track1.mp3

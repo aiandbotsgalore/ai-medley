@@ -1,5 +1,23 @@
 # Progress: Provider API Key Settings
 
+## 2026-07-04 stabilization continuation
+
+- Read the stabilization implementation progress and audit findings before editing.
+- Inspected git state, provider transport/history, fallback/config, semantic validators, payload measurement, manual contracts, and Phase 6-related tests.
+- Reported that Phase 6 implementation had not started and identified transactional provider history as the exact safe resume point.
+- Added and passed mocked provider status/history/fallback tests, provider/model migration tests, authoritative fact/candidate tests, shared scale-budget tests, and versioned manual-contract tests.
+- Completed Phase 6 verification with `npm test`, `npm run lint`, controlled `npm run build`, and `git diff --check`; restored `dist` exactly and confirmed every protected fingerprint was unchanged.
+- Began Phase 7 with read-only inspection as the safe resume point.
+- Completed Phase 7 Host/session/path/upload/capability/credential/redaction hardening using temp-root and canary tests only.
+- Verified Phase 7 with the full test suite, lint, controlled build, and diff check; restored `dist` and confirmed protected fingerprints were unchanged.
+- Began Phase 8 in inventory-only mode with cleanup/deletion explicitly disabled.
+- Completed Phase 8 with all-preserve artifact inventory, project/audio/log/concurrency limits, and no cleanup capability.
+- Verified Phase 8 with tests/lint/build/diff and unchanged protected fingerprints.
+- Began Phase 9 packaging/startup inspection without running `npm ci` or changing dependencies.
+- Added isolated data-root/port/startup validation and an owned production health smoke.
+- Reproduced and fixed the production artifact mismatch; bundled ESM `dist/server.js` now starts and reaches health.
+- Stopped in Phase 9 before clean-install verification because `npm ci` would reinstall dependencies. Phases 10–11 remain untouched; next step requires explicit isolated-install approval.
+
 ## 2026-05-19
 
 - Logged conversation under `C:\Users\Logan\Documents\Codex Conversations`.
@@ -203,3 +221,19 @@
 - Verified outside origins and cross-site writes return HTTP 403.
 - Verified port 3000 listens only on `127.0.0.1`.
 - Restarted the development server at `http://localhost:3000`.
+- Completed the approved Phase 9 clean-install gate in `G:\ai-medley-clean-install-test` with isolated G: npm cache and temp directories.
+- Fixed `providerPayloadAudit.test.ts` to use deterministic synthetic tracks instead of protected `library/db.json` and `library/wisdom.json`.
+- Verified disposable `npm ci`, full tests, type-check, production build, and owned production start; verified main tests/type-check/controlled build/diff and unchanged protected fingerprints.
+- Began Phase 10 at the first unfinished F-033 barrier and added semantic tabs, upload, dialog/forms, keyboard reorder, named actions/status/progress/log regions, focus treatment, and reduced-motion behavior.
+- Added `accessibility.ts` and `accessibility.test.ts`; the focused test, full suite, type-check, controlled build, and diff check pass.
+- Started and stopped an owned isolated dev server on port 38941; no provider or real-data route was used.
+- Stopped Phase 10 before runtime browser verification because the in-app browser has no available instance and Chrome DevTools/Playwright/Lighthouse CLIs are not installed; installing one needs separate approval.
+- Received approval and installed a disposable G:-only Playwright/axe harness without changing the main project dependencies or downloading a browser.
+- Ran the first Phase 10 matrix against system Chrome and mocked local APIs: 43/47 checks passed; contrast, tap-target sizing, and pending-upload progress exposure require UI fixes.
+- Fixed the four measured issues and removed external Google Fonts; the disposable Playwright/axe matrix passed 47/47.
+- Lighthouse generated a 0.98 report and exposed one upload heading-order issue, but cleanup failed with EPERM and Chrome singleton inspection showed the run attached renderers to the existing personal Chrome process. Did not terminate or otherwise touch that process; rerun only with an explicit G:-only profile.
+- Fixed the heading order and reran Lighthouse with an explicit new G: profile. The complete report scores 1.00 with zero failed audits; the CLI exit remains nonzero only because its G: temporary directory cleanup returns EPERM.
+- Completed Phase 10: full tests, lint, controlled build, diff check, and protected hashes pass; begin Phase 11 dependency/documentation closure.
+- Phase 11 inventory proved `@google/generative-ai` is the sole dead duplicate SDK and identified stale README/AGENTS/CLAUDE environment, packaging, provider, capability, and persistence guidance. `.env.example` remains protected and will not be edited.
+- Completed Phase 11: removed the proven-dead legacy Gemini SDK, Motion runtime, and unused Autoprefixer declaration; added checked current operations/API/plan-history documentation.
+- Verified a new G:-only clean install (242 packages), full tests, type-check, build, production start, and offline zero-vulnerability audit; main checks and protected hashes pass. All implementation phases are complete.

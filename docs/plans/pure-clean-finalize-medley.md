@@ -31,11 +31,12 @@ This improves things but still relies on pre-rendered transition files + later r
 
 Instead, `finalize_medley` builds **one single, massive `filter_complex`** that:
 
-1. Extracts every main segment directly from the original source files using the *final* locked timings from the design plan.
+1. Extracts every main segment directly from the original source files using the _final_ locked timings from the design plan.
 2. Applies every crossfade, style-specific EQ/high-pass carving, loudnorm, and other processing in one continuous chain.
 3. Outputs the complete medley in a single pass.
 
 ### Benefits
+
 - Highest possible audio quality (minimal re-encoding).
 - Perfect sample-accurate timing with no drift.
 - Eliminates the entire class of "gaps from bad manual assembly" bugs.
@@ -43,6 +44,7 @@ Instead, `finalize_medley` builds **one single, massive `filter_complex`** that:
 - Easier to apply global post-processing if desired later.
 
 ### Trade-offs / Challenges
+
 - The final render becomes a longer atomic operation.
 - The filter_complex string becomes very long for medleys with many tracks/transitions.
 - More complex to implement and debug initially.
@@ -59,6 +61,7 @@ Instead, `finalize_medley` builds **one single, massive `filter_complex`** that:
 ## Pure Clean Filter Complex Construction Sketch
 
 ### Input Data
+
 - `designPlan.transitions[]` (enriched with `actualFromExitSec`, `actualToEntrySec`, `style`/`transitionType`, `durationUsed`, beat snap info, etc.).
 - Access to original full track files (via library or workdir).
 - Optional: cached `TrackIntelligence` for beat grids if beat-aligned processing is still desired in the final pass.
@@ -169,13 +172,13 @@ The detailed sketch below has been updated to reflect these points.
 
 ```ts
 function buildPureCleanFilterComplex(
-  transitions: any[], 
+  transitions: any[],
   trackPathMap: Record<string, string>,
-  cachedTrackIntelligence?: any
+  cachedTrackIntelligence?: any,
 ): {
   filterComplex: string;
   inputFiles: string[];
-}
+};
 ```
 
 ### High-Level Construction Loop (Sketch)
@@ -183,36 +186,44 @@ function buildPureCleanFilterComplex(
 ```ts
 transitions.forEach((t, i) => {
   const fromId = t.fromTrackId;
-  const toId   = t.toTrackId;
+  const toId = t.toTrackId;
   const fromExit = t.actualFromExitSec;
-  const toEntry  = t.actualToEntrySec;
-  const dur      = t.durationUsed || 5;
-  const style    = t.transitionType || 'smooth_blend';
+  const toEntry = t.actualToEntrySec;
+  const dur = t.durationUsed || 5;
+  const style = t.transitionType || "smooth_blend";
 
   // Add source files (deduped)
   // ...
 
   // Main segment A (first one only)
   if (i === 0) {
-    filterParts.push(`[${fromIdx}:a]atrim=start=0:end=${fromExit},loudnorm=...[seg${i}a]`);
+    filterParts.push(
+      `[${fromIdx}:a]atrim=start=0:end=${fromExit},loudnorm=...[seg${i}a]`,
+    );
     currentLabel = `seg${i}a`;
   }
 
   // Main segment B
-  filterParts.push(`[${toIdx}:a]atrim=start=${toEntry}:end=${nextEnd || null},loudnorm=...[seg${i}b]`);
+  filterParts.push(
+    `[${toIdx}:a]atrim=start=${toEntry}:end=${nextEnd || null},loudnorm=...[seg${i}b]`,
+  );
 
   // Get style config (pluggable)
-  const styleConfig = getTransitionStyleConfig(style);   // returns curve + extraFilters + isMashup
+  const styleConfig = getTransitionStyleConfig(style); // returns curve + extraFilters + isMashup
 
   const xfadeLabel = `xfade${i}`;
 
   if (styleConfig.isMashup) {
     // Branching for mashup_layer (designed from day one)
     filterParts.push(`[${currentLabel}][seg${i}b]acrossfade=...[base${i}]`);
-    filterParts.push(`[${currentLabel}][seg${i}b]amix=inputs=2:duration=longest,volume=0.5[mash${i}]`);
+    filterParts.push(
+      `[${currentLabel}][seg${i}b]amix=inputs=2:duration=longest,volume=0.5[mash${i}]`,
+    );
     filterParts.push(`[base${i}][mash${i}]amix=inputs=2[${xfadeLabel}]`);
   } else {
-    filterParts.push(`[${currentLabel}][seg${i}b]acrossfade=d=${dur}:${styleConfig.curve}${styleConfig.extraFilters}[${xfadeLabel}]`);
+    filterParts.push(
+      `[${currentLabel}][seg${i}b]acrossfade=d=${dur}:${styleConfig.curve}${styleConfig.extraFilters}[${xfadeLabel}]`,
+    );
   }
 
   currentLabel = xfadeLabel;
@@ -225,14 +236,16 @@ filterParts.push(`[${currentLabel}]loudnorm=I=-14:TP=-1.5[final]`);
 ### Key Implementation Safeguards (Phase 2)
 
 1. **Pre-validation**
+
    ```ts
    const missing = transitions.filter(t => !t.actualFromExitSec || !t.actualToEntrySec);
    if (missing.length) throw new Error(`Missing actual timing data on: ${missing.map(...)}`);
    ```
 
 2. **Debug Logging**
+
    ```ts
-   const debugPath = path.join(sessionWorkDir, 'final_filtergraph.txt');
+   const debugPath = path.join(sessionWorkDir, "final_filtergraph.txt");
    fs.writeFileSync(debugPath, filterComplex);
    console.log(`[finalize-medley] Filter complex written to ${debugPath}`);
    ```
@@ -249,7 +262,11 @@ This is the direction for the pure clean implementation.
 Start by creating a private helper in `server.ts`:
 
 ```ts
-function buildPureCleanFilterComplex(designPlan: any, trackPathMap: Record<string,string>, cachedTrackIntelligence?: any): string
+function buildPureCleanFilterComplex(
+  designPlan: any,
+  trackPathMap: Record<string, string>,
+  cachedTrackIntelligence?: any,
+): string;
 ```
 
 Inside `finalize_medley`, if `useCleanRender` (or always in the future), call this helper instead of the piece-based hybrid logic.
@@ -272,13 +289,13 @@ Would you like me to begin writing the skeleton of this function now?
 
 ```ts
 function buildPureCleanFilterComplex(
-  transitions: any[], 
+  transitions: any[],
   trackPathMap: Record<string, string>,
-  cachedTrackIntelligence?: any
+  cachedTrackIntelligence?: any,
 ): {
   filterComplex: string;
   inputFiles: string[];
-}
+};
 ```
 
 ### High-Level Construction Loop (Sketch)
@@ -286,36 +303,44 @@ function buildPureCleanFilterComplex(
 ```ts
 transitions.forEach((t, i) => {
   const fromId = t.fromTrackId;
-  const toId   = t.toTrackId;
+  const toId = t.toTrackId;
   const fromExit = t.actualFromExitSec;
-  const toEntry  = t.actualToEntrySec;
-  const dur      = t.durationUsed || 5;
-  const style    = t.transitionType || 'smooth_blend';
+  const toEntry = t.actualToEntrySec;
+  const dur = t.durationUsed || 5;
+  const style = t.transitionType || "smooth_blend";
 
   // Add source files (deduped)
   // ...
 
   // Main segment A (first one only)
   if (i === 0) {
-    filterParts.push(`[${fromIdx}:a]atrim=start=0:end=${fromExit},loudnorm=...[seg${i}a]`);
+    filterParts.push(
+      `[${fromIdx}:a]atrim=start=0:end=${fromExit},loudnorm=...[seg${i}a]`,
+    );
     currentLabel = `seg${i}a`;
   }
 
   // Main segment B
-  filterParts.push(`[${toIdx}:a]atrim=start=${toEntry}:end=${nextEnd || null},loudnorm=...[seg${i}b]`);
+  filterParts.push(
+    `[${toIdx}:a]atrim=start=${toEntry}:end=${nextEnd || null},loudnorm=...[seg${i}b]`,
+  );
 
   // Get style config (pluggable)
-  const styleConfig = getTransitionStyleConfig(style);   // returns curve + extraFilters + isMashup
+  const styleConfig = getTransitionStyleConfig(style); // returns curve + extraFilters + isMashup
 
   const xfadeLabel = `xfade${i}`;
 
   if (styleConfig.isMashup) {
     // Branching for mashup_layer (designed from day one)
     filterParts.push(`[${currentLabel}][seg${i}b]acrossfade=...[base${i}]`);
-    filterParts.push(`[${currentLabel}][seg${i}b]amix=inputs=2:duration=longest,volume=0.5[mash${i}]`);
+    filterParts.push(
+      `[${currentLabel}][seg${i}b]amix=inputs=2:duration=longest,volume=0.5[mash${i}]`,
+    );
     filterParts.push(`[base${i}][mash${i}]amix=inputs=2[${xfadeLabel}]`);
   } else {
-    filterParts.push(`[${currentLabel}][seg${i}b]acrossfade=d=${dur}:${styleConfig.curve}${styleConfig.extraFilters}[${xfadeLabel}]`);
+    filterParts.push(
+      `[${currentLabel}][seg${i}b]acrossfade=d=${dur}:${styleConfig.curve}${styleConfig.extraFilters}[${xfadeLabel}]`,
+    );
   }
 
   currentLabel = xfadeLabel;
@@ -328,14 +353,16 @@ filterParts.push(`[${currentLabel}]loudnorm=I=-14:TP=-1.5[final]`);
 ### Key Implementation Safeguards (Phase 2)
 
 1. **Pre-validation**
+
    ```ts
    const missing = transitions.filter(t => !t.actualFromExitSec || !t.actualToEntrySec);
    if (missing.length) throw new Error(`Missing actual timing data on: ${missing.map(...)}`);
    ```
 
 2. **Debug Logging**
+
    ```ts
-   const debugPath = path.join(sessionWorkDir, 'final_filtergraph.txt');
+   const debugPath = path.join(sessionWorkDir, "final_filtergraph.txt");
    fs.writeFileSync(debugPath, filterComplex);
    console.log(`[finalize-medley] Filter complex written to ${debugPath}`);
    ```
@@ -350,6 +377,7 @@ This is the direction for the pure clean implementation.
 **Ready for next step?**
 
 I can now:
+
 - Turn the sketch above into a real helper function in `server.ts`
 - Update the plan document with the revised phase order from the review
 - Add the enrichment guard + debug logging into the current route

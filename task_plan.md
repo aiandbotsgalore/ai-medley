@@ -1,18 +1,65 @@
 # Task Plan: Provider API Key Settings
 
+## Current stabilization continuation — 2026-07-04
+
+Status: Implementation Phases 0–11 complete
+
+- Preserve all protected project data and the documented payload-audit incident.
+- Complete Phase 6 from its first unfinished item: mocked provider history/error policy, config discrimination, semantic authority, shared budgets, and versioned manual contracts.
+- Run the required full verification and protected fingerprint comparison.
+- Continue through later audit phases only while changes remain isolated and safe.
+
+Phase 6 result: complete. Full tests/lint/build/diff checks passed and all protected fingerprints were unchanged.
+
+Phase 7 result: complete. Security tests/lint/build/diff checks passed and all protected fingerprints were unchanged.
+
+Phase 8 result: complete. Inventory/resource tests/lint/build/diff checks passed; no artifact was selected or mutated and all protected fingerprints were unchanged.
+
+Phase 9 result: complete. An approved G:-only clean install exposed and fixed the payload-audit test's dependency on `library/db.json`; disposable install/test/lint/build/start and main-tree verification pass with protected hashes unchanged.
+
+Phase 10 result: semantic/keyboard UI implementation and static contracts pass, but the phase remains incomplete because no in-app browser instance or preinstalled Chrome DevTools/Playwright CLI is available for the required runtime accessibility matrix. Stop before installing a harness; Phase 11 remains unstarted.
+
+Phase 10 runtime continuation: approved disposable G:-only harness installed. First matrix passed 43/47 checks. Fix the measured contrast/tap-target/upload-progress failures, rerun the same matrix, then perform full phase verification.
+
+Phase 10 final result: complete. Playwright/axe passed 47/47, isolated Lighthouse scored 1.00, full project checks passed, and protected hashes were unchanged. Begin Phase 11 with evidence-only dependency removal and executable documentation alignment.
+
+Phase 11 final result: complete. Three proven-dead declarations were removed; current operations and exact route documentation are contract-tested; G:-only clean install/test/lint/build/start and offline audit pass; protected data and environment files are unchanged. No implementation phase remains.
+
+Errors recorded:
+
+- Expected red test: `providerRequest.test.ts` failed because the new shared budget/error exports do not exist yet. Next action is implementing those contracts, not rerunning unchanged code.
+- First integration type check found only local typing issues: an inferred `Map<unknown, unknown>`, test fixture optional-field inference, and the intentional v2 migration fixture conflicting with the new v3 type. Fix these type declarations directly.
+- A combined Phase 7 `rg` inspection command returned exit 1 without output because its PowerShell quoting/pattern composition was invalid. Split the searches into simpler commands instead of repeating it.
+- One `apply_patch` hunk for `trackPathMap` missed because the local loop used `forEach` rather than the assumed `for...of`; inspected the exact lines and applied the canonical-path change to the actual structure.
+- The first Phase 7 type check found a local import-name collision for two `sha256File` helpers and a Multer callback overload mismatch. Alias the upload hash helper and use the callback's explicit success/error overloads.
+- Phase 9 production smoke failed as expected from F-023: `dist/server.cjs` contained ESM imports and Node rejected it as CommonJS. The controlled build restored `dist`; fix the build with explicit `--format=cjs` and rerun the owned smoke.
+- The format fix exposed the second packaging gap: esbuild had not bundled local `src/` modules, so production could not resolve them from `dist`. `dist` was restored again; add explicit `--bundle` while keeping npm packages external.
+- The third production smoke showed bundled CJS cannot support the analyzer's legitimate `import.meta.url`/`createRequire` path. `dist` was restored. Broader correction: align with the package's ESM mode and emit bundled `dist/server.js` instead of continuing CJS patches.
+- The first Phase 10 harness directory command used a not-yet-created directory as its working directory and failed before executing; created all G: paths from the main workspace, then ran npm commands from the new harness.
+- A combined PowerShell `rg` command for API calls had invalid quoting; split source inspection and simpler `rg -e` searches.
+- The first runtime accessibility matrix intentionally failed 4/47 checks: two axe contrast checks, the 44px target check, and pending-upload progress exposure. Apply targeted UI fixes before rerunning.
+- Lighthouse's first launch generated a report but cleanup failed with EPERM and the audit renderers were parented to the existing personal Chrome singleton. Never repeat without an explicit disposable G: `--user-data-dir`; do not terminate the user's Chrome process.
+- The explicit G:-profile Lighthouse rerun produced a complete 1.00 accessibility report with zero failed audits, but the CLI again exited 1 solely on G: temp-directory cleanup (`EPERM`). Preserve the report and temp evidence; do not repeat the same cleanup failure.
+- Phase 10 server shutdown raced after the child had already exited, producing a benign `Stop-Process` not-found message; the owned port was confirmed closed and no unrelated process was targeted.
+- The Phase 11 release contract initially failed because the new authoritative docs did not exist, then passed after those docs were added.
+
 ## Goal
+
 Add configuration settings in the app so Logan can:
+
 - enter a Gemini API key in the app UI
 - switch the AI provider to OpenRouter
 - enter an OpenRouter API key in the app UI
 - run the medley workflow with the selected provider where technically supported
 
 ## Current Status
+
 Status: deep local audio analysis implemented and verified
 
 ## Proposed Approach
 
 ### Phase 1: Config Shape and Persistence
+
 Status: complete
 
 - Extend `MedleyConfig` with provider selection and provider-specific API keys.
@@ -21,6 +68,7 @@ Status: complete
 - Avoid writing API keys to project files or logs.
 
 ### Phase 2: Settings UI
+
 Status: complete
 
 - Add a provider switch in `src/components/ConfigPanel.tsx`.
@@ -29,6 +77,7 @@ Status: complete
 - Keep the current medley controls intact.
 
 ### Phase 3: Provider Runtime Adapter
+
 Status: complete
 
 - Keep Gemini using the existing `@google/genai` workflow.
@@ -37,6 +86,7 @@ Status: complete
 - Support OpenRouter audio analysis by sending base64 `input_audio` content for compatible OpenRouter models.
 
 ### Phase 4: Wiring and Verification
+
 Status: complete
 
 - Update `src/App.tsx` so key validation and model calls use the selected provider.
@@ -66,6 +116,7 @@ Status: diagnosis_complete_read_only
 Goal: Determine why Bluetooth devices are not connecting on Logan's Windows machine using read-only checks first.
 
 Plan:
+
 - Check Bluetooth adapter status and driver metadata.
 - Check required Bluetooth services.
 - Check recent Bluetooth/System event log errors.
@@ -79,6 +130,7 @@ Follow-up: Windows UI still treats Bluetooth as unavailable. The physical adapte
 ## Proposed Cost-Control Redesign
 
 ### Phase 5: Local-First Analysis
+
 Status: complete
 
 - Add a server-side local analysis endpoint that uses the bundled FFmpeg only.
@@ -87,6 +139,7 @@ Status: complete
 - Do not send raw song audio to Gemini/OpenRouter during normal pre-analysis.
 
 ### Phase 6: Minimal AI Payloads
+
 Status: complete
 
 - Change the main model prompt so the API receives compact text/JSON summaries, not audio blobs.
@@ -94,6 +147,7 @@ Status: complete
 - Use the API for planning/reasoning only: ordering, transition strategy, section choice, and command generation.
 
 ### Phase 7: Explicit Cloud Audio Mode
+
 Status: complete
 
 - Add an analysis mode setting:
@@ -117,15 +171,15 @@ Status: complete
 
 ## Errors Encountered
 
-| Error | Attempt | Resolution |
-|---|---|---|
-| `fatal: not a git repository` | Checked `git status --short` before planning | Logged constraint; proceed carefully with scoped edits only after approval |
-| Final medley could not be analyzed by `listen_to_audio` | Reviewed tool handler and server audio routes | Added `/api/audio-file` for generated/session audio paths and updated the tool handler to use it |
-| Completed session audio could disappear after finish | Reviewed `/api/session/finish` | Stopped deleting the session work directory immediately after saving the final audio path |
-| Browser `AbortError` from interrupted `audio.play()` | Reviewed library preview playback | Added a catch for interrupted play promises |
-| Vite websocket retries on `localhost:24678` | Reviewed custom Express/Vite setup | Disabled Vite HMR for this custom server to remove stale websocket retries |
-| PowerShell `Add-Content` failed while updating progress | Used nested quotes and backticks in one command | Retried with a literal here-string and updated `progress.md` |
-| React component key typing error in `MedleyMatchPanel` | Ran `npm run lint` after adding UI panel | Removed `key` from component props and let React handle it at call sites |
+| Error                                                           | Attempt                                                   | Resolution                                                                                                            |
+| --------------------------------------------------------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `fatal: not a git repository`                                   | Checked `git status --short` before planning              | Logged constraint; proceed carefully with scoped edits only after approval                                            |
+| Final medley could not be analyzed by `listen_to_audio`         | Reviewed tool handler and server audio routes             | Added `/api/audio-file` for generated/session audio paths and updated the tool handler to use it                      |
+| Completed session audio could disappear after finish            | Reviewed `/api/session/finish`                            | Stopped deleting the session work directory immediately after saving the final audio path                             |
+| Browser `AbortError` from interrupted `audio.play()`            | Reviewed library preview playback                         | Added a catch for interrupted play promises                                                                           |
+| Vite websocket retries on `localhost:24678`                     | Reviewed custom Express/Vite setup                        | Disabled Vite HMR for this custom server to remove stale websocket retries                                            |
+| PowerShell `Add-Content` failed while updating progress         | Used nested quotes and backticks in one command           | Retried with a literal here-string and updated `progress.md`                                                          |
+| React component key typing error in `MedleyMatchPanel`          | Ran `npm run lint` after adding UI panel                  | Removed `key` from component props and let React handle it at call sites                                              |
 | Existing analyzed tracks could skip new intelligence generation | Reviewed `preAnalyzeLibrary` after adding design endpoint | Re-analysis now triggers when `localAnalysis` or `medleyIntelligence` is missing, even if old plain `analysis` exists |
 
 ## Export Download Fix
@@ -144,6 +198,7 @@ Status: complete
 Goal: Upgrade song and section selection from "basic local facts plus prompt guidance" into an explicit scoring engine that finds the best medley ingredients: song order, excerpt choices, transitions, finale, emotional shape, and alternate order tradeoffs.
 
 ### Phase 8: Local Feature Expansion
+
 Status: complete
 
 - Extend `/api/audio-analysis/local` so each track gets richer local features without cloud upload.
@@ -152,6 +207,7 @@ Status: complete
 - Keep key, lyric meaning, and subjective mood marked unknown unless supplied by metadata/user notes/cloud clips.
 
 ### Phase 9: Medley Match Scoring Engine
+
 Status: complete
 
 - Add a local scoring module that scores every track and candidate section before the AI makes final decisions.
@@ -169,6 +225,7 @@ Status: complete
 - Produce ranked song orders locally: smoothest, strongest emotional arc, highest intensity, and surprise/contrast order.
 
 ### Phase 10: Medley Design Schema
+
 Status: complete
 
 - Create a structured medley design JSON that becomes the main planning artifact.
@@ -176,6 +233,7 @@ Status: complete
 - The AI should reason over this structured data instead of loosely reading plain analysis text.
 
 ### Phase 11: AI Prompt Upgrade
+
 Status: complete
 
 - Rewrite the system prompt so the model must use the local scoring output.
@@ -185,6 +243,7 @@ Status: complete
 - Add strict rules: do not invent key, lyrics, or emotional meaning without evidence.
 
 ### Phase 12: UI Visibility
+
 Status: complete
 
 - Add a "Medley Match" view or sidebar section that shows why songs were selected.
@@ -194,6 +253,7 @@ Status: complete
 - Show warnings such as "key unknown", "tempo confidence low", or "lyrics unavailable".
 
 ### Phase 13: Tests and Verification
+
 Status: complete
 
 - Add focused tests for scoring math, order ranking, compact payload construction, prompt requirements, local-only behavior, and final export path preservation.
@@ -227,6 +287,7 @@ Goal: Replace the current rough local proxies with stronger on-computer music an
 Core principle: anything measurable locally should be measured locally. The AI should receive compact summaries, not raw audio, unless Logan explicitly enables cloud audio.
 
 ### Phase 14: Toolchain Decision and Dependency Gate
+
 Status: complete
 
 - Compare local options and choose the smallest reliable stack.
@@ -239,6 +300,7 @@ Status: complete
 - After packages are present, installation/configuration can proceed under the standing permission rules.
 
 ### Phase 15: Analysis Schema V2
+
 Status: complete
 
 - Add a versioned local analysis schema, likely `localAnalysisV2`, without breaking existing `localAnalysis`.
@@ -258,6 +320,7 @@ Status: complete
 - Keep arrays compact by storing summaries and top candidates, not huge frame-by-frame data.
 
 ### Phase 16: Local Analyzer Engine
+
 Status: complete
 
 - Refactor local analysis out of `server.ts` into a dedicated module, likely `src/engine/localAudioAnalysis.ts` or `src/server/localAudioAnalysis.ts`.
@@ -272,6 +335,7 @@ Status: complete
 - Include file hash, analyzer version, dependency versions, and timestamp in the cached result.
 
 ### Phase 17: Beat-Aware Section Detection
+
 Status: complete
 
 - Improve section boundaries from arbitrary time windows to musically useful points.
@@ -288,6 +352,7 @@ Status: complete
 - Add confidence and reasons for each section label.
 
 ### Phase 18: Key and Harmonic Compatibility
+
 Status: complete
 
 - Add local chroma/key estimation.
@@ -300,6 +365,7 @@ Status: complete
 - Let the medley scorer use harmonic compatibility when confidence is good and ignore it when confidence is weak.
 
 ### Phase 19: Upgrade Medley Intelligence Scoring
+
 Status: complete
 
 - Feed `localAnalysisV2` into `src/engine/medleyIntelligence.ts`.
@@ -321,6 +387,7 @@ Status: complete
 - Preserve the four-layer separation: facts, guesses, scores, AI reasoning.
 
 ### Phase 20: UI Upgrade for Local Analysis Confidence
+
 Status: complete
 
 - Extend the Medley Match panel or add an Analysis Details view.
@@ -334,6 +401,7 @@ Status: complete
 - Keep it practical: show the best few candidates and warnings, not every raw datapoint.
 
 ### Phase 21: Cost-Control and AI Payload Guardrails
+
 Status: complete
 
 - Ensure no full audio is sent through API during local analysis.
@@ -346,6 +414,7 @@ Status: complete
 - Keep optional cloud audio mode separate and explicit.
 
 ### Phase 22: Tests and Verification
+
 Status: complete
 
 - Add unit tests for:
@@ -367,6 +436,7 @@ Status: complete
   - medley design endpoint after V2 analysis
 
 ### Phase 23: Fallback and Failure Handling
+
 Status: complete
 
 - If advanced local analysis fails on a file, keep the existing FFmpeg/music-tempo analyzer working.
@@ -403,6 +473,7 @@ Status: complete
 Goal: Replace automatic single-model runs with a validated specialist workflow while preserving the existing manual-model workflow.
 
 ### Phase 24: Contracts, Configuration, and Provider Control
+
 Status: complete
 
 - Add Zod 4 strict schemas for specialist handoffs, execution reports, reviews, candidates, and manifests.
@@ -411,6 +482,7 @@ Status: complete
 - Add abortable provider sends, request IDs, timeouts, stale-response protection, and complete-request payload limits.
 
 ### Phase 25: Candidate Rendering and Persistence
+
 Status: complete
 
 - Add atomic server-side candidate manifests and immutable candidate/debug files.
@@ -418,6 +490,7 @@ Status: complete
 - Add `submit_execution_report`, `render_review_candidate`, and `submit_quality_review` stage boundaries.
 
 ### Phase 26: Exact Candidate Finalization and Cleanup
+
 Status: complete
 
 - Change finalization to promote the exact reviewed candidate without FFmpeg re-rendering.
@@ -425,6 +498,7 @@ Status: complete
 - Add atomic session discard and registered-file cleanup while preserving source audio and completed outputs.
 
 ### Phase 27: Specialist Orchestration and UI
+
 Status: complete
 
 - Add the explicit specialist state machine and role-specific prompts/tools.
@@ -432,6 +506,7 @@ Status: complete
 - Preserve version-2 checkpoints through the legacy manual workflow and add version-3 automatic checkpoints.
 
 ### Phase 28: Verification
+
 Status: complete
 
 - Add direct TypeScript tests using `node:assert/strict`.
@@ -465,6 +540,7 @@ Status: complete
 Goal: Prove every complete automatic OpenRouter request remains below 102,400 UTF-8 bytes, 24,000 hard-limit estimated tokens, and the stricter 16,000-token regression target for both three-track and full four-track projects.
 
 ### Phase 29: Exact Request Serialization
+
 Status: complete
 
 - Add one shared builder that returns the request object, exact serialized body, UTF-8 byte count, estimated tokens, and component breakdown.
@@ -472,6 +548,7 @@ Status: complete
 - Capture provider-reported prompt tokens when available.
 
 ### Phase 30: Role-Specific Compaction
+
 Status: complete
 
 - Limit each specialist to its own tools and compact stage data.
@@ -479,6 +556,7 @@ Status: complete
 - Keep production continuations bounded with sanitized tool calls and compact tool results.
 
 ### Phase 31: Regression Audit
+
 Status: complete
 
 - Test three-track and full four-track projects, repairs, fallbacks, production continuations, both correction cycles, and the previous oversized failure shape.
@@ -486,6 +564,7 @@ Status: complete
 - Confirm finalization sends no provider request.
 
 ### Phase 32: Live Verification
+
 Status: complete
 
 - Run tests, type-check, production build, current-library audit, complete automatic OpenRouter run, and forced correction-cycle run.
@@ -510,6 +589,7 @@ Status: complete
 Status: complete
 
 ### Phase 33: Restrict Network Access
+
 Status: complete
 
 - Bind the server only to `127.0.0.1`.
@@ -517,6 +597,7 @@ Status: complete
 - Reject cross-site mutating requests before they reach API handlers.
 
 ### Phase 34: Security Verification
+
 Status: complete
 
 - Add direct tests for valid local origins, invalid outside origins, deceptive hostnames, and cross-site writes.

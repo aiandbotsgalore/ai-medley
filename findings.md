@@ -1,5 +1,16 @@
 # Findings: Provider API Key Settings
 
+## Stabilization continuation — 2026-07-04
+
+- Phase 6 is administratively marked in progress but has no implementation yet.
+- Existing exact OpenRouter measurement, automatic Zod schemas, and small payload fixtures are prerequisites only.
+- Transactional history, typed provider decisions, config/model discrimination, semantic provenance, shared Gemini/manual budgets, and versioned manual contracts all remain.
+- No protected data was touched during the Phase 6 inspection.
+- Phase 6 completed with mocked provider-only coverage. Shared budgets reject oversized Gemini/OpenRouter requests before network activity; current automatic facts/candidates and active manual schemas are versioned and authoritative.
+- Remaining provider risk is limited to live service behavior and Gemini SDK wire-size variance; neither was tested because paid/live calls are prohibited.
+- Phase 9 production smoke reproduced the audit defect in three layers: wrong `.cjs` format, unbundled local modules, then CJS-incompatible `import.meta`. A bundled ESM `dist/server.js` passed on an owned port and temp data root.
+- Full Phase 9 closure still requires an explicitly approved clean `npm ci` in a disposable clone/cache; it was not run in this worktree.
+
 ## Windows Bluetooth Diagnosis Findings
 
 - Diagnosis started with read-only checks only.
@@ -51,6 +62,7 @@
 - OpenRouter audio files must be base64 encoded; direct URLs are not supported for audio content.
 
 Sources:
+
 - https://openrouter.ai/docs/api/api-reference/chat/send-chat-completion-request
 - https://openrouter.ai/docs/api-reference/overview/
 - https://openrouter.ai/docs/guides/overview/multimodal/audio
@@ -140,6 +152,7 @@ Sources:
 - Any key/chord/section labeling should remain confidence-scored estimates, not facts, because local MIR algorithms can be wrong on dense rock/metal/cover recordings.
 
 Sources:
+
 - https://essentia.upf.edu/documentation/documentation.html
 - https://mtg.github.io/essentia.js/
 - https://aubio.org/documentation
@@ -198,6 +211,29 @@ Sources:
 - Both live final files are byte-for-byte identical to their approved candidates.
 
 ## Local-Only Security Findings
+
+## Phase 9 Clean-Install Finding
+
+- The production package installed and started cleanly, but the first disposable full test run exposed a hidden test-data dependency: `providerPayloadAudit.test.ts` read the main repository's `library/db.json` and `library/wisdom.json`.
+- Replacing those reads with deterministic synthetic track intelligence made the suite portable and ensured payload verification cannot depend on or inspect protected user library data.
+- The disposable G:-only install then passed all tests, lint, build, and owned production startup without live provider calls.
+
+## Phase 10 Runtime Accessibility Findings
+
+- A disposable G:-only Playwright 1.61.1 + axe-core 4.12.1 harness ran against system Chrome with a disposable profile, mocked local API responses, and all non-local requests blocked.
+- The first matrix passed 43/47 checks. Runtime failures were limited to: WCAG AA contrast in the workshop/configuration views, sub-44px core controls, upload progress disappearing while the POST is pending, and the corresponding missing progressbar announcement.
+- Keyboard tab behavior, modal focus trap/restore/Escape, accessibility-tree names, form labels, history/reorder actions, narrow/zoom-equivalent layouts, reduced motion, refresh recovery, two-tab state isolation, alerts/status, and no-provider/no-unexpected-API checks passed.
+- The app repeatedly attempts Google Fonts at runtime; the harness blocked every attempt. Removing this external request would improve offline determinism and eliminate avoidable console noise.
+- The corrected Playwright/axe matrix passed 47/47 and no longer attempted Google Fonts after switching to local system font stacks.
+- The first Lighthouse run generated a 0.98 accessibility report with one heading-order failure (`h1` followed by the upload `h3`). Its cleanup returned EPERM, and inspection showed audit renderer processes parented to the pre-existing personal Chrome singleton despite Lighthouse's temporary folder. No account or external site was accessed, no personal process was terminated, and this launch pattern must not be repeated; any rerun requires an explicit new G:-only `--user-data-dir`.
+- Changing the upload heading to `h2` closed the final Lighthouse audit. The explicit G:-profile report scores 1.00 with zero failures. Lighthouse still reports `EPERM` while deleting its separate G: temp folder after writing the report; this is a harness cleanup defect, not an accessibility failure, and the disposable evidence is retained.
+
+## Phase 11 Dependency and Documentation Findings
+
+- `@google/generative-ai` is declared in package/lock but has no import, require, dynamic import, config reference, script reference, or runtime use anywhere outside its own declarations. Active Gemini code consistently imports `@google/genai`, so the old SDK is the one proven dead duplicate.
+- Current README is partly updated but still recommends `npm install`; AGENTS/CLAUDE describe Gemini-only behavior, `dist/server.cjs`, unrestricted shell behavior, and a Gemini default that are no longer executable truth.
+- `.env.example` contains obsolete AI Studio/`APP_URL` guidance, but environment files are explicitly protected for this task. Current environment variables must therefore be documented in a non-environment authoritative operations document without editing `.env.example`.
+- Executable environment inputs are `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `PORT`, `AI_MEDLEY_DATA_ROOT`, and `NODE_ENV`; production output is bundled ESM `dist/server.js`, bound to `127.0.0.1`.
 
 - The server previously listened on `0.0.0.0`, which exposed the app and its powerful local file and command endpoints to the local network.
 - The server previously used unrestricted CORS, which allowed any website origin to call the API when it could reach the server.

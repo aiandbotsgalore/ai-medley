@@ -47,4 +47,5 @@ This list is generated from the Express registrations in `server.ts` and checked
 - `POST /api/session/metrics`
 - `POST /api/session/project-brief`
 - `POST /api/session/quality-review`
+- `PUT /api/config/openrouter-key`
 - `PUT /api/library/reorder`

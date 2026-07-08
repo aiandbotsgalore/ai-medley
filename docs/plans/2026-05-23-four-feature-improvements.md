@@ -13,10 +13,12 @@
 ## Parallel Execution Strategy
 
 **Wave 1 (launch two agents simultaneously):**
+
 - **Agent A** → Tasks 1 + 4 (ConfigPanel.tsx and prompts.ts only — no conflict with Agent B)
 - **Agent B** → Task 2 (server.ts + App.tsx — checkpoint/resume system)
 
 **Wave 2 (after both Wave 1 agents finish):**
+
 - **Agent C** → Task 3 (server.ts + App.tsx + LogPanel.tsx — preview feature on top of Task 2's changes)
 
 ---
@@ -26,6 +28,7 @@
 ### Task 1: Switch Default Model to gemini-2.5-pro
 
 **Files:**
+
 - Verify/Modify: `src/components/ConfigPanel.tsx:20`
 
 **Step 1: Verify current state**
@@ -35,10 +38,13 @@ Open `src/components/ConfigPanel.tsx` and check line 20. The `DEFAULT_CONFIG` mo
 **Step 2: Apply the change**
 
 In `src/components/ConfigPanel.tsx`, inside `DEFAULT_CONFIG`, change:
+
 ```typescript
 model: 'gemini-2.5-flash',
 ```
+
 To:
+
 ```typescript
 model: 'gemini-2.5-pro',
 ```
@@ -48,6 +54,7 @@ model: 'gemini-2.5-pro',
 ```bash
 npm run lint
 ```
+
 Expected: 0 TypeScript errors.
 
 **Step 4: Done — no commit needed**
@@ -58,6 +65,7 @@ Note this is one line changed. Log the result and move straight to Task 4.
 ### Task 4: Beat/Key-Aware FFmpeg Crossfades
 
 **Files:**
+
 - Modify: `src/engine/prompts.ts`
 
 Context: `prompts.ts` has 234 lines. It exports `buildSystemPrompt()` which constructs the six-phase instruction set. The `TOOL_DEFINITIONS` array at the top defines all tools including `execute_shell_command`. The AI already receives BPM and key data via `medleyDesign.localFacts` and analysis text — the gap is that the BUILD phase gives generic FFmpeg instructions without concrete beat-sync math.
@@ -123,6 +131,7 @@ Log your calculations as text before each FFmpeg command so the user can verify.
 ```bash
 npm run lint
 ```
+
 Expected: 0 TypeScript errors.
 
 **Step 5: Smoke test**
@@ -138,6 +147,7 @@ Start a session with 2+ tracks that have BPM in their analysis. In the log panel
 **Context:** The `sessions` object in `server.ts` is in-memory only — a server restart loses all state. The autonomous loop in `App.tsx` runs up to 50 iterations. If it crashes at iteration 30, the user loses everything. We add: (a) server endpoints to save/load checkpoint JSON, (b) App.tsx checkpoint saves after each tool batch, (c) a resume path that re-starts the AI loop with a "continue from where you left off" prompt, (d) a "Resume" button in the UI.
 
 **Checkpoint format** (`workdir/<sessionId>/checkpoint.json`):
+
 ```json
 {
   "sessionId": "abc123",
@@ -151,6 +161,7 @@ Start a session with 2+ tracks that have BPM in their analysis. In the log panel
 Note: The Gemini chat history is NOT checkpointed (no API to resume a mid-stream session). The resume path starts a fresh session with a special prompt telling the AI to check its workdir and continue.
 
 **Files:**
+
 - Modify: `server.ts`
 - Modify: `src/App.tsx`
 
@@ -159,33 +170,45 @@ Note: The Gemini chat history is NOT checkpointed (no API to resume a mid-stream
 Open `server.ts`. After the `POST /api/session/metrics` route (around line 633), add two new routes:
 
 ```typescript
-app.post('/api/session/checkpoint', (req, res) => {
+app.post("/api/session/checkpoint", (req, res) => {
   const { sessionId, iteration, logsSnapshot, metricsSnapshot } = req.body;
-  if (!sessionId) return res.status(400).json({ error: 'sessionId required' });
+  if (!sessionId) return res.status(400).json({ error: "sessionId required" });
   const sessionDir = path.join(workDir, sessionId);
   if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
-  const checkpoint = { sessionId, iteration, logsSnapshot, metricsSnapshot, savedAt: new Date().toISOString() };
-  fs.writeFileSync(path.join(sessionDir, 'checkpoint.json'), JSON.stringify(checkpoint, null, 2));
+  const checkpoint = {
+    sessionId,
+    iteration,
+    logsSnapshot,
+    metricsSnapshot,
+    savedAt: new Date().toISOString(),
+  };
+  fs.writeFileSync(
+    path.join(sessionDir, "checkpoint.json"),
+    JSON.stringify(checkpoint, null, 2),
+  );
   res.json({ success: true });
 });
 
-app.get('/api/session/:id/checkpoint', (req, res) => {
-  const cpPath = path.join(workDir, req.params.id, 'checkpoint.json');
-  if (!fs.existsSync(cpPath)) return res.status(404).json({ error: 'No checkpoint' });
+app.get("/api/session/:id/checkpoint", (req, res) => {
+  const cpPath = path.join(workDir, req.params.id, "checkpoint.json");
+  if (!fs.existsSync(cpPath))
+    return res.status(404).json({ error: "No checkpoint" });
   try {
-    res.json(JSON.parse(fs.readFileSync(cpPath, 'utf-8')));
+    res.json(JSON.parse(fs.readFileSync(cpPath, "utf-8")));
   } catch {
-    res.status(500).json({ error: 'Corrupt checkpoint' });
+    res.status(500).json({ error: "Corrupt checkpoint" });
   }
 });
 
-app.get('/api/checkpoints', (req, res) => {
+app.get("/api/checkpoints", (req, res) => {
   if (!fs.existsSync(workDir)) return res.json([]);
   const checkpoints: any[] = [];
   for (const dir of fs.readdirSync(workDir)) {
-    const cpPath = path.join(workDir, dir, 'checkpoint.json');
+    const cpPath = path.join(workDir, dir, "checkpoint.json");
     if (fs.existsSync(cpPath)) {
-      try { checkpoints.push(JSON.parse(fs.readFileSync(cpPath, 'utf-8'))); } catch {}
+      try {
+        checkpoints.push(JSON.parse(fs.readFileSync(cpPath, "utf-8")));
+      } catch {}
     }
   }
   res.json(checkpoints);
@@ -197,7 +220,11 @@ app.get('/api/checkpoints', (req, res) => {
 In `src/App.tsx`, after the `abortRef` declaration (around line 38), add:
 
 ```typescript
-const [checkpoint, setCheckpoint] = useState<{ sessionId: string; iteration: number; savedAt: string } | null>(null);
+const [checkpoint, setCheckpoint] = useState<{
+  sessionId: string;
+  iteration: number;
+  savedAt: string;
+} | null>(null);
 ```
 
 **Step 3: Load checkpoints on startup in App.tsx**
@@ -206,11 +233,13 @@ In `src/App.tsx`, after the `fetchLibrary` useEffect, add:
 
 ```typescript
 useEffect(() => {
-  fetch('/api/checkpoints')
-    .then(r => r.json())
+  fetch("/api/checkpoints")
+    .then((r) => r.json())
     .then((cps: any[]) => {
       if (cps.length === 0) return;
-      const latest = cps.sort((a, b) => new Date(b.savedAt).getTime() - new Date(a.savedAt).getTime())[0];
+      const latest = cps.sort(
+        (a, b) => new Date(b.savedAt).getTime() - new Date(a.savedAt).getTime(),
+      )[0];
       setCheckpoint(latest);
     })
     .catch(() => {});
@@ -229,15 +258,15 @@ Immediately AFTER `result = await sendWithRetry(...)` resolves (after that block
 
 ```typescript
 if (!loopFinished) {
-  fetch('/api/session/checkpoint', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+  fetch("/api/session/checkpoint", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       sessionId: sid,
       iteration: iterations,
       logsSnapshot: logs.slice(-20),
-      metricsSnapshot: metrics
-    })
+      metricsSnapshot: metrics,
+    }),
   }).catch(() => {});
 }
 ```
@@ -247,15 +276,15 @@ Note: `logs` is a React state ref here — you need to capture it differently. C
 ```typescript
 const currentLogs = [...logs].slice(-20); // capture snapshot before next setState
 if (!loopFinished) {
-  fetch('/api/session/checkpoint', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+  fetch("/api/session/checkpoint", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       sessionId: sid,
       iteration: iterations,
       logsSnapshot: currentLogs,
-      metricsSnapshot: metrics
-    })
+      metricsSnapshot: metrics,
+    }),
   }).catch(() => {});
 }
 ```
@@ -267,11 +296,12 @@ const logsRef = useRef<string[]>([]);
 ```
 
 And in `addLog`:
+
 ```typescript
 const addLog = useCallback((msg: string) => {
   const entry = `[${new Date().toLocaleTimeString()}] ${msg}`;
   logsRef.current = [...logsRef.current, entry];
-  setLogs(prev => [...prev, entry]);
+  setLogs((prev) => [...prev, entry]);
 }, []);
 ```
 
@@ -284,25 +314,33 @@ After `handleCancel`, add:
 ```typescript
 const resumeFromCheckpoint = async (cp: NonNullable<typeof checkpoint>) => {
   abortRef.current = new AbortController();
-  setStatus('running');
+  setStatus("running");
   setSessionId(cp.sessionId);
   setIteration({ current: cp.iteration, max: 50 });
   setLogs([]);
   setSummary(null);
   setMetrics(cp.metricsSnapshot ?? null);
   addLog(`🔄 Resuming session from checkpoint at iteration ${cp.iteration}...`);
-  const freshLib: LibraryFile[] = await fetch('/api/library').then(r => r.json()).catch(() => library);
-  runAutonomousLoop(freshLib, abortRef.current.signal, null, { sessionId: cp.sessionId, resumeFromIteration: cp.iteration });
+  const freshLib: LibraryFile[] = await fetch("/api/library")
+    .then((r) => r.json())
+    .catch(() => library);
+  runAutonomousLoop(freshLib, abortRef.current.signal, null, {
+    sessionId: cp.sessionId,
+    resumeFromIteration: cp.iteration,
+  });
 };
 ```
 
 **Step 6: Add resumeHint parameter to runAutonomousLoop**
 
 Change function signature from:
+
 ```typescript
 const runAutonomousLoop = async (lib: LibraryFile[], signal: AbortSignal, design: MedleyDesignPayload | null) => {
 ```
+
 To:
+
 ```typescript
 const runAutonomousLoop = async (
   lib: LibraryFile[],
@@ -315,15 +353,19 @@ const runAutonomousLoop = async (
 Inside the function, use `resumeHint?.sessionId ?? sid` when setting the session ID. Also change the initial message sent to the AI:
 
 Find:
+
 ```typescript
-let result = await sendWithRetry('Begin the medley architect process. Analyze the library first, then design and build the medley.');
+let result = await sendWithRetry(
+  "Begin the medley architect process. Analyze the library first, then design and build the medley.",
+);
 ```
 
 Replace with:
+
 ```typescript
 const initialMessage = resumeHint
   ? `You are resuming a medley build session. Prior progress: ${resumeHint.resumeFromIteration} iterations completed. Check your work directory — intermediate files from the previous run may still be present. Review what was already built and continue from where you left off. Do NOT start from scratch unless all intermediate files are missing.`
-  : 'Begin the medley architect process. Analyze the library first, then design and build the medley.';
+  : "Begin the medley architect process. Analyze the library first, then design and build the medley.";
 
 let result = await sendWithRetry(initialMessage);
 ```
@@ -341,14 +383,16 @@ const sid = resumeHint?.sessionId ?? Math.random().toString(36).substring(7);
 In the idle state section (after the Start button), add:
 
 ```tsx
-{checkpoint && status === 'idle' && (
-  <button
-    onClick={() => resumeFromCheckpoint(checkpoint)}
-    className="mt-3 px-8 py-2.5 border border-[#00F0FF]/30 text-[#00F0FF] text-[11px] font-mono uppercase tracking-widest rounded-xl hover:bg-[#00F0FF]/[0.05] hover:border-[#00F0FF]/50 transition-all"
-  >
-    Resume Checkpoint · Iter {checkpoint.iteration}
-  </button>
-)}
+{
+  checkpoint && status === "idle" && (
+    <button
+      onClick={() => resumeFromCheckpoint(checkpoint)}
+      className="mt-3 px-8 py-2.5 border border-[#00F0FF]/30 text-[#00F0FF] text-[11px] font-mono uppercase tracking-widest rounded-xl hover:bg-[#00F0FF]/[0.05] hover:border-[#00F0FF]/50 transition-all"
+    >
+      Resume Checkpoint · Iter {checkpoint.iteration}
+    </button>
+  );
+}
 ```
 
 **Step 8: Clear checkpoint on completion**
@@ -356,15 +400,15 @@ In the idle state section (after the Start button), add:
 After `setStatus('completed')` in the `finish_medley` handler inside `runAutonomousLoop`, also delete the checkpoint file via a fire-and-forget:
 
 ```typescript
-fetch(`/api/session/${sid}/checkpoint`, { method: 'DELETE' }).catch(() => {});
+fetch(`/api/session/${sid}/checkpoint`, { method: "DELETE" }).catch(() => {});
 setCheckpoint(null);
 ```
 
 Add the DELETE endpoint to server.ts after the GET checkpoint route:
 
 ```typescript
-app.delete('/api/session/:id/checkpoint', (req, res) => {
-  const cpPath = path.join(workDir, req.params.id, 'checkpoint.json');
+app.delete("/api/session/:id/checkpoint", (req, res) => {
+  const cpPath = path.join(workDir, req.params.id, "checkpoint.json");
   if (fs.existsSync(cpPath)) fs.unlinkSync(cpPath);
   res.json({ success: true });
 });
@@ -375,6 +419,7 @@ app.delete('/api/session/:id/checkpoint', (req, res) => {
 ```bash
 npm run lint
 ```
+
 Expected: 0 TypeScript errors.
 
 **Step 10: Smoke test**
@@ -390,6 +435,7 @@ Start a session, wait 2-3 iterations, kill the dev server (Ctrl+C), restart it (
 **Context:** During a session, the AI generates intermediate MP3 files in `workdir/<sessionId>/`. There is no way to hear them without waiting for `finish_medley`. We add: (a) a server endpoint that serves the most-recent MP3 from the session workdir, (b) a "Preview Build" button in the UI during active generation, (c) an optional `preview_current_build` tool the AI can call to proactively signal a preview is ready, (d) the footer audio player shows the preview during `running` state.
 
 **Files:**
+
 - Modify: `server.ts`
 - Modify: `src/App.tsx`
 - Modify: `src/components/LogPanel.tsx`
@@ -400,19 +446,25 @@ Start a session, wait 2-3 iterations, kill the dev server (Ctrl+C), restart it (
 After `GET /api/session/:id` (line 642), add:
 
 ```typescript
-app.get('/api/session/:id/preview', (req, res) => {
+app.get("/api/session/:id/preview", (req, res) => {
   const sessionDir = path.join(workDir, req.params.id);
-  if (!fs.existsSync(sessionDir)) return res.status(404).json({ error: 'No session directory' });
+  if (!fs.existsSync(sessionDir))
+    return res.status(404).json({ error: "No session directory" });
 
-  const mp3s = fs.readdirSync(sessionDir)
-    .filter(f => f.endsWith('.mp3'))
-    .map(f => ({ name: f, mtime: fs.statSync(path.join(sessionDir, f)).mtimeMs }))
+  const mp3s = fs
+    .readdirSync(sessionDir)
+    .filter((f) => f.endsWith(".mp3"))
+    .map((f) => ({
+      name: f,
+      mtime: fs.statSync(path.join(sessionDir, f)).mtimeMs,
+    }))
     .sort((a, b) => b.mtime - a.mtime);
 
-  if (mp3s.length === 0) return res.status(404).json({ error: 'No audio build yet' });
+  if (mp3s.length === 0)
+    return res.status(404).json({ error: "No audio build yet" });
 
   const latestPath = path.join(sessionDir, mp3s[0].name);
-  res.setHeader('Content-Type', 'audio/mpeg');
+  res.setHeader("Content-Type", "audio/mpeg");
   res.sendFile(latestPath);
 });
 ```
@@ -442,9 +494,11 @@ const handlePreview = useCallback(async () => {
   const res = await fetch(testUrl).catch(() => null);
   if (res?.ok) {
     setPreviewUrl(`${testUrl}?t=${Date.now()}`);
-    addLog('🎵 Preview loaded — listen in the audio player below.');
+    addLog("🎵 Preview loaded — listen in the audio player below.");
   } else {
-    addLog('⚠️ No in-progress audio file found yet. Try again after the first FFmpeg command completes.');
+    addLog(
+      "⚠️ No in-progress audio file found yet. Try again after the first FFmpeg command completes.",
+    );
   }
 }, [sessionId, addLog]);
 ```
@@ -494,7 +548,7 @@ Open `src/components/LogPanel.tsx`. Find the props interface (it likely accepts 
 
 ```typescript
 interface LogPanelProps {
-  status: AppStatus;  // or whatever type is used
+  status: AppStatus; // or whatever type is used
   logs: string[];
   iteration: { current: number; max: number } | null;
   onPreview?: () => void;
@@ -504,37 +558,48 @@ interface LogPanelProps {
 Inside the LogPanel render, find where the iteration counter is displayed. Next to it, add:
 
 ```tsx
-{props.onPreview && props.status === 'running' && (
-  <button
-    onClick={props.onPreview}
-    className="ml-3 px-3 py-1 text-[10px] font-mono uppercase border border-[#00F0FF]/20 text-[#00F0FF]/60 hover:text-[#00F0FF] hover:border-[#00F0FF]/40 rounded transition-all shrink-0"
-  >
-    Preview Build
-  </button>
-)}
+{
+  props.onPreview && props.status === "running" && (
+    <button
+      onClick={props.onPreview}
+      className="ml-3 px-3 py-1 text-[10px] font-mono uppercase border border-[#00F0FF]/20 text-[#00F0FF]/60 hover:text-[#00F0FF] hover:border-[#00F0FF]/40 rounded transition-all shrink-0"
+    >
+      Preview Build
+    </button>
+  );
+}
 ```
 
 **Step 8: Wire onPreview into LogPanel in App.tsx**
 
 Find where LogPanel is rendered in App.tsx:
+
 ```tsx
 <LogPanel status={status} logs={logs} iteration={iteration} />
 ```
 
 Change to:
+
 ```tsx
-<LogPanel status={status} logs={logs} iteration={iteration} onPreview={handlePreview} />
+<LogPanel
+  status={status}
+  logs={logs}
+  iteration={iteration}
+  onPreview={handlePreview}
+/>
 ```
 
 **Step 9: Update footer audio player to show preview during running state**
 
 Find the footer audio player in App.tsx:
+
 ```tsx
 {status === 'completed' && sessionId ? (
   <audio controls src={`/api/audio/${sessionId}`} ...
 ```
 
 Change to:
+
 ```tsx
 {((status === 'completed' && sessionId) || (status === 'running' && previewUrl)) ? (
   <audio
@@ -556,6 +621,7 @@ The `key` prop forces React to re-mount the audio element when the preview URL c
 ```bash
 npm run lint
 ```
+
 Expected: 0 TypeScript errors.
 
 **Step 11: End-to-end test**

@@ -7,10 +7,12 @@
 **Approach:** Measurement-first, quality-preserving, fully automated via this repo.
 
 ## Core Rules
+
 - No optimization without measurement
 - Quality > size reduction
 - Everything tracked in this branch
 - Use scripts/ folder for automation
 
 ## Next Immediate Action
+
 Pull this branch and wait for diagnostic script from Grok.

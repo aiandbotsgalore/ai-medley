@@ -14,6 +14,7 @@ The current architecture for rendering the final medley relies on pre-rendering 
 The correct long-term architecture is a **deterministic, timeline-centric, graph-compiled, single-pass render engine**.
 
 All final output must be generated from:
+
 - Original source tracks
 - An authoritative timeline model
 - A compiled filter graph
@@ -39,11 +40,13 @@ Current problems with the existing approach:
 ## 3. Architectural Vision
 
 ### Old Model (Current)
+
 ```
 Tracks → Pre-render transition snippets → Manual reassembly via concat → Final file
 ```
 
 ### New Model (Target)
+
 ```
 Tracks + Authoritative Timeline
     ↓
@@ -92,7 +95,7 @@ type TimelineSegment = {
   timelineStartSec: number;
   timelineEndSec: number;
 
-  layer: number;                    // 0 = main, higher = overlays/layers
+  layer: number; // 0 = main, higher = overlays/layers
 
   fadeIn?: FadeSpec;
   fadeOut?: FadeSpec;
@@ -103,7 +106,7 @@ type TimelineSegment = {
     beatAligned?: boolean;
     transitionType?: string;
     energyCurve?: string;
-    tailDurationSec?: number;       // for preserving reverb/decay
+    tailDurationSec?: number; // for preserving reverb/decay
   };
 };
 ```
@@ -113,7 +116,7 @@ type TimelineSegment = {
 ```ts
 type FadeSpec = {
   durationSec: number;
-  curve: string;                    // 'tri', 'log', 'exp', etc.
+  curve: string; // 'tri', 'log', 'exp', etc.
 };
 ```
 
@@ -121,7 +124,7 @@ type FadeSpec = {
 
 ```ts
 type ProcessingStep = {
-  type: string;                     // 'eq', 'highpass', 'compressor', etc.
+  type: string; // 'eq', 'highpass', 'compressor', etc.
   params: Record<string, any>;
 };
 ```
@@ -139,7 +142,7 @@ type TimelineLayer = {
 
 ```ts
 type TimelineEvent = {
-  type: string;                     // 'dj_drop', 'vocal_insert', 'automation', etc.
+  type: string; // 'dj_drop', 'vocal_insert', 'automation', etc.
   timelinePositionSec: number;
   payload?: any;
 };
@@ -207,18 +210,18 @@ FFmpeg Single-Pass Render
 
 ## 8. Implementation Phases (Revised Order)
 
-| Phase | Name                              | Focus                                      | Priority |
-|-------|-----------------------------------|--------------------------------------------|----------|
-| 1     | Stabilize Current System          | Make `finalize_medley` mandatory, add validation, debug logging, structured error parsing | High |
-| 2     | Timeline Data Model + Validation  | Define `TimelineSegment`, `TimelineLayer`, validators | Critical |
-| 3     | Graph DSL + Compiler              | `FilterNode`, `FilterGraph`, `compileFilterGraph()` | Critical |
-| 4     | `filter_complex_script` Support   | Mandatory use of script files | High |
-| 5     | Pure Clean Render Path            | `buildPureCleanRender()` using timeline → graph | High |
-| 6     | Style Plugin System               | Pluggable per-style processing & layering | Medium |
-| 7     | Mashup / Layering Support         | Branching graphs for simultaneous layers | Medium |
-| 8     | Tail Preservation System          | `tailDurationSec` / `postTransitionTailSec` | Medium |
-| 9     | Preview Render Subsystem          | Fast, disposable preview renders | Medium |
-| 10    | Global Timeline Engine            | Events, automation curves, future features | Low |
+| Phase | Name                             | Focus                                                                                     | Priority |
+| ----- | -------------------------------- | ----------------------------------------------------------------------------------------- | -------- |
+| 1     | Stabilize Current System         | Make `finalize_medley` mandatory, add validation, debug logging, structured error parsing | High     |
+| 2     | Timeline Data Model + Validation | Define `TimelineSegment`, `TimelineLayer`, validators                                     | Critical |
+| 3     | Graph DSL + Compiler             | `FilterNode`, `FilterGraph`, `compileFilterGraph()`                                       | Critical |
+| 4     | `filter_complex_script` Support  | Mandatory use of script files                                                             | High     |
+| 5     | Pure Clean Render Path           | `buildPureCleanRender()` using timeline → graph                                           | High     |
+| 6     | Style Plugin System              | Pluggable per-style processing & layering                                                 | Medium   |
+| 7     | Mashup / Layering Support        | Branching graphs for simultaneous layers                                                  | Medium   |
+| 8     | Tail Preservation System         | `tailDurationSec` / `postTransitionTailSec`                                               | Medium   |
+| 9     | Preview Render Subsystem         | Fast, disposable preview renders                                                          | Medium   |
+| 10    | Global Timeline Engine           | Events, automation curves, future features                                                | Low      |
 
 **Note:** Error handling, debug logging, and validation should be built into Phases 2–5, not deferred.
 
@@ -237,13 +240,13 @@ Update BUILD/REFINE instructions to clearly state:
 
 ## 10. Risks & Mitigations
 
-| Risk | Mitigation |
-|------|----------|
-| Extremely long filter_complex strings | Use `filter_complex_script` + good graph compiler |
-| Debugging giant graphs | Deterministic labels + rich logging + structured error parsing |
-| Agent resistance to new tool | Strong prompt language + clear error messages if it tries manual assembly |
-| Performance of very large graphs | Profile early; consider splitting into multiple filter_complex stages if needed |
-| Mashup_layer complexity | Design branching support from Phase 2 |
+| Risk                                  | Mitigation                                                                      |
+| ------------------------------------- | ------------------------------------------------------------------------------- |
+| Extremely long filter_complex strings | Use `filter_complex_script` + good graph compiler                               |
+| Debugging giant graphs                | Deterministic labels + rich logging + structured error parsing                  |
+| Agent resistance to new tool          | Strong prompt language + clear error messages if it tries manual assembly       |
+| Performance of very large graphs      | Profile early; consider splitting into multiple filter_complex stages if needed |
+| Mashup_layer complexity               | Design branching support from Phase 2                                           |
 
 ---
 
@@ -269,6 +272,7 @@ Update BUILD/REFINE instructions to clearly state:
 ## 13. Non-Negotiable Rules
 
 ### DO
+
 - Treat the timeline as authoritative
 - Use original source tracks for final render
 - Use single-pass (or well-defined staged) rendering for final output
@@ -278,6 +282,7 @@ Update BUILD/REFINE instructions to clearly state:
 - Log everything needed for debugging
 
 ### DO NOT
+
 - Concatenate pre-rendered transition snippets for the final authoritative output
 - Use per-segment `loudnorm` as the only normalization
 - Inline giant filtergraphs (always use `filter_complex_script`)
@@ -312,6 +317,7 @@ This is the correct foundation for a professional, scalable, future-proof medley
 **Document Status:** Draft for review and refinement before implementation begins.
 
 **Next Steps (once reviewed):**
+
 1. Finalize data models
 2. Define Graph DSL
 3. Implement validation + debug logging infrastructure
@@ -320,4 +326,4 @@ This is the correct foundation for a professional, scalable, future-proof medley
 
 ---
 
-*This document supersedes earlier versions of the pure clean finalize plan.*
+_This document supersedes earlier versions of the pure clean finalize plan._

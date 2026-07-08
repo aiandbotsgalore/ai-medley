@@ -28,7 +28,7 @@ npm run start
 
 ## Environment variables
 
-The server reads variables from the process environment and calls `dotenv.config()`, which loads `.env` by default. Do not commit secrets.
+The server reads variables from the process environment and loads git-ignored `.env.local` before `.env`. Do not commit secrets.
 
 | Variable | Behavior |
 |---|---|
@@ -38,7 +38,7 @@ The server reads variables from the process environment and calls `dotenv.config
 | `AI_MEDLEY_DATA_ROOT` | Optional isolated persistence root. Defaults to the repository working directory. Its `library/` and `workdir/` children hold persistent state and session artifacts. |
 | `NODE_ENV` | `production` serves the built SPA and suppresses development stack details; other values use Vite middleware. |
 
-Browser-entered API keys are memory-only and are not persisted to local storage. The browser calls same-origin server provider proxies; credentials remain server-side. Provider failures are categorized and retries/fallbacks are bounded.
+Browser-entered API keys are memory-only unless the user explicitly selects **Save on this computer** for an OpenRouter key. That action writes the credential to the git-ignored server file `.env.local`, switches the browser to the server-managed credential sentinel, and never stores or returns the secret through browser configuration. The browser calls same-origin server provider proxies; server-managed credentials remain server-side. Provider failures are categorized and retries/fallbacks are bounded.
 
 ## Workflow and model configuration
 

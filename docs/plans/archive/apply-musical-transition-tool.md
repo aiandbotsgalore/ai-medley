@@ -21,12 +21,13 @@ ffmpeg ... -af "acrossfade=d=5:curve1=tri:curve2=tri" ...
 ```
 
 This approach frequently produces:
+
 - Phasey or smeared transitions
 - Abrupt energy or spectral jumps
 - Poor musical timing (even when beat data exists)
 - Inconsistent loudness and tone across the medley
 
-**The core issue** is that the agent is being asked to act as both the musical director *and* the audio engineer. This is where quality suffers most.
+**The core issue** is that the agent is being asked to act as both the musical director _and_ the audio engineer. This is where quality suffers most.
 
 ---
 
@@ -37,6 +38,7 @@ Introduce a new high-level tool called `apply_musical_transition`.
 This tool allows the agent to express **musical intention** ("I want a beat-aligned energy ramp here") while the backend handles professional-grade audio processing using the rich data already available in `medleyIntelligence`.
 
 The tool is responsible for the **entire transition**, including:
+
 - Relevant clip extraction
 - Normalization / loudness matching
 - Intelligent blending based on the chosen style
@@ -46,23 +48,25 @@ The tool is responsible for the **entire transition**, including:
 ## 3. Tool Interface
 
 ### Tool Name
+
 `apply_musical_transition`
 
 ### Parameters
 
-| Parameter      | Type     | Required | Description |
-|----------------|----------|----------|-----------|
-| `fromTrackId`  | string   | Yes      | Track ID of the source section |
-| `fromSectionId`| string   | Yes      | Section ID of the source (exit) |
-| `toTrackId`    | string   | Yes      | Track ID of the destination section |
-| `toSectionId`  | string   | Yes      | Section ID of the destination (entry) |
-| `style`        | string   | Yes      | One of the supported transition styles (see below) |
-| `duration`     | number   | No       | Desired transition length in seconds. Backend may adjust slightly for musical reasons. |
-| `intensity`    | number   | No       | 0.0 – 1.0. Controls how expressive/aggressive the transition should feel. |
-| `beatAlign`    | boolean  | No       | Whether the transition should attempt to align to beats/downbeats. |
-| `notes`        | string   | No       | Free-text instructions or musical intent from the agent (e.g. "make this feel like a big lift into the chorus"). |
+| Parameter       | Type    | Required | Description                                                                                                      |
+| --------------- | ------- | -------- | ---------------------------------------------------------------------------------------------------------------- |
+| `fromTrackId`   | string  | Yes      | Track ID of the source section                                                                                   |
+| `fromSectionId` | string  | Yes      | Section ID of the source (exit)                                                                                  |
+| `toTrackId`     | string  | Yes      | Track ID of the destination section                                                                              |
+| `toSectionId`   | string  | Yes      | Section ID of the destination (entry)                                                                            |
+| `style`         | string  | Yes      | One of the supported transition styles (see below)                                                               |
+| `duration`      | number  | No       | Desired transition length in seconds. Backend may adjust slightly for musical reasons.                           |
+| `intensity`     | number  | No       | 0.0 – 1.0. Controls how expressive/aggressive the transition should feel.                                        |
+| `beatAlign`     | boolean | No       | Whether the transition should attempt to align to beats/downbeats.                                               |
+| `notes`         | string  | No       | Free-text instructions or musical intent from the agent (e.g. "make this feel like a big lift into the chorus"). |
 
 **Defaults:**
+
 - `duration`: Style-dependent (typically 4–6 seconds)
 - `intensity`: 0.6
 - `beatAlign`: `false` (agent must opt-in)
@@ -71,17 +75,18 @@ The tool is responsible for the **entire transition**, including:
 
 ## 4. Supported Transition Styles
 
-| Style                | Primary Use Case                     | Characteristics                              | Recommended `beatAlign` |
-|----------------------|--------------------------------------|----------------------------------------------|-------------------------|
-| `smooth_blend`       | General musical flow                 | Transparent, natural, good spectral continuity | Optional |
-| `beat_aligned`         | Groove / dance music                 | Strong beat/downbeat locking, rhythmic continuity | Strongly recommended |
-| `energy_ramp`        | Building or releasing energy         | Progressive intensity shift, often with spectral movement | Recommended |
-| `harmonic_blend`     | Key-compatible, tonal material       | Emphasizes harmonic smoothness               | Optional |
-| `dramatic_cut`       | Impactful, intentional moments       | Sharper, shorter, more aggressive            | Optional |
-| `reset_moment`       | Breakdowns / low-energy resets       | Gentle dip followed by re-entry              | Optional |
-| `mashup_layer`       | Creative overlapping / layering      | Allows more overlap with frequency carving   | Optional |
+| Style            | Primary Use Case                | Characteristics                                           | Recommended `beatAlign` |
+| ---------------- | ------------------------------- | --------------------------------------------------------- | ----------------------- |
+| `smooth_blend`   | General musical flow            | Transparent, natural, good spectral continuity            | Optional                |
+| `beat_aligned`   | Groove / dance music            | Strong beat/downbeat locking, rhythmic continuity         | Strongly recommended    |
+| `energy_ramp`    | Building or releasing energy    | Progressive intensity shift, often with spectral movement | Recommended             |
+| `harmonic_blend` | Key-compatible, tonal material  | Emphasizes harmonic smoothness                            | Optional                |
+| `dramatic_cut`   | Impactful, intentional moments  | Sharper, shorter, more aggressive                         | Optional                |
+| `reset_moment`   | Breakdowns / low-energy resets  | Gentle dip followed by re-entry                           | Optional                |
+| `mashup_layer`   | Creative overlapping / layering | Allows more overlap with frequency carving                | Optional                |
 
 **Notes on `mashup_layer`:**
+
 - Treated as a first-class style (not experimental).
 - Backend should use more sophisticated layering techniques (EQ ducking, spectral carving, etc.).
 - May result in longer overlap durations than traditional crossfades.
@@ -124,6 +129,7 @@ The tool should aim for **consistent high quality** rather than maximum flexibil
 ```
 
 The `notes` field should contain useful information for the agent, such as:
+
 - Why certain decisions were made
 - Any compromises (e.g. "beat alignment confidence was low, so snapped to nearest strong beat instead")
 - Suggestions for future refinement
@@ -133,19 +139,24 @@ The `notes` field should contain useful information for the agent, such as:
 ## 7. Integration with Existing System
 
 ### With `set_design_plan`
+
 - The agent should still use `set_design_plan` to lock its high-level structure and chosen sections.
 - During `BUILD`, it calls `apply_musical_transition` for each planned transition instead of raw `execute_shell_command` for blending.
 
 ### With Evaluation
+
 - The agent can (and should) continue using `analyze_medley_quality` after applying transitions.
 - Future enhancement: Add transition-specific metrics (spectral continuity at boundary, beat alignment error, energy delta, etc.).
 
 ### With Wisdom Accumulation
+
 - Every call to `apply_musical_transition` (plus its parameters and resulting quality scores) should be recorded in the permanent wisdom store.
 - This data can later be used to bias future designs toward transition styles that historically worked well between certain track types.
 
 ### With the Agent Prompt
+
 The system prompt should be updated to:
+
 - Strongly encourage use of this tool during the `BUILD` phase.
 - Discourage raw `execute_shell_command` for crossfading when this tool is available.
 - Teach the agent the musical meaning of each `style`.
