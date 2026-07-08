@@ -12,3 +12,12 @@ library/audio/
 repomix-output.txt
 repomix.config.json
 repo-context.txt
+
+# local AI tooling metadata
+.agents/
+.codex/
+.serena/
+mcps/
+
+# local data backups
+library/*.bak

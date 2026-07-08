@@ -1,24 +1,24 @@
 # Next Steps - Payload Optimization
 
-## Immediate Goal
+## Status: measurement goal complete
 
-Start measuring actual Gemini payload sizes and composition.
+The original goal of this document — instrumenting and measuring provider
+payload sizes — is done and now runs automatically:
 
-## Step 1: Run Diagnostics
+- `src/engine/providerPayloadAudit.test.ts` audits every provider request
+  shape (117 requests as of 2026-07-07) as part of `npm test`.
+- The largest observed request is ~13 KB / ~4.3k estimated tokens
+  (maximum-4-track `arrangement_repair`), dominated by `repairErrors`.
+- Compact request payloads are enforced by commit `f0e424c`
+  ("fix(provider): enforce compact request payloads").
 
-We need to instrument the code where Gemini requests are built.
+## Remaining optional follow-ups
 
-**Action required from you:**
-Tell me the file path where the Gemini request payload is assembled (usually something like `src/engine/medleyIntelligence.ts` or a prompt builder file).
+1. **repairErrors budget**: `repairErrors` is the largest single component
+   of the biggest payloads. If repair loops ever approach provider limits,
+   cap or summarize accumulated repair feedback before resending.
+2. **Frontend bundle size**: Vite warns that the main chunk is ~740 KB
+   minified. If UI load time becomes noticeable, add `manualChunks` or
+   dynamic imports. Purely a UX nicety for a local app.
 
-Once you give me the file, I will:
-
-1. Analyze it
-2. Provide the exact diagnostic code to add
-3. Tell you where to insert it
-
-## Step 2: Capture Baseline
-
-After diagnostics are added, we will run it on several medleys and record the results.
-
-Please reply with the relevant file path(s) when ready.
+See `EXPERIMENTS.md` and `EXPERIMENT_NOTES.md` for the measurement history.
