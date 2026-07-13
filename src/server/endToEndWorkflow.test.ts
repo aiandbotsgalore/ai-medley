@@ -188,6 +188,38 @@ try {
   assert.equal(render.manifest.candidates.length, 1);
   assert.equal(fs.existsSync(render.candidate.outputPath), true);
 
+  const reviewRequest = {
+    sessionId,
+    review: {
+      schemaVersion: 1,
+      candidateId: render.candidate.candidateId,
+      candidateVersion: render.candidate.candidateVersion,
+      arrangementVersion: render.candidate.arrangementVersion,
+      approved: false,
+      emotionalArc: 50,
+      transitionSmoothness: 50,
+      performerIdentity: 50,
+      overallScore: 50,
+      blockingIssues: ["mocked review rejection"],
+      corrections: [],
+      warnings: [],
+      reviewedAt: "2026-07-13T00:00:00.000Z",
+    },
+  };
+  const review = await jsonRequest("/api/session/quality-review", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "isolated-review" },
+    body: JSON.stringify(reviewRequest),
+  });
+  assert.equal(review.idempotent, false);
+  const repeatedReview = await jsonRequest("/api/session/quality-review", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "isolated-review" },
+    body: JSON.stringify(reviewRequest),
+  });
+  assert.equal(repeatedReview.idempotent, true);
+  assert.equal(repeatedReview.manifest.musicalReviews.length, 1);
+
   const finalizeBody = JSON.stringify({
     sessionId,
     candidateId: render.candidate.candidateId,

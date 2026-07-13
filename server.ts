@@ -2422,29 +2422,27 @@ app.post("/api/session/quality-review", async (req, res) => {
   const { sessionId, review } = req.body || {};
   try {
     validateSessionId(sessionId);
+    const idempotencyKey = String(
+      req.get("Idempotency-Key") || req.body?.idempotencyKey || "",
+    ).trim();
     return await withSessionLock(sessionId, async () => {
+      const execute = async () => {
       const parsed = QualityReviewSchema.parse(review);
       const existingManifest = readCandidateManifest(workDir, sessionId);
       const reviewedCandidate = existingManifest.candidates.find(
         (item) => item.candidateId === parsed.candidateId,
       );
       if (!reviewedCandidate) {
-        return res
-          .status(400)
-          .json({ error: "Reviewed candidate is not registered" });
+        throw new Error("Reviewed candidate is not registered");
       }
       if (
         reviewedCandidate.candidateVersion !== parsed.candidateVersion ||
         reviewedCandidate.arrangementVersion !== parsed.arrangementVersion
       ) {
-        return res.status(400).json({
-          error: "Review version does not match the registered candidate",
-        });
+        throw new Error("Review version does not match the registered candidate");
       }
       if (parsed.approved && parsed.blockingIssues.length) {
-        return res
-          .status(400)
-          .json({ error: "An approved review cannot contain blocking issues" });
+        throw new Error("An approved review cannot contain blocking issues");
       }
       const plan = ArrangementPlanSchema.safeParse(
         sessions[sessionId]?.designPlan,
@@ -2457,9 +2455,9 @@ app.post("/api/session/quality-review", async (req, res) => {
           (item) => !transitionIds.has(item.transitionId),
         );
         if (unknownCorrection) {
-          return res.status(400).json({
-            error: `Unknown correction transition: ${unknownCorrection.transitionId}`,
-          });
+          throw new Error(
+            `Unknown correction transition: ${unknownCorrection.transitionId}`,
+          );
         }
       }
       const manifest = applyCandidateReview(workDir, sessionId, parsed);
@@ -2467,7 +2465,28 @@ app.post("/api/session/quality-review", async (req, res) => {
       sessions[sessionId].workflowStage = parsed.approved
         ? "final_render"
         : "correction";
-      return res.json({ success: true, review: parsed, manifest });
+      return { success: true, review: parsed, manifest };
+      };
+      const automaticState = readAutomaticSessionState(workDir, sessionId);
+      const replay = idempotencyKey && automaticState
+        ? await replayAutomaticSessionIdempotent({
+            workDir,
+            sessionId,
+            operation: "musical_review",
+            key: idempotencyKey,
+            request: review,
+            execute,
+          })
+        : idempotencyKey
+          ? await replayIdempotent({
+              sessionId,
+              operation: "musical_review",
+              key: idempotencyKey,
+              request: review,
+              execute,
+            })
+          : { replayed: false, result: await execute() };
+      return res.json({ ...replay.result, idempotent: replay.replayed });
     });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
