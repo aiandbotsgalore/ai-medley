@@ -293,3 +293,18 @@ plain-text provider reply, the full suite, TypeScript, and whitespace checks.
 Verification passed: exact missing-tool-call regression, full `npm test`, `npm
 run lint`, and `git diff --check`. No live provider call, render, or protected
 data mutation occurred.
+
+## Master Plan Phase 0 — Baseline and containment audit
+
+Status: complete
+
+Classify pre-existing edits before any branch work, fingerprint protected data
+outside the repository, audit test side effects and mocked-provider boundaries,
+then run baseline tests and a disposable production build/smoke with isolated
+data. Do not run cleanup scripts or mutate protected paths.
+
+Completed: workspace was clean before task work, protected fingerprints matched
+after all checks, `npm test`, `npm run lint`, `npm run test:e2e`, and `npm run
+test:release-contract` passed, and a disposable clone completed `npm ci`, `npm
+run build`, and `npm run test:production-start` with isolated data. `clean` and
+persistent `start` were not applicable baseline checks.

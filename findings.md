@@ -428,3 +428,19 @@ Sources:
   fallbacks fail. It copies the current locally analyzed track facts and
   sections exactly, uses the best locally ranked order when available, and is
   validated against the same session facts before it is saved.
+
+# Master Plan Phase 0 — Baseline audit
+
+- Baseline branch is `payload-optimization` at `1268448`; working tree and
+  index were clean before this master-plan work began. Protected fingerprints
+  were written only to the operating-system temporary directory under run ID
+  `ff012373-8768-4e32-9413-f7902dafa868`.
+- `.gitignore` excludes `library/`, `workdir/`, `dist/`, and `.env*`. No
+  cleanup, reset, or source-audio mutation was performed.
+- The current test suite predominantly uses OS-temporary roots and the
+  production smoke sets an isolated `AI_MEDLEY_DATA_ROOT`. The provider-payload
+  audit also writes its generated report outside the workspace.
+- The current automatic implementation still contains context and production
+  provider calls in `src/engine/specialistOrchestrator.ts`. This is a known
+  master-plan gap for the later deterministic v4 phases, not something Phase 0
+  changes.
