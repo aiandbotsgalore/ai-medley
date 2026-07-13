@@ -4,6 +4,7 @@ import path from "path";
 import { isDeepStrictEqual } from "node:util";
 import {
   CandidateManifestSchema,
+  CandidateTechnicalEvaluationSchema,
   MAX_COMPLETE_CANDIDATES,
   RenderCandidateSchema,
   chooseBestCandidate,
@@ -57,6 +58,9 @@ export function createEmptyManifest(sessionId: string): CandidateManifest {
     finalizedCandidateId: null,
     finalOutputPath: null,
     candidates: [],
+    technicalEvaluations: [],
+    musicalReviews: [],
+    humanReviews: [],
     updatedAt: new Date().toISOString(),
   };
 }
@@ -434,7 +438,32 @@ export function applyCandidateReview(
   const next: CandidateManifest = {
     ...manifest,
     candidates,
+    musicalReviews: [...manifest.musicalReviews, review],
     selectedCandidateId: selected?.candidateId ?? null,
+    updatedAt: new Date().toISOString(),
+  };
+  writeCandidateManifestAtomic(workDir, sessionId, next);
+  return next;
+}
+
+export function appendCandidateTechnicalEvaluation(
+  workDir: string,
+  sessionId: string,
+  evaluation: unknown,
+) {
+  const parsed = CandidateTechnicalEvaluationSchema.parse(evaluation);
+  const manifest = readCandidateManifest(workDir, sessionId);
+  if (!manifest.candidates.some((candidate) => candidate.candidateId === parsed.candidateId)) {
+    throw new Error("Technical evaluation candidate is not registered");
+  }
+  if (manifest.technicalEvaluations.some(
+    (item) => item.candidateId === parsed.candidateId && item.evaluatedAt === parsed.evaluatedAt,
+  )) {
+    return manifest;
+  }
+  const next: CandidateManifest = {
+    ...manifest,
+    technicalEvaluations: [...manifest.technicalEvaluations, parsed],
     updatedAt: new Date().toISOString(),
   };
   writeCandidateManifestAtomic(workDir, sessionId, next);

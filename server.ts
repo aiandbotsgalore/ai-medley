@@ -90,6 +90,7 @@ import {
 } from "./src/server/openRouterPreflight";
 import {
   applyCandidateReview,
+  appendCandidateTechnicalEvaluation,
   assertCandidateStorageAvailable,
   discardAutomaticSessionFiles,
   getSessionDirectory,
@@ -3807,11 +3808,24 @@ app.post("/api/render-review-candidate", async (req, res) => {
         JSON.stringify({ candidate, quality, qualityGate }, null, 2),
         "utf8",
       );
-      const updatedManifest = registerCandidate(
+      registerCandidate(
         workDir,
         sessionId,
         candidate,
         automaticSession ? "automatic" : "legacy",
+      );
+      const updatedManifest = appendCandidateTechnicalEvaluation(
+        workDir,
+        sessionId,
+        {
+          candidateId,
+          candidateVersion,
+          technicallyValid: qualityGate.technicallyValid,
+          blockingIssues: qualityGate.blockingIssues,
+          warnings: qualityGate.warnings,
+          policyVersion: 1,
+          evaluatedAt: new Date().toISOString(),
+        },
       );
       sessions[sessionId].workflowStage = "quality_review";
       sessions[sessionId].currentCandidate = candidate;

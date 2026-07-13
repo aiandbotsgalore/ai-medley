@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   applyCandidateReview,
+  appendCandidateTechnicalEvaluation,
   cleanupRejectedCandidates,
   createEmptyManifest,
   discardAutomaticSessionFiles,
@@ -72,6 +73,16 @@ registerCandidate(
 const manifest = readCandidateManifest(root, sessionId);
 assert.equal(manifest.candidates.length, 2);
 assert.equal(manifest.workflowMode, "automatic");
+appendCandidateTechnicalEvaluation(root, sessionId, {
+  candidateId: "candidate-001",
+  candidateVersion: 1,
+  technicallyValid: true,
+  blockingIssues: [],
+  warnings: [],
+  policyVersion: 1,
+  evaluatedAt: "2026-07-13T00:00:00.000Z",
+});
+assert.equal(readCandidateManifest(root, sessionId).technicalEvaluations.length, 1);
 
 writeCandidateManifestAtomic(root, sessionId, {
   ...manifest,
@@ -98,7 +109,10 @@ assert.throws(
     }),
   /technically invalid candidate cannot be approved/,
 );
-writeCandidateManifestAtomic(root, sessionId, manifest);
+writeCandidateManifestAtomic(root, sessionId, {
+  ...manifest,
+  technicalEvaluations: readCandidateManifest(root, sessionId).technicalEvaluations,
+});
 
 assert.throws(
   () =>

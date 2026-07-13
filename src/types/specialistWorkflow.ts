@@ -209,6 +209,23 @@ export const RenderCandidateSchema = z.strictObject({
   createdAt: z.string().datetime(),
 });
 
+export const CandidateTechnicalEvaluationSchema = z.strictObject({
+  candidateId: Id,
+  candidateVersion: z.number().int().positive(),
+  technicallyValid: z.boolean(),
+  blockingIssues: WarningList,
+  warnings: WarningList,
+  policyVersion: z.literal(1),
+  evaluatedAt: z.string().datetime(),
+});
+
+export const CandidateHumanReviewSchema = z.strictObject({
+  candidateId: Id,
+  decision: z.enum(["approved", "changes_requested"]),
+  notes: WarningList,
+  reviewedAt: z.string().datetime(),
+});
+
 export const CandidateManifestSchema = z.strictObject({
   schemaVersion: z.literal(1),
   sessionId: Id,
@@ -217,6 +234,11 @@ export const CandidateManifestSchema = z.strictObject({
   finalizedCandidateId: Id.nullable(),
   finalOutputPath: z.string().trim().max(1_000).nullable(),
   candidates: z.array(RenderCandidateSchema).max(MAX_COMPLETE_CANDIDATES),
+  // Evidence is append-only. The derived candidate fields are kept for fast
+  // UI display, but never replace an earlier technical or musical decision.
+  technicalEvaluations: z.array(CandidateTechnicalEvaluationSchema).max(500).default([]),
+  musicalReviews: z.array(QualityReviewSchema).max(500).default([]),
+  humanReviews: z.array(CandidateHumanReviewSchema).max(500).default([]),
   updatedAt: z.string().datetime(),
 });
 
