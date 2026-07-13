@@ -23,6 +23,7 @@ This list is generated from the Express registrations in `server.ts` and checked
 - `GET /api/session/:id`
 - `GET /api/session/:id/stream`
 - `GET /api/session/:sessionId/candidates`
+- `GET /api/session/:sessionId/state`
 - `GET /api/storage/inventory`
 - `GET /api/waveform/:id`
 - `POST /api/apply-transition`
@@ -46,6 +47,8 @@ This list is generated from the Express registrations in `server.ts` and checked
 - `POST /api/session/design-plan`
 - `POST /api/session/execution-report`
 - `POST /api/session/finish`
+- `POST /api/session/human-review`
+- `POST /api/session/manual-review-required`
 - `POST /api/session/metrics`
 - `POST /api/session/project-brief`
 - `POST /api/session/quality-review`
