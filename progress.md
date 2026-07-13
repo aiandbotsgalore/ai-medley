@@ -506,3 +506,11 @@
 - Complete: protected-data post-check matches the baseline exactly. Full mocked
   tests, lint, end-to-end test, release contract, and disposable production
   build/smoke passed. No live provider call or protected-data mutation occurred.
+
+# Master Plan Phase 1 — In progress
+
+- Added isolated v4 workflow schemas and a focused schema regression script.
+  The current v3 runtime remains unchanged by design until the compatibility
+  phase; focused schema test and TypeScript passed.
+- Complete: focused schema test, full mocked suite, TypeScript, and whitespace
+  checks passed. No existing session files were read or rewritten.

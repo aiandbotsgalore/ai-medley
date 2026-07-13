@@ -444,3 +444,11 @@ Sources:
   provider calls in `src/engine/specialistOrchestrator.ts`. This is a known
   master-plan gap for the later deterministic v4 phases, not something Phase 0
   changes.
+
+# Master Plan Phase 1 — Schema definitions
+
+- Added isolated `automaticWorkflowV4` Zod contracts without changing current
+  v3 runtime persistence. The contracts distinguish `schemaVersion: 1` from
+  `workflowVersion: 4`, include monotonic `stateRevision`, idempotency records,
+  design/arrangement records, append-only review evidence arrays, and manual
+  review state.

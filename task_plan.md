@@ -308,3 +308,16 @@ after all checks, `npm test`, `npm run lint`, `npm run test:e2e`, and `npm run
 test:release-contract` passed, and a disposable clone completed `npm ci`, `npm
 run build`, and `npm run test:production-start` with isolated data. `clean` and
 persistent `start` were not applicable baseline checks.
+
+## Master Plan Phase 1 — Schema definitions
+
+Status: complete
+
+Add isolated v4 schemas for automatic session state and revisions, idempotency
+records, design snapshots, arrangement versions, append-only technical/musical/
+human/correction evidence, candidate manifests, and manual-review state. No
+runtime file reader/writer changes occur in this phase; compatibility work is
+reserved for later phases.
+
+Verification passed: `npm run test:v4-schema`, full `npm test`, `npm run lint`,
+and `git diff --check`. No runtime persistence or protected data changed.
