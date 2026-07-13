@@ -2333,6 +2333,10 @@ app.post("/api/medley-intelligence/design", async (req, res) => {
       return res.status(409).json({ error: error.message });
     }
     if (!sessions[sessionId]) sessions[sessionId] = { status: "running", logs: [] };
+    // v4 is automatic even though it deliberately has no legacy,
+    // model-authored project brief. Preserve that authority boundary for the
+    // in-memory portion of the workflow until server restart reconciliation.
+    sessions[sessionId].workflowMode = "automatic";
     sessions[sessionId].trackIntelligence = structuredClone(tracks);
     sessions[sessionId].medleyDesign = structuredClone(design);
   }
@@ -2823,12 +2827,16 @@ app.post("/api/session/design-plan", async (req, res) => {
   const idempotencyKey = String(
     req.get("Idempotency-Key") || req.body?.idempotencyKey || "",
   ).trim();
+  try {
   return await withSessionLock(sessionId, async () => {
   const execute = async () => {
   if (!sessions[sessionId]) {
     sessions[sessionId] = { status: "running", logs: [] };
   }
-  if (!sessions[sessionId].projectBrief) {
+  if (
+    !sessions[sessionId].projectBrief &&
+    sessions[sessionId].workflowMode !== "automatic"
+  ) {
     try {
       parseManualToolCall(
         "set_design_plan",
@@ -2854,7 +2862,10 @@ app.post("/api/session/design-plan", async (req, res) => {
     "outputPath",
   ];
 
-  if (!sessions[sessionId].projectBrief) {
+  if (
+    !sessions[sessionId].projectBrief &&
+    sessions[sessionId].workflowMode !== "automatic"
+  ) {
     for (const incoming of plan.transitions) {
       const key = `${incoming.fromTrackId}:${incoming.fromSectionId}:${incoming.toTrackId}:${incoming.toSectionId}`;
 
@@ -3014,6 +3025,9 @@ app.post("/api/session/design-plan", async (req, res) => {
       : { replayed: false, result: await execute() };
   return res.json({ ...replay.result, idempotent: replay.replayed });
   });
+  } catch (error: any) {
+    return res.status(400).json({ success: false, error: error.message });
+  }
 });
 
 // Musical transition endpoint (high-quality blending tool for the agent)
@@ -3080,7 +3094,12 @@ app.post("/api/apply-transition", async (req, res) => {
   const session = sessionId ? sessions[sessionId] : null;
   const designPlan = session?.designPlan;
   let validatedExecutionRequest: any = null;
-  if (session?.projectBrief) {
+  const automaticExecution = Boolean(
+    session?.projectBrief ||
+      session?.workflowMode === "automatic" ||
+      (sessionId && readAutomaticSessionState(workDir, sessionId)),
+  );
+  if (automaticExecution) {
     const parsedRequest = TransitionExecutionRequestSchema.safeParse({
       transitionId,
       fromTrackId,
@@ -3249,7 +3268,7 @@ app.post("/api/apply-transition", async (req, res) => {
       };
       // Legacy manual sessions still expect execution details on the loose plan.
       if (
-        !session.projectBrief &&
+        !automaticExecution &&
         session.designPlan &&
         Array.isArray(session.designPlan.transitions)
       ) {
@@ -3332,7 +3351,7 @@ app.post("/api/apply-transition", async (req, res) => {
 
     // Only after successful preview render, set the outputPath (preview concern separated)
     if (
-      !session?.projectBrief &&
+      !automaticExecution &&
       session?.designPlan &&
       Array.isArray(session.designPlan.transitions)
     ) {
@@ -3349,7 +3368,7 @@ app.post("/api/apply-transition", async (req, res) => {
     }
 
     const finalNotes = `Applied ${style} transition (${transitionDuration}s).${beatSnapNotes} ${notes ? "Notes: " + notes : ""}`;
-    if (session?.projectBrief && transitionId) {
+    if (automaticExecution && transitionId) {
       if (!session.executionResults) session.executionResults = {};
       if (!session.executionResults[executionVersion])
         session.executionResults[executionVersion] = {};

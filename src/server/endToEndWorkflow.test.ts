@@ -17,7 +17,14 @@ function sha256(filePath: string) {
 }
 
 async function jsonRequest(route: string, init?: RequestInit) {
-  const response = await fetch(`${baseUrl}${route}`, init);
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}${route}`, init);
+  } catch (error) {
+    throw new Error(
+      `${init?.method ?? "GET"} ${route} could not reach isolated server: ${String(error)}\n${serverOutput}`,
+    );
+  }
   const payload = await response.json().catch(() => ({}));
   assert.equal(
     response.ok,
@@ -128,7 +135,9 @@ try {
       trackIds: selectedIds,
       userConstraints: {
         style: "smooth",
-        targetDurationMinutes: 1,
+        // Two 24-second fixtures cannot legitimately satisfy a 60-second
+        // target. Keep the acceptance case within its available source range.
+        targetDurationMinutes: 46 / 60,
         crossfadeDurationSeconds: 2,
       },
     }),
@@ -161,7 +170,7 @@ try {
       trackIds: selectedIds,
       userConstraints: {
         style: "smooth",
-        targetDurationMinutes: 1,
+        targetDurationMinutes: 46 / 60,
         crossfadeDurationSeconds: 2,
       },
     }),
@@ -169,33 +178,51 @@ try {
   assert.equal(repeatedDesign.idempotent, true);
   assert.deepEqual(repeatedDesign.design, designResult.design);
 
+  const authoritativeCandidate = designResult.design.transitionMatrixSummary.find(
+    (candidate: any) =>
+      candidate.fromTrackId !== candidate.toTrackId &&
+      selectedIds.includes(candidate.fromTrackId) &&
+      selectedIds.includes(candidate.toTrackId),
+  );
+  assert.ok(authoritativeCandidate, "Deterministic design did not produce a transition candidate");
   const transition = {
-    fromTrackId: selectedIds[0],
-    fromSectionId: "synthetic-a",
-    toTrackId: selectedIds[1],
-    toSectionId: "synthetic-b",
-    fromExitSec: 18,
-    toEntrySec: 2,
+    transitionId: "isolated-transition-001",
+    fromTrackId: authoritativeCandidate.fromTrackId,
+    fromSectionId: authoritativeCandidate.fromSectionId,
+    toTrackId: authoritativeCandidate.toTrackId,
+    toSectionId: authoritativeCandidate.toSectionId,
+    fromExitSec: authoritativeCandidate.fromExitSec,
+    toEntrySec: authoritativeCandidate.toEntrySec,
     style: "smooth_blend",
     duration: 2,
     beatAlign: true,
     notes: "isolated end-to-end test",
   };
+  const plan = {
+    schemaVersion: 1,
+    arrangementVersion: 1,
+    projectId: sessionId,
+    strategy: "isolated deterministic v4 acceptance",
+    orderedTrackIds: [transition.fromTrackId, transition.toTrackId],
+    transitions: [transition],
+    confidence: 1,
+    warnings: [],
+  };
   await jsonRequest("/api/session/design-plan", {
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": "isolated-arrangement" },
-    body: JSON.stringify({ sessionId, plan: { transitions: [transition] } }),
+    body: JSON.stringify({ sessionId, plan }),
   });
   const repeatedArrangement = await jsonRequest("/api/session/design-plan", {
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": "isolated-arrangement" },
-    body: JSON.stringify({ sessionId, plan: { transitions: [transition] } }),
+    body: JSON.stringify({ sessionId, plan }),
   });
   assert.equal(repeatedArrangement.idempotent, true);
 
   const transitionExecutionRequest = {
     sessionId,
-    transitionId: "isolated-transition-001",
+    transitionId: transition.transitionId,
     fromTrackId: transition.fromTrackId,
     fromSectionId: transition.fromSectionId,
     toTrackId: transition.toTrackId,
@@ -227,10 +254,35 @@ try {
   assert.equal(repeatedTransitionExecution.idempotent, true);
   assert.equal(repeatedTransitionExecution.outputPath, transitionExecution.outputPath);
 
+  const executionReport = await jsonRequest("/api/session/execution-report", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "isolated-execution-report" },
+    body: JSON.stringify({
+      sessionId,
+      report: {
+        schemaVersion: 1,
+        executionVersion: 1,
+        arrangementVersion: 1,
+        attemptedTransitions: [{
+          ...transition,
+          success: true,
+          actualFromExitSec: transitionExecution.actualFromExitSec,
+          actualToEntrySec: transitionExecution.actualToEntrySec,
+          previewPath: transitionExecution.outputPath,
+          error: null,
+        }],
+        technicalWarnings: [],
+        unresolvedFailures: [],
+        completedAt: "2026-07-13T00:00:00.000Z",
+      },
+    }),
+  });
+  assert.equal(executionReport.idempotent, false);
+
   const render = await jsonRequest("/api/render-review-candidate", {
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": "isolated-render" },
-    body: JSON.stringify({ sessionId, legacy: true }),
+    body: JSON.stringify({ sessionId, arrangementVersion: 1, executionVersion: 1 }),
   });
   assert.equal(render.candidate.candidateId, "candidate-001");
   assert.equal(render.manifest.candidates.length, 1);
@@ -238,7 +290,7 @@ try {
   const repeatedRender = await jsonRequest("/api/render-review-candidate", {
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": "isolated-render" },
-    body: JSON.stringify({ sessionId, legacy: true }),
+    body: JSON.stringify({ sessionId, arrangementVersion: 1, executionVersion: 1 }),
   });
   assert.equal(repeatedRender.idempotent, true);
   assert.equal(repeatedRender.candidate.candidateId, render.candidate.candidateId);
@@ -250,12 +302,12 @@ try {
       candidateId: render.candidate.candidateId,
       candidateVersion: render.candidate.candidateVersion,
       arrangementVersion: render.candidate.arrangementVersion,
-      approved: false,
+      approved: true,
       emotionalArc: 50,
       transitionSmoothness: 50,
       performerIdentity: 50,
       overallScore: 50,
-      blockingIssues: ["mocked review rejection"],
+      blockingIssues: [],
       corrections: [],
       warnings: [],
       reviewedAt: "2026-07-13T00:00:00.000Z",
