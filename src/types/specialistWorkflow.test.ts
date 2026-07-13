@@ -4,6 +4,7 @@ import {
   ProjectBriefSchema,
   TransitionExecutionRequestSchema,
   chooseBestCandidate,
+  estimateArrangementDurationSec,
   formatValidationIssues,
   measureProviderRequest,
   validateArrangementContext,
@@ -127,6 +128,29 @@ assert.deepEqual(
     ]),
   }),
   [],
+);
+const durationContext = {
+  trackIds: new Set(["a", "b"]),
+  sectionsById: new Map([
+    ["a-1", { trackId: "a", startSec: 0, endSec: 90 }],
+    ["b-1", { trackId: "b", startSec: 10, endSec: 60 }],
+  ]),
+  durationsByTrackId: new Map([
+    ["a", 120],
+    ["b", 140],
+  ]),
+  targetDurationSec: 60,
+  transitionCandidatesById: new Map([
+    [plan.transitions[0].transitionCandidateId!, {
+      fromTrackId: "a", fromSectionId: "a-1", toTrackId: "b", toSectionId: "b-1",
+      fromExitSec: 80, toEntrySec: 10,
+    }],
+  ]),
+};
+assert.equal(estimateArrangementDurationSec(plan, durationContext), 105);
+assert.match(
+  validateArrangementContext(plan, durationContext).join("; "),
+  /planned timeline.*target/i,
 );
 assert.match(
   validateProjectBriefContext(

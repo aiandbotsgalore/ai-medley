@@ -488,6 +488,32 @@ export function formatValidationIssues(error: z.ZodError): string[] {
   });
 }
 
+/** Mirrors the deterministic render timeline: selected sections plus a short final tail. */
+export function estimateArrangementDurationSec(
+  plan: ArrangementPlan,
+  context: SpecialistContext,
+  finalTailSec = 30,
+): number | null {
+  if (!plan.transitions.length) return null;
+  let duration = 0;
+  for (const [index, transition] of plan.transitions.entries()) {
+    if (index === 0) duration += transition.fromExitSec;
+    const nextTransition = plan.transitions[index + 1];
+    if (nextTransition) {
+      duration += nextTransition.fromExitSec - transition.toEntrySec;
+    } else {
+      const trackDuration = context.durationsByTrackId.get(transition.toTrackId);
+      const finalEnd =
+        trackDuration === undefined
+          ? transition.toEntrySec + finalTailSec
+          : Math.min(trackDuration, transition.toEntrySec + finalTailSec);
+      duration += finalEnd - transition.toEntrySec;
+    }
+    duration -= transition.duration;
+  }
+  return Number.isFinite(duration) && duration > 0 ? duration : null;
+}
+
 export function validateArrangementContext(
   plan: ArrangementPlan,
   context: SpecialistContext,
@@ -586,6 +612,18 @@ export function validateArrangementContext(
     }
     if (toDuration !== undefined && transition.toEntrySec > toDuration) {
       errors.push(`${prefix}.toEntrySec: Exceeds source duration`);
+    }
+  }
+  if (context.targetDurationSec && context.targetDurationSec > 0) {
+    const estimatedDurationSec = estimateArrangementDurationSec(plan, context);
+    const toleranceSec = Math.max(5, context.targetDurationSec * 0.05);
+    if (
+      estimatedDurationSec !== null &&
+      Math.abs(estimatedDurationSec - context.targetDurationSec) > toleranceSec
+    ) {
+      errors.push(
+        `estimatedDurationSec: Planned timeline is ${estimatedDurationSec.toFixed(1)}s but the target is ${context.targetDurationSec.toFixed(1)}s; choose shorter or longer sections before rendering`,
+      );
     }
   }
   return errors;

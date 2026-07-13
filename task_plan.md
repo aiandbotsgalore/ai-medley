@@ -228,6 +228,16 @@ sections, planned timings, actual timings, style, beat alignment, and duration
 match the resumed execution report. A different plan remains rejected. The
 real manifest was not written during this diagnosis.
 
+## Target-duration guard — 2026-07-13
+
+The recovered candidate correctly remained technically invalid: its compiled
+timeline is 493.6 seconds while the saved target is 240 seconds. The automatic
+reviewer was repeatedly asked to fix that duration even though production cannot
+change the locked arrangement's section boundaries. Arrangement validation now
+estimates the exact deterministic timeline and rejects a plan outside the target
+tolerance before provider production or FFmpeg candidate rendering. The current
+8-minute candidate remains preserved but cannot be promoted as a 4-minute mix.
+
 ## Execution authorization update
 
 On 2026-07-11 the user authorized uninterrupted execution without approval

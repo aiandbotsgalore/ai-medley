@@ -373,3 +373,18 @@ Sources:
   and resumed report have identical audio-affecting transition facts, proving
   the MP3 represents the same planned medley. Recovery now accepts that narrow,
   verified older-attempt case only; it still rejects different transitions.
+
+# 2026-07-13 — Correction-limit root cause
+
+- The candidate was not rejected because recovery failed. Its deterministic
+  timeline is 493.6 seconds (about 8 minutes), while the saved project target is
+  240 seconds (4 minutes). The candidate quality gate correctly refused approval.
+- The prior workflow sent this arrangement-level failure back to the production
+  specialist three times. Production can alter execution details but cannot
+  shorten the locked section boundaries, so the same failure repeated until the
+  correction limit. Arrangement validation now estimates the exact render
+  timeline from the selected sections and final tail, then rejects a plan outside
+  the requested duration tolerance before rendering.
+- The Vite WebSocket console line is only the browser's development auto-refresh
+  connection retry during server restart; it is separate from candidate rendering
+  and finalization.

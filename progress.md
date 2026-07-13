@@ -446,3 +446,11 @@
   older candidate can recover only when every audio-affecting transition fact
   matches; no real candidate, checkpoint, manifest, or provider request was
   changed during diagnosis.
+- Diagnosed the later correction-limit stop: candidate `candidate-001` is 493.6
+  seconds against a 240-second target, so its quality gate correctly requested a
+  shorter timeline. Production repeated the impossible request three times
+  because the locked arrangement controls section boundaries. Added a
+  deterministic arrangement-duration estimate and target-tolerance rejection
+  before production/rendering; focused schema, transition, candidate recovery,
+  lint, and diff checks pass. The browser Vite WebSocket warning is a dev
+  auto-refresh retry during restart, not a render failure.
