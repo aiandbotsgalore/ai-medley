@@ -12,9 +12,9 @@ import {
   type RenderCandidate,
 } from "../types/specialistWorkflow";
 import { sanitizeResolvedTransitionsForManifest } from "./transitionResolution";
+import { withSessionTransaction } from "./sessionTransaction";
 
 const SESSION_ID_PATTERN = /^[a-zA-Z0-9_-]{3,80}$/;
-const manifestLocks = new Map<string, Promise<void>>();
 
 export function validateSessionId(sessionId: string) {
   if (!SESSION_ID_PATTERN.test(sessionId)) {
@@ -46,23 +46,7 @@ function manifestPath(workDir: string, sessionId: string) {
 export async function withSessionLock<T>(
   sessionId: string,
   operation: () => Promise<T>,
-): Promise<T> {
-  const previous = manifestLocks.get(sessionId) ?? Promise.resolve();
-  let release!: () => void;
-  const current = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const queued = previous.then(() => current);
-  manifestLocks.set(sessionId, queued);
-  await previous;
-  try {
-    return await operation();
-  } finally {
-    release();
-    if (manifestLocks.get(sessionId) === queued)
-      manifestLocks.delete(sessionId);
-  }
-}
+): Promise<T> { return withSessionTransaction(sessionId, operation); }
 
 export function createEmptyManifest(sessionId: string): CandidateManifest {
   return {

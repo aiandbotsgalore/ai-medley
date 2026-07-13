@@ -6,8 +6,7 @@ import {
   type AutomaticSessionStateV1,
 } from "../types/automaticWorkflowV4";
 import { getSessionDirectory } from "./candidateStore";
-
-const locks = new Map<string, Promise<void>>();
+import { withSessionTransaction } from "./sessionTransaction";
 
 const allowed = new Map<string, Set<string>>([
   ["created", new Set(["analyzing"])],
@@ -65,13 +64,4 @@ export function assertLegalSessionTransition(from: string, to: string) {
 export async function withAutomaticSessionTransaction<T>(
   sessionId: string,
   operation: () => Promise<T>,
-) {
-  const prior = locks.get(sessionId) ?? Promise.resolve();
-  let release!: () => void;
-  const current = new Promise<void>((resolve) => { release = resolve; });
-  const queued = prior.then(() => current);
-  locks.set(sessionId, queued);
-  await prior;
-  try { return await operation(); }
-  finally { release(); if (locks.get(sessionId) === queued) locks.delete(sessionId); }
-}
+) { return withSessionTransaction(sessionId, operation); }
