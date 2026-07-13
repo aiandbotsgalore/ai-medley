@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   applyCandidateReview,
+  applyCandidateHumanReview,
   appendCandidateTechnicalEvaluation,
   cleanupRejectedCandidates,
   createEmptyManifest,
@@ -356,6 +357,18 @@ assert.equal(
   }),
   null,
 );
+const humanApprovedManifest = applyCandidateHumanReview(
+  root,
+  technicalRecoverySession,
+  {
+    candidateId: "candidate-001",
+    decision: "approved",
+    notes: ["approved after manual review"],
+    reviewedAt: "2026-07-13T00:00:00.000Z",
+  },
+);
+assert.equal(humanApprovedManifest.selectedCandidateId, "candidate-001");
+assert.equal(humanApprovedManifest.humanReviews.length, 1);
 
 const compatibleRecoverySession = "compatible-registration-recovery";
 const compatibleRecoveryDir = path.join(root, compatibleRecoverySession);

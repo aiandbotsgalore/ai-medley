@@ -35,6 +35,7 @@ import {
 import {
   ArrangementPlanSchema,
   AutomaticWorkflowCheckpointSchema,
+  CandidateHumanReviewSchema,
   ExecutionReportSchema,
   ProjectBriefSchema,
   QualityReviewSchema,
@@ -90,6 +91,7 @@ import {
 } from "./src/server/openRouterPreflight";
 import {
   applyCandidateReview,
+  applyCandidateHumanReview,
   appendCandidateTechnicalEvaluation,
   assertCandidateStorageAvailable,
   discardAutomaticSessionFiles,
@@ -2638,6 +2640,60 @@ app.get("/api/session/:sessionId/candidates", (req, res) => {
     res.json({ success: true, manifest });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/api/session/human-review", async (req, res) => {
+  const { sessionId, review, expectedRevision } = req.body || {};
+  try {
+    validateSessionId(sessionId);
+    const parsedReview = CandidateHumanReviewSchema.parse(review);
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+      throw new Error("expectedRevision is required for human approval");
+    }
+    const idempotencyKey = String(
+      req.get("Idempotency-Key") || req.body?.idempotencyKey || "",
+    ).trim();
+    return await withSessionLock(sessionId, async () => {
+      const execute = async () => {
+        const state = readAutomaticSessionState(workDir, sessionId);
+        if (!state) throw new Error("Automatic v4 session state is missing");
+        if (state.stateRevision !== expectedRevision) {
+          throw new Error(
+            `State revision conflict: expected ${expectedRevision}, found ${state.stateRevision}`,
+          );
+        }
+        if (state.state !== "manual_review_required") {
+          throw new Error("Human approval is allowed only while manual review is required");
+        }
+        const manifest = applyCandidateHumanReview(workDir, sessionId, parsedReview);
+        if (parsedReview.decision === "approved") {
+          transitionAutomaticSessionState({
+            workDir,
+            sessionId,
+            to: "finalizing",
+          });
+        }
+        return {
+          success: true,
+          manifest,
+          state: readAutomaticSessionState(workDir, sessionId),
+        };
+      };
+      const replay = idempotencyKey
+        ? await replayAutomaticSessionIdempotent({
+            workDir,
+            sessionId,
+            operation: "human_approval",
+            key: idempotencyKey,
+            request: { review: parsedReview, expectedRevision },
+            execute,
+          })
+        : { replayed: false, result: await execute() };
+      return res.json({ ...replay.result, idempotent: replay.replayed });
+    });
+  } catch (error: any) {
+    return res.status(409).json({ success: false, error: error.message });
   }
 });
 

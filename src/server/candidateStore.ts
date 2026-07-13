@@ -4,6 +4,7 @@ import path from "path";
 import { isDeepStrictEqual } from "node:util";
 import {
   CandidateManifestSchema,
+  CandidateHumanReviewSchema,
   CandidateTechnicalEvaluationSchema,
   MAX_COMPLETE_CANDIDATES,
   RenderCandidateSchema,
@@ -497,6 +498,42 @@ export function applyCandidateReview(
     candidates,
     musicalReviews: [...manifest.musicalReviews, review],
     selectedCandidateId: selected?.candidateId ?? null,
+    updatedAt: new Date().toISOString(),
+  };
+  writeCandidateManifestAtomic(workDir, sessionId, next);
+  return next;
+}
+
+/** Append a human decision without replacing any AI or technical evidence. */
+export function applyCandidateHumanReview(
+  workDir: string,
+  sessionId: string,
+  review: unknown,
+) {
+  const parsed = CandidateHumanReviewSchema.parse(review);
+  const manifest = readCandidateManifest(workDir, sessionId);
+  const candidate = manifest.candidates.find(
+    (item) => item.candidateId === parsed.candidateId,
+  );
+  if (!candidate) throw new Error("Human-reviewed candidate is not registered");
+  if (parsed.decision === "approved" && !candidate.technicallyValid) {
+    throw new Error("A technically invalid candidate cannot be human-approved");
+  }
+  if (manifest.humanReviews.some(
+    (item) => item.candidateId === parsed.candidateId && item.reviewedAt === parsed.reviewedAt,
+  )) return manifest;
+  const candidates = manifest.candidates.map((item) => {
+    if (item.candidateId !== parsed.candidateId) return item;
+    const reviewStatus: RenderCandidate["reviewStatus"] =
+      parsed.decision === "approved" ? "approved" : "changes_requested";
+    return { ...item, reviewStatus };
+  });
+  const next: CandidateManifest = {
+    ...manifest,
+    candidates,
+    humanReviews: [...manifest.humanReviews, parsed],
+    selectedCandidateId:
+      parsed.decision === "approved" ? parsed.candidateId : manifest.selectedCandidateId,
     updatedAt: new Date().toISOString(),
   };
   writeCandidateManifestAtomic(workDir, sessionId, next);
