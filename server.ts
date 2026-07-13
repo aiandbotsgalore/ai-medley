@@ -97,6 +97,7 @@ import {
   nextCandidateIdentity,
   promoteCandidate,
   readCandidateManifest,
+  recoverRegisteredCandidateTechnicalEvaluation,
   recoverUnregisteredRenderedCandidate,
   registerCandidate,
   sha256File,
@@ -3501,6 +3502,26 @@ app.post("/api/render-review-candidate", async (req, res) => {
       fs.mkdirSync(sessionWorkDir, { recursive: true });
     }
     const manifest = readCandidateManifest(workDir, sessionId);
+    const recoveredTechnicalEvaluation = recoverRegisteredCandidateTechnicalEvaluation({
+      workDir,
+      sessionId,
+      arrangementVersion,
+      executionVersion,
+    });
+    if (recoveredTechnicalEvaluation) {
+      sessions[sessionId].workflowStage = "quality_review";
+      sessions[sessionId].currentCandidate = recoveredTechnicalEvaluation.candidate;
+      return res.json({
+        success: true,
+        candidate: recoveredTechnicalEvaluation.candidate,
+        manifest: recoveredTechnicalEvaluation.manifest,
+        quality: recoveredTechnicalEvaluation.quality,
+        outputPath: recoveredTechnicalEvaluation.candidate.outputPath,
+        renderPath: "recovered-technical-evaluation",
+        recoveredAfterRegistrationFailure: true,
+        message: "Recovered the registered candidate's missing technical evaluation without rerendering audio.",
+      });
+    }
     const { candidateId, candidateVersion } = nextCandidateIdentity(manifest);
     const immutableOutputPath = path.join(
       sessionWorkDir,

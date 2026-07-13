@@ -403,6 +403,63 @@ export function recoverUnregisteredRenderedCandidate(options: {
   };
 }
 
+/**
+ * If registration committed but the immediately following technical-evidence
+ * write was interrupted, complete that narrow missing boundary. This avoids
+ * treating a valid, registered MP3 as a reason to render candidate N+1.
+ */
+export function recoverRegisteredCandidateTechnicalEvaluation(options: {
+  workDir: string;
+  sessionId: string;
+  arrangementVersion: number;
+  executionVersion: number;
+}) {
+  const manifest = readCandidateManifest(options.workDir, options.sessionId);
+  const candidate = manifest.candidates.at(-1);
+  if (!candidate ||
+      candidate.arrangementVersion !== options.arrangementVersion ||
+      candidate.executionVersion !== options.executionVersion ||
+      manifest.technicalEvaluations.some((item) => item.candidateId === candidate.candidateId)) {
+    return null;
+  }
+  const sessionDir = getSessionDirectory(options.workDir, options.sessionId);
+  const validationPath = path.join(sessionDir, `${candidate.candidateId}-validation.json`);
+  if (!fs.existsSync(validationPath)) {
+    throw new Error("Registered candidate is missing its technical validation sidecar");
+  }
+  const validation = JSON.parse(fs.readFileSync(validationPath, "utf8"));
+  const validatedCandidate = RenderCandidateSchema.parse(validation?.candidate);
+  if (!isDeepStrictEqual(validatedCandidate, candidate)) {
+    throw new Error("Registered candidate validation sidecar does not match the manifest");
+  }
+  if (!fs.existsSync(candidate.outputPath) || sha256File(candidate.outputPath) !== candidate.sha256) {
+    throw new Error("Registered candidate audio failed integrity validation");
+  }
+  const qualityGate = validation?.qualityGate;
+  if (!qualityGate || typeof qualityGate !== "object") {
+    throw new Error("Registered candidate validation sidecar has no technical quality result");
+  }
+  const updatedManifest = appendCandidateTechnicalEvaluation(
+    options.workDir,
+    options.sessionId,
+    {
+      candidateId: candidate.candidateId,
+      candidateVersion: candidate.candidateVersion,
+      technicallyValid: Boolean(qualityGate.technicallyValid),
+      blockingIssues: Array.isArray(qualityGate.blockingIssues) ? qualityGate.blockingIssues : [],
+      warnings: Array.isArray(qualityGate.warnings) ? qualityGate.warnings : [],
+      policyVersion: 1,
+      evaluatedAt: new Date().toISOString(),
+    },
+  );
+  return {
+    candidate,
+    manifest: updatedManifest,
+    quality: validation?.quality ?? null,
+    qualityGate,
+  };
+}
+
 export function applyCandidateReview(
   workDir: string,
   sessionId: string,

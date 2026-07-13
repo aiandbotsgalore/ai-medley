@@ -11,6 +11,7 @@ import {
   nextCandidateIdentity,
   promoteCandidate,
   readCandidateManifest,
+  recoverRegisteredCandidateTechnicalEvaluation,
   recoverUnregisteredRenderedCandidate,
   registerCandidate,
   sha256File,
@@ -317,6 +318,44 @@ assert.equal(
   false,
 );
 assert.equal(readCandidateManifest(root, recoverySession).candidates.length, 1);
+
+const technicalRecoverySession = "technical-registration-recovery";
+const technicalRecoveryDir = path.join(root, technicalRecoverySession);
+fs.mkdirSync(technicalRecoveryDir, { recursive: true });
+const technicalRecoveryOutput = path.join(technicalRecoveryDir, "candidate-001.mp3");
+fs.writeFileSync(technicalRecoveryOutput, "registered render");
+const technicalRecoveryCandidate = {
+  ...recoveryCandidate,
+  outputPath: technicalRecoveryOutput,
+  sizeBytes: fs.statSync(technicalRecoveryOutput).size,
+  sha256: sha256File(technicalRecoveryOutput),
+};
+registerCandidate(root, technicalRecoverySession, technicalRecoveryCandidate, "automatic");
+fs.writeFileSync(
+  path.join(technicalRecoveryDir, "candidate-001-validation.json"),
+  JSON.stringify({
+    candidate: technicalRecoveryCandidate,
+    quality: { score: 90 },
+    qualityGate: { technicallyValid: true, blockingIssues: [], warnings: [] },
+  }),
+);
+const recoveredTechnicalEvaluation = recoverRegisteredCandidateTechnicalEvaluation({
+  workDir: root,
+  sessionId: technicalRecoverySession,
+  arrangementVersion: 2,
+  executionVersion: 3,
+});
+assert.equal(recoveredTechnicalEvaluation?.candidate.candidateId, "candidate-001");
+assert.equal(recoveredTechnicalEvaluation?.manifest.technicalEvaluations.length, 1);
+assert.equal(
+  recoverRegisteredCandidateTechnicalEvaluation({
+    workDir: root,
+    sessionId: technicalRecoverySession,
+    arrangementVersion: 2,
+    executionVersion: 3,
+  }),
+  null,
+);
 
 const compatibleRecoverySession = "compatible-registration-recovery";
 const compatibleRecoveryDir = path.join(root, compatibleRecoverySession);
