@@ -6,6 +6,7 @@ import { DEFAULT_CONFIG } from "../components/ConfigPanel";
 import type { MedleyDesignPayload } from "./medleyIntelligence";
 import {
   buildDeterministicArrangementFallback,
+  buildDeterministicProjectBrief,
   normalizeRenderFailureFeedback,
   runAutomaticSpecialistWorkflow,
   type AutomaticWorkflowCheckpoint,
@@ -337,6 +338,66 @@ const originalWindow = (globalThis as any).window;
   clearTimeout,
   location: { origin: "http://localhost" },
 };
+
+const directLocalBrief = buildDeterministicProjectBrief(design, sessionId, 106, {
+  trackIds: new Set(["a", "b"]),
+  sectionsById: new Map([
+    ["a-1", { trackId: "a", startSec: 0, endSec: 90 }],
+    ["b-1", { trackId: "b", startSec: 10, endSec: 60 }],
+  ]),
+  durationsByTrackId: new Map([
+    ["a", 120],
+    ["b", 140],
+  ]),
+  targetDurationSec: 106,
+  factsByTrackId: new Map([
+    ["a", { trackId: "a", filename: "a.mp3", durationSec: 120, tempoEstimate: 120, keyEstimate: null, confidence: 0.9 }],
+    ["b", { trackId: "b", filename: "b.mp3", durationSec: 140, tempoEstimate: 124, keyEstimate: null, confidence: 0.9 }],
+  ]),
+});
+assert.equal(directLocalBrief?.recommendedOrderIds.join(","), "a,b");
+assert.equal(directLocalBrief?.trackSummaries.length, 2);
+
+let contextBriefBody = "";
+let contextProviderCalls = 0;
+globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+  const target = String(url);
+  if (target === "/api/provider/openrouter") {
+    contextProviderCalls++;
+    return new Response(
+      JSON.stringify({ choices: [{ message: { role: "assistant", content: "plain text" } }] }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  }
+  if (target === "/api/session/project-brief") {
+    contextBriefBody = String(init?.body ?? "");
+    return new Response(JSON.stringify({ success: true }), { status: 200 });
+  }
+  throw new Error(`Unexpected context fallback fetch: ${target}`);
+}) as typeof fetch;
+
+await assert.rejects(
+  runAutomaticSpecialistWorkflow({
+    sessionId,
+    config: { ...DEFAULT_CONFIG, openrouterApiKey: SERVER_MANAGED_API_KEY },
+    library: [],
+    design,
+    signal: new AbortController().signal,
+    requestSequence: 16,
+    onLog: () => {},
+    onStage: () => {},
+    onCheckpoint: async (checkpoint) => {
+      if (checkpoint.stage === "arrangement")
+        throw new DOMException("Test complete", "AbortError");
+    },
+    onMetrics: () => {},
+  }),
+  (error: any) => error?.name === "AbortError",
+);
+assert.ok(contextProviderCalls > 0);
+const postedLocalBrief = JSON.parse(contextBriefBody).brief as ProjectBrief;
+assert.equal(postedLocalBrief.summary, "Locally generated project brief from analyzed selected tracks.");
+assert.equal(postedLocalBrief.trackSummaries.length, 2);
 
 const fallbackCheckpoint: AutomaticWorkflowCheckpoint = {
   ...resumeCheckpoint(),

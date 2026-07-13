@@ -418,3 +418,13 @@ Sources:
   exclusive copy to the intended new library path, then removal of the source
   temporary file. A failed temporary-file removal rolls the new copy back, so
   an unregistered library file is not silently left behind.
+
+# 2026-07-13 — Missing context tool call
+
+- The reported `Expected tool call submit_project_brief` error occurs before
+  arrangement or rendering: an OpenRouter model returned ordinary text (or no
+  call) where the context stage requires a structured project-brief tool call.
+- Automatic mode now uses a provider-free project brief after its context-model
+  fallbacks fail. It copies the current locally analyzed track facts and
+  sections exactly, uses the best locally ranked order when available, and is
+  validated against the same session facts before it is saved.

@@ -488,3 +488,11 @@
 - Complete: simulated EXDEV, failed-copy cleanup, the full test suite,
   TypeScript, and whitespace validation all pass. The production change is
   ready to restart and retry with the user's original audio file.
+
+# 2026-07-13 — Context tool-call fallback in progress
+
+- Added a local project-brief fallback for a provider response with no
+  `submit_project_brief` call. The focused regression uses a mocked plain-text
+  provider response and proves the validated local brief is saved before the
+  workflow advances. No provider request, render, or protected data was used.
+- Complete: full mocked suite, TypeScript, and whitespace checks pass.

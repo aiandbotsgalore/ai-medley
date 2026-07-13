@@ -24,6 +24,7 @@ import {
   SPECIALIST_MODELS,
   TransitionExecutionRequestSchema,
   createTransitionCandidateAuthority,
+  createTrackFactAuthority,
   estimateArrangementDurationSec,
   formatValidationIssues,
   validateArrangementContext,
@@ -216,6 +217,58 @@ function validateArrangementForWorkflow(
     );
   }
   return errors;
+}
+
+/**
+ * Provider-free context fallback. It keeps every locally analyzed track and
+ * chooses the best locally ranked order without inventing audio facts.
+ */
+export function buildDeterministicProjectBrief(
+  design: MedleyDesignPayload,
+  projectId: string,
+  targetDurationSec: number,
+  context: SpecialistContext,
+): ProjectBrief | null {
+  if (design.tracks.length < 2 || !Number.isFinite(targetDurationSec)) return null;
+  const trackIds = design.tracks.map((track) => track.trackId);
+  const trackIdSet = new Set(trackIds);
+  const recommendedOrderIds = [...design.recommendedStrategies]
+    .sort((a, b) => b.score - a.score)
+    .map((strategy) => strategy.orderedTracks.map((track) => track.trackId))
+    .find(
+      (order) =>
+        order.length === trackIds.length &&
+        new Set(order).size === trackIds.length &&
+        order.every((trackId) => trackIdSet.has(trackId)),
+    ) ?? trackIds;
+  const brief = ProjectBriefSchema.parse({
+    schemaVersion: 1,
+    projectId,
+    targetDurationSec,
+    trackSummaries: design.tracks.map((track) => {
+      const authority = context.factsByTrackId?.get(track.trackId);
+      return {
+        trackId: track.trackId,
+        factId: authority ? createTrackFactAuthority(authority) : undefined,
+        filename: track.filename,
+        durationSec: track.durationSec,
+        tempoEstimate: track.tempoEstimate,
+        keyEstimate: track.keyEstimate ?? null,
+        confidence: track.confidence,
+        recommendedSectionIds: design.sections
+          .filter((section) => section.trackId === track.trackId)
+          .sort((a, b) => b.confidence - a.confidence)
+          .slice(0, 12)
+          .map((section) => section.sectionId),
+        warnings: track.warnings.slice(0, 12),
+      };
+    }),
+    recommendedOrderIds,
+    constraints: ["Local fallback used because the AI context response was unavailable."],
+    warnings: ["AI context brief was unavailable; local audio analysis was used."],
+    summary: "Locally generated project brief from analyzed selected tracks.",
+  });
+  return validateProjectBriefContext(brief, context).length ? null : brief;
 }
 
 function styleForTransitionType(
@@ -643,7 +696,8 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
       activeRole: "context",
       activeModel: SPECIALIST_MODELS.context,
     });
-    projectBrief = await requestStructuredArtifact({
+    try {
+      projectBrief = await requestStructuredArtifact({
       role: "context",
       stage: "context_brief",
       config: options.config,
@@ -677,7 +731,24 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
       },
       onRepair: () => saveProgress({ repairCount: checkpoint.repairCount + 1 }),
       onRequestAudit: options.onProviderRequestAudit,
-    });
+      });
+    } catch (error) {
+      if (options.signal.aborted || isAbortLike(error)) throw error;
+      const targetDurationSec = Number.isFinite(context.targetDurationSec)
+        ? context.targetDurationSec
+        : options.config.targetDuration * 60;
+      const fallback = buildDeterministicProjectBrief(
+        options.design,
+        options.sessionId,
+        targetDurationSec,
+        context,
+      );
+      if (!fallback) throw error;
+      options.onLog(
+        "AI context response was unavailable or invalid; using a locally generated project brief.",
+      );
+      projectBrief = fallback;
+    }
     await readJsonResponse(
       await fetch("/api/session/project-brief", {
         method: "POST",

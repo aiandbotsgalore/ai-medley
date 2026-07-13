@@ -279,3 +279,17 @@ upload during verification because library audio is protected.
 Verification passed: mocked EXDEV transfer, failed-copy rollback, full `npm
 test`, `npm run lint`, and `git diff --check`. The real failed upload was not
 retried, and no protected library path was inspected, deleted, or rewritten.
+
+## Context tool-call fallback — 2026-07-13
+
+Status: complete
+
+Recover when an Automatic Specialist Team context provider returns no
+`submit_project_brief` call. After the normal bounded provider fallback path,
+build and validate a local brief from the selected tracks and analyzed facts,
+save it normally, and preserve cancellation behavior. Verify with a mocked
+plain-text provider reply, the full suite, TypeScript, and whitespace checks.
+
+Verification passed: exact missing-tool-call regression, full `npm test`, `npm
+run lint`, and `git diff --check`. No live provider call, render, or protected
+data mutation occurred.
