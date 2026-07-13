@@ -2541,7 +2541,11 @@ app.post("/api/session/design-plan", async (req, res) => {
   } catch (error: any) {
     return res.status(400).json({ error: error.message });
   }
+  const idempotencyKey = String(
+    req.get("Idempotency-Key") || req.body?.idempotencyKey || "",
+  ).trim();
   return await withSessionLock(sessionId, async () => {
+  const execute = async () => {
   if (!sessions[sessionId]) {
     sessions[sessionId] = { status: "running", logs: [] };
   }
@@ -2553,7 +2557,7 @@ app.post("/api/session/design-plan", async (req, res) => {
         { allowLegacy: contractVersion === undefined },
       );
     } catch (error: any) {
-      return res.status(400).json({ error: error.message });
+      throw error;
     }
   }
 
@@ -2613,7 +2617,7 @@ app.post("/api/session/design-plan", async (req, res) => {
       specialistContext,
     );
     if (authoritativePlan.projectId !== sessionId) {
-      return res.status(400).json({ error: "projectId must match sessionId" });
+      throw new Error("projectId must match sessionId");
     }
     const contextualErrors = validateArrangementContext(
       authoritativePlan,
@@ -2633,14 +2637,12 @@ app.post("/api/session/design-plan", async (req, res) => {
       );
     }
     if (contextualErrors.length) {
-      return res.status(400).json({ error: contextualErrors.join("; ") });
+      throw new Error(contextualErrors.join("; "));
     }
     sessions[sessionId].designPlan = authoritativePlan;
     sessions[sessionId].workflowStage = "production";
   } else if (sessions[sessionId].projectBrief) {
-    return res.status(400).json({
-      error: formatValidationIssues(specialistPlan.error).join("; "),
-    });
+    throw new Error(formatValidationIssues(specialistPlan.error).join("; "));
   } else {
     // Legacy/manual sessions retain their existing loose plan format.
     sessions[sessionId].designPlan = plan;
@@ -2672,11 +2674,32 @@ app.post("/api/session/design-plan", async (req, res) => {
       }
     }
   }
-  res.json({
+  return {
     success: true,
     storedTransitions: plan.transitions.length,
     warnings,
-  });
+  };
+  };
+  const automaticState = readAutomaticSessionState(workDir, sessionId);
+  const replay = idempotencyKey && automaticState
+    ? await replayAutomaticSessionIdempotent({
+        workDir,
+        sessionId,
+        operation: "arrangement_submission",
+        key: idempotencyKey,
+        request: { plan, contractVersion },
+        execute,
+      })
+    : idempotencyKey
+      ? await replayIdempotent({
+          sessionId,
+          operation: "arrangement_submission",
+          key: idempotencyKey,
+          request: { plan, contractVersion },
+          execute,
+        })
+      : { replayed: false, result: await execute() };
+  return res.json({ ...replay.result, idempotent: replay.replayed });
   });
 });
 

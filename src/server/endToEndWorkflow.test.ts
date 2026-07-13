@@ -175,9 +175,15 @@ try {
   };
   await jsonRequest("/api/session/design-plan", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "isolated-arrangement" },
     body: JSON.stringify({ sessionId, plan: { transitions: [transition] } }),
   });
+  const repeatedArrangement = await jsonRequest("/api/session/design-plan", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "isolated-arrangement" },
+    body: JSON.stringify({ sessionId, plan: { transitions: [transition] } }),
+  });
+  assert.equal(repeatedArrangement.idempotent, true);
 
   const render = await jsonRequest("/api/render-review-candidate", {
     method: "POST",
