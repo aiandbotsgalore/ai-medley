@@ -668,8 +668,17 @@ export function validateArrangementContext(
     // for example, nearly an entire first song followed by short fragments of
     // every remaining selection. Reject that before any FFmpeg work so the
     // constrained arrangement repair must choose shorter source sections.
-    const maxTrackShare = plan.orderedTrackIds.length >= 3 ? 0.5 : 0.6;
-    const maxSegmentSec = context.targetDurationSec * maxTrackShare;
+    // Two-track medleys can legitimately give one song more room. The defect
+    // being guarded against is a three-or-more-track medley that reduces one
+    // or more selected tracks to a token fragment.
+    const maxTrackShare = plan.orderedTrackIds.length >= 3
+      ? context.targetDurationSec >= 180
+        ? 0.6
+        : 0.8
+      : null;
+    const maxSegmentSec = maxTrackShare === null
+      ? null
+      : context.targetDurationSec * maxTrackShare;
     const plannedSegments = [
       {
         trackId: plan.transitions[0].fromTrackId,
@@ -688,7 +697,12 @@ export function validateArrangementContext(
     for (const segment of plannedSegments) {
       const segmentTrackId = segment.trackId;
       const segmentDuration = segment.durationSec;
-      if (Number.isFinite(segmentDuration) && segmentDuration > maxSegmentSec) {
+      if (
+        maxTrackShare !== null &&
+        maxSegmentSec !== null &&
+        Number.isFinite(segmentDuration) &&
+        segmentDuration > maxSegmentSec
+      ) {
         errors.push(
           `trackBalance: ${segmentTrackId} is planned for ${segmentDuration.toFixed(1)}s, ` +
             `which exceeds the ${(maxTrackShare * 100).toFixed(0)}% per-track limit for a ${context.targetDurationSec.toFixed(1)}s medley; choose shorter sections.`,
