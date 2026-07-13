@@ -205,6 +205,53 @@ assert.match(
   validateArrangementContext(plan, durationContext).join("; "),
   /planned timeline.*target/i,
 );
+const imbalancedThreeTrackPlan = ArrangementPlanSchema.parse({
+  ...plan,
+  orderedTrackIds: ["a", "b", "c"],
+  transitions: [
+    {
+      ...plan.transitions[0],
+      transitionCandidateId: createTransitionCandidateAuthority({
+        fromTrackId: "a", fromSectionId: "a-1", toTrackId: "b", toSectionId: "b-1",
+        fromExitSec: 213, toEntrySec: 0,
+      }),
+      fromExitSec: 213,
+      toEntrySec: 0,
+    },
+    {
+      ...plan.transitions[0],
+      transitionId: "t2",
+      transitionCandidateId: createTransitionCandidateAuthority({
+        fromTrackId: "b", fromSectionId: "b-1", toTrackId: "c", toSectionId: "c-1",
+        fromExitSec: 20, toEntrySec: 0,
+      }),
+      fromTrackId: "b",
+      fromSectionId: "b-1",
+      toTrackId: "c",
+      toSectionId: "c-1",
+      fromExitSec: 20,
+      toEntrySec: 0,
+    },
+  ],
+});
+assert.match(
+  validateArrangementContext(imbalancedThreeTrackPlan, {
+    trackIds: new Set(["a", "b", "c"]),
+    sectionsById: new Map([
+      ["a-1", { trackId: "a", startSec: 0, endSec: 220 }],
+      ["b-1", { trackId: "b", startSec: 0, endSec: 30 }],
+      ["c-1", { trackId: "c", startSec: 0, endSec: 40 }],
+    ]),
+    durationsByTrackId: new Map([["a", 220], ["b", 30], ["c", 40]]),
+    targetDurationSec: 240,
+    transitionCandidatesById: new Map(
+      imbalancedThreeTrackPlan.transitions.map((transition) => [
+        transition.transitionCandidateId!, transition,
+      ]),
+    ),
+  }).join("; "),
+  /trackBalance: a is planned for 213\.0s/i,
+);
 assert.match(
   validateProjectBriefContext(
     { ...brief, trackSummaries: [{ ...brief.trackSummaries[0], durationSec: 121 }, brief.trackSummaries[1]] },

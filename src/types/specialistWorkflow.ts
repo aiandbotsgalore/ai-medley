@@ -663,6 +663,38 @@ export function validateArrangementContext(
         `estimatedDurationSec: Planned timeline is ${estimatedDurationSec.toFixed(1)}s but the target is ${context.targetDurationSec.toFixed(1)}s; choose shorter or longer sections before rendering`,
       );
     }
+
+    // A timeline can meet its total target while still being a poor medley:
+    // for example, nearly an entire first song followed by short fragments of
+    // every remaining selection. Reject that before any FFmpeg work so the
+    // constrained arrangement repair must choose shorter source sections.
+    const maxTrackShare = plan.orderedTrackIds.length >= 3 ? 0.5 : 0.6;
+    const maxSegmentSec = context.targetDurationSec * maxTrackShare;
+    const plannedSegments = [
+      {
+        trackId: plan.transitions[0].fromTrackId,
+        durationSec: plan.transitions[0].fromExitSec,
+      },
+      ...plan.transitions.map((transition, index) => ({
+        trackId: transition.toTrackId,
+        durationSec: index === plan.transitions.length - 1
+          ? Math.min(
+              context.durationsByTrackId.get(transition.toTrackId) ?? Infinity,
+              transition.toEntrySec + 30,
+            ) - transition.toEntrySec
+          : plan.transitions[index + 1].fromExitSec - transition.toEntrySec,
+      })),
+    ];
+    for (const segment of plannedSegments) {
+      const segmentTrackId = segment.trackId;
+      const segmentDuration = segment.durationSec;
+      if (Number.isFinite(segmentDuration) && segmentDuration > maxSegmentSec) {
+        errors.push(
+          `trackBalance: ${segmentTrackId} is planned for ${segmentDuration.toFixed(1)}s, ` +
+            `which exceeds the ${(maxTrackShare * 100).toFixed(0)}% per-track limit for a ${context.targetDurationSec.toFixed(1)}s medley; choose shorter sections.`,
+        );
+      }
+    }
   }
   return errors;
 }
