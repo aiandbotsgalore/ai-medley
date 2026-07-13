@@ -114,10 +114,14 @@ import {
   selectSessionTrackIntelligence,
 } from "./src/server/automaticSessionGuard";
 import { selectRenderTransitions } from "./src/server/renderTransitionSelection";
-import { replayIdempotent } from "./src/server/sessionIdempotency";
+import { replayIdempotent, stableHash } from "./src/server/sessionIdempotency";
+import {
+  AUTOMATIC_WORKFLOW_VERSION,
+} from "./src/types/automaticWorkflowV4";
 import {
   readAutomaticSessionState,
   replayAutomaticSessionIdempotent,
+  writeAutomaticSessionState,
 } from "./src/server/automaticSessionState";
 import {
   isRecoveredCandidateCompatibleWithExecution,
@@ -2160,6 +2164,43 @@ app.post("/api/medley-intelligence/design", (req, res) => {
 
   if (sessionId) {
     validateSessionId(sessionId);
+    const existingState = readAutomaticSessionState(workDir, sessionId);
+    const selectedTrackIds = source.map((entry: any) => String(entry.id));
+    const selectionHash = stableHash(selectedTrackIds);
+    if (existingState) {
+      if (existingState.selectionHash !== selectionHash) {
+        return res.status(409).json({
+          error: "Session is already pinned to a different selected-track set.",
+        });
+      }
+    } else {
+      const sourceAudioSha256 = Object.fromEntries(
+        source.map((entry: any) => [
+          entry.id,
+          typeof entry.sha256 === "string" && /^[a-f0-9]{64}$/.test(entry.sha256)
+            ? entry.sha256
+            : sha256UploadFile(String(entry.path)),
+        ]),
+      );
+      const now = new Date().toISOString();
+      writeAutomaticSessionState(workDir, {
+        schemaVersion: 1,
+        workflowVersion: AUTOMATIC_WORKFLOW_VERSION,
+        sessionId,
+        state: "created",
+        stateRevision: 0,
+        selectedTrackIds,
+        selectionHash,
+        designHash: null,
+        activeArrangementVersion: null,
+        activeExecutionGeneration: 0,
+        currentCandidateId: null,
+        idempotencyRecords: [],
+        recoverableError: null,
+        createdAt: now,
+        updatedAt: now,
+      }, -1);
+    }
     if (!sessions[sessionId]) sessions[sessionId] = { status: "running", logs: [] };
     sessions[sessionId].trackIntelligence = structuredClone(tracks);
     sessions[sessionId].medleyDesign = structuredClone(design);

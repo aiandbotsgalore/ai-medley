@@ -36,6 +36,7 @@ assert.equal(
     key: "render-1",
     requestHash: hash,
     responseHash: hash,
+    response: { success: true },
     completedAt: now,
   }).success,
   true,
