@@ -3930,6 +3930,16 @@ app.post("/api/render-review-candidate", async (req, res) => {
       fs.rmSync(outputPath, { force: true });
       const registrationPending =
         fs.existsSync(immutableOutputPath) && fs.existsSync(validationPath);
+      const requiresManualReview =
+        /Candidate limit reached|INSUFFICIENT_STORAGE/.test(String(err?.message || ""));
+      if (requiresManualReview && sessions[sessionId]) {
+        sessions[sessionId].workflowStage = "manual_review_required";
+        sessions[sessionId].manualReviewReason = String(err.message);
+        broadcastToSession(sessionId, "manual_review_required", {
+          sessionId,
+          reason: String(err.message),
+        });
+      }
       console.error(
         "[candidate-render] HARD FAIL (no fallback, no silent concat):",
         err.message,
@@ -3963,9 +3973,10 @@ app.post("/api/render-review-candidate", async (req, res) => {
         );
       }
 
-      res.status(500).json({
+      res.status(requiresManualReview ? 409 : 500).json({
         success: false,
         error: err.message || "Failed to render review candidate",
+        manualReviewRequired: requiresManualReview,
         renderSucceeded: registrationPending,
         registrationPending,
         noFallback: true,
