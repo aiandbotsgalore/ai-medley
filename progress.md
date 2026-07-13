@@ -439,3 +439,10 @@
   strict validation; added exact regression coverage. `candidateStore` tests,
   TypeScript, and `git diff --check` pass. The real candidate/manifests were not
   retried, rerendered, or changed.
+- The server restart loaded the scratch-field fix; the preserved error then
+  changed to an execution-version mismatch (candidate version 4 versus resumed
+  checkpoint version 6). Read-only transition comparison proved both describe
+  the same candidate audio. Added a narrow compatibility rule and tests so an
+  older candidate can recover only when every audio-affecting transition fact
+  matches; no real candidate, checkpoint, manifest, or provider request was
+  changed during diagnosis.

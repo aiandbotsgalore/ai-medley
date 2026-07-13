@@ -218,6 +218,16 @@ The preserved real candidate has not been retried or rewritten. Focused
 candidate recovery, TypeScript, and diff checks pass; complete the code-only
 hotfix handoff after final review.
 
+## Candidate resume compatibility follow-up — 2026-07-13
+
+After the first hotfix, resuming `bknfa639` reached a second guard: the saved
+candidate had execution version 4 while the resumed checkpoint had version 6.
+Read-only comparison proved their two audio-affecting transitions match exactly.
+Recovery now permits only an older candidate whose transition IDs, tracks,
+sections, planned timings, actual timings, style, beat alignment, and duration
+match the resumed execution report. A different plan remains rejected. The
+real manifest was not written during this diagnosis.
+
 ## Execution authorization update
 
 On 2026-07-11 the user authorized uninterrupted execution without approval

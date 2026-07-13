@@ -366,3 +366,10 @@ Sources:
 - The real preserved session was not retried, rerendered, or mutated during
   diagnosis. The regression uses a temporary candidate artifact and reproduces
   the exact scratch keys.
+
+- A server restart loaded that first fix. The next error was different: the
+  persisted candidate was execution version 4 while the resumed checkpoint had
+  version 6, so the existing exact-version guard refused recovery. The candidate
+  and resumed report have identical audio-affecting transition facts, proving
+  the MP3 represents the same planned medley. Recovery now accepts that narrow,
+  verified older-attempt case only; it still rejects different transitions.

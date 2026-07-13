@@ -336,6 +336,7 @@ export function recoverUnregisteredRenderedCandidate(options: {
   executionVersion: number;
   parentCandidateId: string | null;
   workflowMode: "automatic" | "legacy";
+  isExecutionVersionCompatible?: (candidate: RenderCandidate) => boolean;
 }) {
   const {
     workDir,
@@ -346,6 +347,7 @@ export function recoverUnregisteredRenderedCandidate(options: {
     executionVersion,
     parentCandidateId,
     workflowMode,
+    isExecutionVersionCompatible,
   } = options;
   const sessionDir = getSessionDirectory(workDir, sessionId);
   const outputPath = path.join(sessionDir, `${candidateId}.mp3`);
@@ -386,7 +388,8 @@ export function recoverUnregisteredRenderedCandidate(options: {
     parsed.candidateId !== candidateId ||
     parsed.candidateVersion !== candidateVersion ||
     parsed.arrangementVersion !== arrangementVersion ||
-    parsed.executionVersion !== executionVersion ||
+    (parsed.executionVersion !== executionVersion &&
+      !isExecutionVersionCompatible?.(parsed)) ||
     parsed.parentCandidateId !== parentCandidateId ||
     path.resolve(parsed.outputPath) !== path.resolve(outputPath)
   ) {

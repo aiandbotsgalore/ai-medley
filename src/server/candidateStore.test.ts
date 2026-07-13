@@ -304,6 +304,54 @@ assert.equal(
 );
 assert.equal(readCandidateManifest(root, recoverySession).candidates.length, 1);
 
+const compatibleRecoverySession = "compatible-registration-recovery";
+const compatibleRecoveryDir = path.join(root, compatibleRecoverySession);
+fs.mkdirSync(compatibleRecoveryDir, { recursive: true });
+const compatibleRecoveryOutput = path.join(
+  compatibleRecoveryDir,
+  "candidate-001.mp3",
+);
+fs.writeFileSync(compatibleRecoveryOutput, "completed compatible render");
+const compatibleRecoveryCandidate = {
+  ...recoveryCandidateWithRenderScratch,
+  outputPath: compatibleRecoveryOutput,
+  sizeBytes: fs.statSync(compatibleRecoveryOutput).size,
+  sha256: sha256File(compatibleRecoveryOutput),
+};
+fs.writeFileSync(
+  path.join(compatibleRecoveryDir, "candidate-001-validation.json"),
+  JSON.stringify({ candidate: compatibleRecoveryCandidate }),
+);
+assert.throws(
+  () =>
+    recoverUnregisteredRenderedCandidate({
+      workDir: root,
+      sessionId: compatibleRecoverySession,
+      candidateId: "candidate-001",
+      candidateVersion: 1,
+      arrangementVersion: 2,
+      executionVersion: 4,
+      parentCandidateId: null,
+      workflowMode: "automatic",
+    }),
+  /does not match the active render request/,
+);
+const recoveredCompatibleAttempt = recoverUnregisteredRenderedCandidate({
+  workDir: root,
+  sessionId: compatibleRecoverySession,
+  candidateId: "candidate-001",
+  candidateVersion: 1,
+  arrangementVersion: 2,
+  executionVersion: 4,
+  parentCandidateId: null,
+  workflowMode: "automatic",
+  isExecutionVersionCompatible: (candidate) => candidate.executionVersion === 3,
+});
+assert.equal(
+  recoveredCompatibleAttempt?.candidate.executionVersion,
+  3,
+);
+
 const overwriteSession = "final-overwrite-guard";
 const overwriteDir = path.join(root, overwriteSession);
 fs.mkdirSync(overwriteDir, { recursive: true });

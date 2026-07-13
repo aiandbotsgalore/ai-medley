@@ -112,7 +112,10 @@ import {
   selectSessionTrackIntelligence,
 } from "./src/server/automaticSessionGuard";
 import { selectRenderTransitions } from "./src/server/renderTransitionSelection";
-import { sanitizeResolvedTransitionsForManifest } from "./src/server/transitionResolution";
+import {
+  isRecoveredCandidateCompatibleWithExecution,
+  sanitizeResolvedTransitionsForManifest,
+} from "./src/server/transitionResolution";
 import {
   buildCanonicalAcrossfade,
   getTransitionStyleConfig,
@@ -3148,6 +3151,14 @@ app.post("/api/render-review-candidate", async (req, res) => {
         executionVersion,
         parentCandidateId,
         workflowMode: legacy ? "legacy" : "automatic",
+        isExecutionVersionCompatible: legacy
+          ? undefined
+          : (candidate) =>
+              candidate.executionVersion < executionVersion &&
+              isRecoveredCandidateCompatibleWithExecution(
+                candidate,
+                session.executionReport,
+              ),
       });
       if (recovered) {
         sessions[sessionId].workflowStage = "quality_review";
