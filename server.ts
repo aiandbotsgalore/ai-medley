@@ -158,7 +158,7 @@ import {
   hashAnalysisSource,
   isReusableLocalAnalysis,
 } from "./src/server/analysisContract";
-import { AnalysisJobRegistry } from "./src/server/analysisJobRegistry";
+import { AnalysisJobRegistry, type AnalysisJob } from "./src/server/analysisJobRegistry";
 import {
   SessionEventJournal,
   encodeSseEvent,
@@ -1195,6 +1195,7 @@ const sessionEventJournals: Record<string, SessionEventJournal> = {};
 // Active FFmpeg render processes per session — enables cancel support
 const activeRenderProcesses: Record<string, any> = {};
 const analysisJobs = new AnalysisJobRegistry();
+const activeAnalysisJobs: Record<string, Set<AnalysisJob>> = {};
 
 function getCurrentTrackIntelligence(): TrackIntelligence[] {
   return getLibrary()
@@ -1482,6 +1483,7 @@ app.post("/api/session/:id/cancel", async (req, res) => {
     return await withSessionLock(sessionId, async () => {
       const execute = async () => {
       const proc = activeRenderProcesses[sessionId];
+      const activeAnalyses = activeAnalysisJobs[sessionId];
       if (sessions[sessionId]?.status === "completed") {
         return { success: true, message: "Session is already completed; cancellation was not applied." };
       }
@@ -1489,6 +1491,9 @@ app.post("/api/session/:id/cancel", async (req, res) => {
         console.log(`[Cancel] Killing active FFmpeg render for session ${sessionId}`);
         proc.kill("SIGKILL");
         delete activeRenderProcesses[sessionId];
+      }
+      if (activeAnalyses?.size) {
+        for (const job of activeAnalyses) analysisJobs.cancel(job);
       }
       if (sessions[sessionId]) {
         sessions[sessionId].status = "cancelled";
@@ -1498,7 +1503,11 @@ app.post("/api/session/:id/cancel", async (req, res) => {
       }
       return {
         success: true,
-        message: proc ? "Render process terminated." : "Session cancelled.",
+        message: proc
+          ? "Render process terminated."
+          : activeAnalyses?.size
+            ? "Active local analysis cancelled."
+            : "Session cancelled.",
       };
       };
       const automaticState = readAutomaticSessionState(workDir, sessionId);
@@ -2049,6 +2058,15 @@ app.post("/api/audio-analysis/local", async (req, res) => {
   } catch (error: any) {
     return res.status(429).json({ error: error.message });
   }
+  if (typeof sessionId === "string") {
+    try {
+      validateSessionId(sessionId);
+      (activeAnalysisJobs[sessionId] ||= new Set()).add(job);
+    } catch (error: any) {
+      analysisJobs.finish(job);
+      return res.status(400).json({ error: error.message });
+    }
+  }
   const cancelDisconnectedRequest = () => {
     if (!res.writableEnded) analysisJobs.cancel(job);
   };
@@ -2142,6 +2160,11 @@ app.post("/api/audio-analysis/local", async (req, res) => {
     req.removeListener("aborted", cancelDisconnectedRequest);
     res.removeListener("close", cancelDisconnectedRequest);
     analysisJobs.finish(job);
+    if (typeof sessionId === "string") {
+      const active = activeAnalysisJobs[sessionId];
+      active?.delete(job);
+      if (active?.size === 0) delete activeAnalysisJobs[sessionId];
+    }
   }
 });
 
