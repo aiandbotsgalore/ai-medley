@@ -148,7 +148,8 @@ risks, and exact staged-file proposal.
 
 ## Phase 7 — Commit and handoff gate
 
-Status: authorized for code-only handoff; the two current source MP3s remain
+Status: complete — code-only handoff committed as `af7a16c`, pushed to
+`payload-optimization`, and opened as PR #1. The two current source MP3s remain
 unstaged and untouched after a bounded read-only recovery search found no copy.
 
 Before staging, present the exact files, commit grouping, commit messages, and

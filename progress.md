@@ -428,3 +428,7 @@
   handoff. A focused Documents/OneDrive/other-`G:\\ai-medley*` exact-name
   search found no backup duplicate. The integrity exception remains documented
   as a follow-up risk rather than being hidden by an altered baseline.
+- Code-only release handoff completed: commit `af7a16c` (`fix: harden medley
+  workflow handoff`) was pushed to `origin/payload-optimization`, and PR #1 was
+  opened against `master`. The Git index contains no source-audio addition; the
+  protected-data integrity exception remains local, documented, and untouched.
