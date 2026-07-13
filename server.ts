@@ -113,6 +113,7 @@ import {
   selectSessionTrackIntelligence,
 } from "./src/server/automaticSessionGuard";
 import { selectRenderTransitions } from "./src/server/renderTransitionSelection";
+import { replayIdempotent } from "./src/server/sessionIdempotency";
 import {
   isRecoveredCandidateCompatibleWithExecution,
   sanitizeResolvedTransitionsForManifest,
@@ -3992,6 +3993,7 @@ function finalizeRegisteredCandidate(
 
 app.post("/api/finalize-medley", async (req, res) => {
   const { sessionId, candidateId, summary } = req.body || {};
+  const idempotencyKey = req.get("Idempotency-Key") || req.body?.idempotencyKey;
   if (!sessionId || !candidateId || typeof summary !== "string") {
     return res.status(400).json({
       success: false,
@@ -4000,22 +4002,32 @@ app.post("/api/finalize-medley", async (req, res) => {
   }
   try {
     validateSessionId(sessionId);
-    return await withSessionLock(sessionId, async () => {
+    const execute = async () => withSessionLock(sessionId, async () => {
       const transaction = finalizeRegisteredCandidate(
         sessionId,
         candidateId,
         summary,
       );
       broadcastToSession(sessionId, "completed", { summary });
-      return res.json({
+      return {
         success: true,
         outputPath: transaction.finalPath,
         candidateId,
         sha256: transaction.journal.sha256,
         idempotent: transaction.idempotent,
         cleanupWarning: null,
-      });
+      };
     });
+    const replay = idempotencyKey
+      ? await replayIdempotent({
+          sessionId,
+          operation: "finalization",
+          key: idempotencyKey,
+          request: { candidateId, summary },
+          execute,
+        })
+      : { replayed: false, result: await execute() };
+    return res.json({ ...replay.result, idempotent: replay.replayed || replay.result.idempotent });
   } catch (error: any) {
     return res.status(400).json({ success: false, error: error.message });
   }
