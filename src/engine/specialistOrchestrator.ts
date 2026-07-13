@@ -290,6 +290,79 @@ function styleForTransitionType(
   }
 }
 
+const CORRECTION_STYLE_HINTS: Array<[
+  RegExp,
+  ArrangementPlan["transitions"][number]["style"],
+]> = [
+  [/beat/i, "beat_aligned"],
+  [/energy|ramp/i, "energy_ramp"],
+  [/harmon/i, "harmonic_blend"],
+  [/dramatic|hard\s*cut|cut/i, "dramatic_cut"],
+  [/reset/i, "reset_moment"],
+  [/mashup|layer/i, "mashup_layer"],
+  [/smooth|blend/i, "smooth_blend"],
+];
+
+/**
+ * Apply only an explicitly permitted, review-requested transition change.
+ * Natural-language criticism without a safe executable mutation is deliberately
+ * not retried: rerendering an identical plan cannot correct it.
+ */
+export function buildTargetedCorrectionPlan(
+  plan: ArrangementPlan,
+  review: QualityReview,
+): ArrangementPlan | null {
+  const corrections = new Map(
+    review.corrections.map((item) => [item.transitionId, item.requestedChange]),
+  );
+  if (!corrections.size) return null;
+  let changed = false;
+  const transitions = plan.transitions.map((transition) => {
+    const requestedChange = corrections.get(transition.transitionId);
+    if (!requestedChange) return transition;
+    const permissions = transition.executionPermissions;
+    let next = transition;
+    const styleHint = CORRECTION_STYLE_HINTS.find(([pattern]) =>
+      pattern.test(requestedChange),
+    )?.[1];
+    if (
+      styleHint &&
+      permissions?.styleMutable === true &&
+      permissions.allowedStyles?.includes(styleHint) &&
+      styleHint !== transition.style
+    ) {
+      next = { ...next, style: styleHint };
+      changed = true;
+    }
+    const durationMatch = requestedChange.match(/(\d+(?:\.\d+)?)\s*(?:s|sec(?:ond)?s?)/i);
+    const requestedDuration = durationMatch ? Number(durationMatch[1]) : null;
+    if (
+      requestedDuration !== null &&
+      Number.isFinite(requestedDuration) &&
+      permissions?.durationMutable === true &&
+      requestedDuration >= (permissions.minDuration ?? 0.1) &&
+      requestedDuration <= (permissions.maxDuration ?? 30) &&
+      requestedDuration > 0 &&
+      requestedDuration !== transition.duration
+    ) {
+      next = { ...next, duration: requestedDuration };
+      changed = true;
+    }
+    return next;
+  });
+  return changed
+    ? ArrangementPlanSchema.parse({
+        ...plan,
+        arrangementVersion: plan.arrangementVersion + 1,
+        transitions,
+        warnings: [
+          ...plan.warnings,
+          `Targeted correction applied from musical review ${review.reviewedAt}.`,
+        ],
+      })
+    : null;
+}
+
 /**
  * Provider-free fallback used only when the arrangement specialist cannot
  * produce a valid target-length plan. It uses authoritative local candidates
@@ -994,11 +1067,54 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
         manualReviewRequired: true,
       };
     }
+    const correctedPlan = buildTargetedCorrectionPlan(
+      arrangementPlan,
+      qualityReview,
+    );
+    if (!correctedPlan) {
+      const summary =
+        "The musical review did not contain an explicitly permitted transition change. " +
+        "The candidate was preserved for manual review instead of rerendering the same plan.";
+      options.onStage("manual_review_required", null, null);
+      await saveRequired({
+        stage: "manual_review_required",
+        currentCandidate,
+        qualityReview,
+      });
+      return {
+        summary,
+        candidateId: null,
+        outputPath: null,
+        qualityReview,
+        manualReviewRequired: true,
+      };
+    }
+    arrangementPlan = correctedPlan;
+    await readJsonResponse(
+      await fetch("/api/session/design-plan", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": `${options.sessionId}:arrangement:${arrangementPlan.arrangementVersion}`,
+        },
+        body: JSON.stringify({
+          sessionId: options.sessionId,
+          plan: arrangementPlan,
+        }),
+        signal: options.signal,
+      }),
+    );
     correctionCount++;
     options.onLog(
       `Correction cycle ${correctionCount}/${MAX_CORRECTION_RETRIES}`,
     );
-    await saveRequired({ stage: "correction", correctionCount });
+    await saveRequired({
+      stage: "correction",
+      correctionCount,
+      arrangementPlan,
+      currentCandidate: null,
+    });
+    currentCandidate = null;
   }
 
   const manifestData = await readJsonResponse(

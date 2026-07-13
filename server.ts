@@ -2602,11 +2602,33 @@ app.post("/api/session/quality-review", async (req, res) => {
           );
         }
       }
+      const automaticState = existingManifest.workflowMode === "automatic"
+        ? readAutomaticSessionState(workDir, sessionId)
+        : null;
+      if (automaticState) {
+        if (automaticState.state === "technical_review") {
+          transitionAutomaticSessionState({ workDir, sessionId, to: "musical_review" });
+        }
+        const musicalState = readAutomaticSessionState(workDir, sessionId)!;
+        if (musicalState.state !== "musical_review") {
+          throw new Error(`Musical review is not valid while session state is ${musicalState.state}`);
+        }
+      }
       const manifest = applyCandidateReview(workDir, sessionId, parsed);
       sessions[sessionId].qualityReview = parsed;
       sessions[sessionId].workflowStage = parsed.approved
         ? "final_render"
         : "correction";
+      const postReviewState = existingManifest.workflowMode === "automatic"
+        ? readAutomaticSessionState(workDir, sessionId)
+        : null;
+      if (postReviewState) {
+        transitionAutomaticSessionState({
+          workDir,
+          sessionId,
+          to: parsed.approved ? "finalizing" : "correcting",
+        });
+      }
       return { success: true, review: parsed, manifest };
       };
       const automaticState = readAutomaticSessionState(workDir, sessionId);
@@ -2812,6 +2834,9 @@ app.post("/api/session/design-plan", async (req, res) => {
       const snapshot = readDesignSnapshotV4(workDir, sessionId);
       if (!snapshot || snapshot.designHash !== automaticState.designHash) {
         throw new Error("Automatic v4 design snapshot is missing or does not match session state");
+      }
+      if (automaticState.state === "correcting") {
+        transitionAutomaticSessionState({ workDir, sessionId, to: "planning" });
       }
       transitionAutomaticSessionState({
         workDir,
@@ -3559,16 +3584,30 @@ app.post("/api/render-review-candidate", async (req, res) => {
       fs.mkdirSync(sessionWorkDir, { recursive: true });
     }
     const manifest = readCandidateManifest(workDir, sessionId);
+    const renderState = !legacy
+      ? readAutomaticSessionState(workDir, sessionId)
+      : null;
+    if (renderState?.state === "executing_transitions") {
+      transitionAutomaticSessionState({
+        workDir,
+        sessionId,
+        to: "rendering_candidate",
+      });
+    }
     const recoveredTechnicalEvaluation = recoverRegisteredCandidateTechnicalEvaluation({
       workDir,
       sessionId,
       arrangementVersion,
       executionVersion,
     });
-    if (recoveredTechnicalEvaluation) {
+      if (recoveredTechnicalEvaluation) {
       sessions[sessionId].workflowStage = "quality_review";
       sessions[sessionId].currentCandidate = recoveredTechnicalEvaluation.candidate;
-      return res.json({
+      const recoveredState = readAutomaticSessionState(workDir, sessionId);
+      if (recoveredState?.state === "rendering_candidate") {
+        transitionAutomaticSessionState({ workDir, sessionId, to: "technical_review" });
+      }
+      const responsePayload = {
         success: true,
         candidate: recoveredTechnicalEvaluation.candidate,
         manifest: recoveredTechnicalEvaluation.manifest,
@@ -3577,7 +3616,19 @@ app.post("/api/render-review-candidate", async (req, res) => {
         renderPath: "recovered-technical-evaluation",
         recoveredAfterRegistrationFailure: true,
         message: "Recovered the registered candidate's missing technical evaluation without rerendering audio.",
-      });
+      };
+      if (idempotencyKey && readAutomaticSessionState(workDir, sessionId)) {
+        const replay = await replayAutomaticSessionIdempotent({
+          workDir,
+          sessionId,
+          operation: "candidate_rendering",
+          key: idempotencyKey,
+          request: idempotencyRequest,
+          execute: async () => responsePayload,
+        });
+        return res.json({ ...replay.result, idempotent: replay.replayed });
+      }
+      return res.json(responsePayload);
     }
     const { candidateId, candidateVersion } = nextCandidateIdentity(manifest);
     const immutableOutputPath = path.join(
@@ -3636,16 +3687,37 @@ app.post("/api/render-review-candidate", async (req, res) => {
               ),
       });
       if (recovered) {
+        const recoveredManifest = recovered.qualityGate
+          ? appendCandidateTechnicalEvaluation(workDir, sessionId, {
+              candidateId: recovered.candidate.candidateId,
+              candidateVersion: recovered.candidate.candidateVersion,
+              technicallyValid: Boolean(recovered.qualityGate.technicallyValid),
+              blockingIssues: Array.isArray(recovered.qualityGate.blockingIssues)
+                ? recovered.qualityGate.blockingIssues
+                : [],
+              warnings: Array.isArray(recovered.qualityGate.warnings)
+                ? recovered.qualityGate.warnings
+                : [],
+              policyVersion: 1,
+              evaluatedAt: new Date().toISOString(),
+            })
+          : recovered.manifest;
+        const recoveredState = !legacy
+          ? readAutomaticSessionState(workDir, sessionId)
+          : null;
+        if (recoveredState?.state === "rendering_candidate") {
+          transitionAutomaticSessionState({ workDir, sessionId, to: "technical_review" });
+        }
         sessions[sessionId].workflowStage = "quality_review";
         sessions[sessionId].currentCandidate = recovered.candidate;
         logToSession(
           sessionId,
           `[candidate-render] Recovered completed ${candidateId} after interrupted manifest registration.`,
         );
-        return res.json({
+        const responsePayload = {
           success: true,
           candidate: recovered.candidate,
-          manifest: recovered.manifest,
+          manifest: recoveredManifest,
           quality: recovered.quality,
           resolvedTransitions: recovered.candidate.resolvedTransitions,
           outputPath: recovered.candidate.outputPath,
@@ -3653,7 +3725,19 @@ app.post("/api/render-review-candidate", async (req, res) => {
           recoveredAfterRegistrationFailure: true,
           message:
             "Recovered the existing rendered candidate without rerendering audio.",
-        });
+        };
+        if (idempotencyKey && readAutomaticSessionState(workDir, sessionId)) {
+          const replay = await replayAutomaticSessionIdempotent({
+            workDir,
+            sessionId,
+            operation: "candidate_rendering",
+            key: idempotencyKey,
+            request: idempotencyRequest,
+            execute: async () => responsePayload,
+          });
+          return res.json({ ...replay.result, idempotent: replay.replayed });
+        }
+        return res.json(responsePayload);
       }
       const selectedTransitions = selectRenderTransitions({
         sessionId,
@@ -4285,6 +4369,12 @@ app.post("/api/render-review-candidate", async (req, res) => {
           evaluatedAt: new Date().toISOString(),
         },
       );
+      const technicalState = !legacy
+        ? readAutomaticSessionState(workDir, sessionId)
+        : null;
+      if (technicalState?.state === "rendering_candidate") {
+        transitionAutomaticSessionState({ workDir, sessionId, to: "technical_review" });
+      }
       sessions[sessionId].workflowStage = "quality_review";
       sessions[sessionId].currentCandidate = candidate;
 
