@@ -1381,7 +1381,7 @@ function logToSession(sessionId: string, msg: string) {
 }
 
 // SSE endpoint for real-time session streaming
-app.get("/api/session/:id/stream", (req, res) => {
+app.get("/api/session/:id/stream", async (req, res) => {
   const sessionId = req.params.id;
   try {
     validateSessionId(sessionId);
@@ -1391,7 +1391,9 @@ app.get("/api/session/:id/stream", (req, res) => {
   // The UI intentionally opens progress streaming before its first workflow
   // request. Establish the pending session here so startup order cannot race
   // the design/tool endpoints and produce a spurious 404.
-  if (!sessions[sessionId]) sessions[sessionId] = { status: "running", logs: [] };
+  await withSessionLock(sessionId, async () => {
+    if (!sessions[sessionId]) sessions[sessionId] = { status: "running", logs: [] };
+  });
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
@@ -1878,8 +1880,11 @@ app.post("/api/session/finish", async (req, res) => {
 });
 
 // Update metrics endpoint
-app.post("/api/session/metrics", (req, res) => {
+app.post("/api/session/metrics", async (req, res) => {
   const { sessionId, metrics } = req.body;
+  try {
+    validateSessionId(sessionId);
+    return await withSessionLock(sessionId, async () => {
   if (sessions[sessionId]) {
     sessions[sessionId].metrics = {
       ...sessions[sessionId].metrics,
@@ -1899,7 +1904,11 @@ app.post("/api/session/metrics", (req, res) => {
       console.warn("[session-metrics] Wisdom logging failed:", wisdomError);
     }
   }
-  res.json({ success: true });
+  return res.json({ success: true });
+    });
+  } catch (error: any) {
+    return res.status(400).json({ success: false, error: error.message });
+  }
 });
 
 app.get("/api/session/:id", (req, res) => {
