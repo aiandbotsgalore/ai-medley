@@ -22,7 +22,9 @@ Node support is `>=20 <27`. Production is bundled ESM at `dist/server.js`; the s
 
 - `server.ts`: Express API, local access controls, persistence, FFmpeg orchestration, candidate/finalization transactions, SSE, and production static serving.
 - `src/App.tsx`: React SPA and Manual Model orchestration.
-- `src/engine/specialistOrchestrator.ts`: version-3 Automatic Specialist Team workflow.
+- `src/engine/specialistOrchestrator.ts`: workflow-v4 Automatic Specialist Team
+  orchestration: deterministic brief/execution plus constrained arrangement and
+  musical-review provider decisions.
 - `src/engine/providers.ts` and `providerRequest.ts`: server-proxied providers, bounded requests, retries, and typed failures.
 - `src/server/`: atomic stores, path/upload/resource policy, analysis authority, candidate integrity, event journal, and finalization journal.
 - `library/`: protected source metadata/audio/history/wisdom.
@@ -36,4 +38,9 @@ Node support is `>=20 <27`. Production is bundled ESM at `dist/server.js`; the s
 - `contained` is the default manual capability. `expert` intentionally grants arbitrary shell access and must remain explicit.
 - If a build changes `dist`, restore the pre-existing `dist` exactly unless the user explicitly requests generated artifacts.
 
-Automatic Specialist Team mode uses OpenRouter's bounded three-model roster. Manual Model mode supports Gemini and OpenRouter, including custom OpenRouter model IDs. Server-managed credentials come from `OPENROUTER_API_KEY` and `GEMINI_API_KEY`; browser-entered keys are memory-only.
+Automatic Specialist Team v4 pins its workflow version per session. It makes
+no context-brief or production/tool-execution provider request; provider
+fallback is limited to structured arrangement and musical-review decisions.
+Manual Model mode supports Gemini and OpenRouter, including custom OpenRouter
+model IDs. Server-managed credentials come from `OPENROUTER_API_KEY` and
+`GEMINI_API_KEY`; browser-entered keys are memory-only.

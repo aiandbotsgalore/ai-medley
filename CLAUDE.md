@@ -20,7 +20,10 @@ Supported Node is `>=20 <27`. Production runs bundled ESM `dist/server.js` on `1
 
 ## Current behavior
 
-- Automatic Specialist Team: OpenRouter context, arrangement/review, and production specialists with bounded fallbacks and version-3 checkpoints.
+- Automatic Specialist Team v4: deterministic local brief and transition
+  execution, with bounded OpenRouter arrangement and musical-review decisions
+  only. It makes no context-brief or production/tool-execution provider call;
+  v3 checkpoints remain isolated rather than silently migrating.
 - Manual Model: Gemini or OpenRouter with strict versioned tool contracts.
 - Audio analysis is local by default and server-authoritative.
 - Provider payloads fail before network access when over shared limits; retries are bounded and recorded.

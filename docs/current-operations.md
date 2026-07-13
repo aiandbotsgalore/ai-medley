@@ -42,7 +42,9 @@ Browser-entered API keys are memory-only unless the user explicitly selects **Sa
 
 ## Workflow and model configuration
 
-The default configuration is version 3:
+New Automatic Specialist Team sessions use workflow version 4. The version is
+pinned when the session is created: a v4 session never silently becomes v3,
+and a v3 checkpoint is preserved rather than resumed as v4.
 
 - Mode: **Automatic Specialist Team**.
 - Provider: OpenRouter.
@@ -53,13 +55,20 @@ The default configuration is version 3:
 - Manual OpenRouter default: `google/gemini-2.5-pro`; routine fallback: `google/gemini-2.5-flash`.
 - Gemini manual default: `gemini-2.5-flash`; `gemini-2.5-pro` is also listed.
 
-Automatic roles are fixed and bounded:
+Automatic v4 has a deterministic local brief and deterministic FFmpeg
+execution compiler. It makes **no context-brief provider request** and **no
+production/tool-execution provider request**. Provider use is limited to
+bounded, structured arrangement and musical-review decisions; corrections may
+only alter explicitly permitted transition fields. Provider failures and model
+fallbacks are recorded in the session log and request audit without exposing
+credentials.
+
+The remaining constrained provider decisions use the fixed roster:
 
 | Role | Primary model |
 |---|---|
-| Context | `google/gemini-2.5-pro` |
 | Arrangement and quality review | `google/gemini-2.5-pro` |
-| Production and correction | `google/gemini-2.5-flash` |
+| Bounded fallback | `google/gemini-2.5-flash` |
 
 Each role can fall back only across this two-model roster. Provider requests are rejected before network access above 100 KiB or 24,000 estimated tokens, with a 16,000-token regression target. One bounded 429 retry may honor at most 30 seconds of `Retry-After`.
 
@@ -79,9 +88,17 @@ Manual Model mode supports the Gemini and OpenRouter models listed in `src/compo
 Persistent source audio, library records, history, wisdom, checkpoints, candidates, manifests, and completed outputs are user data. The application does not run automatic cleanup over these classes.
 
 - Core JSON stores fail closed on corrupt reads and use atomic writes plus last-known-good backups.
-- Source upload/delete and finalization use recoverable transactional ordering.
+- Source upload stages, probes, hashes, capacity-checks, and atomically
+  registers media; cross-volume moves use copy-then-publish. Deletion is a
+  pending/quarantine transaction rather than immediate erasure.
 - Automatic checkpoints are source/design/config bound. Changed or legacy-unbound state requires an explicit user decision.
-- Candidate manifests are immutable and integrity-checked. Final promotion revalidates canonical path, size, and SHA-256.
+- Candidate manifests retain append-only technical, musical, human, and
+  correction evidence. Resource limits enter manual review without deleting
+  older candidates. Final promotion revalidates canonical path, size, and
+  SHA-256 and follows a recoverable finalization journal.
+- Automatic state is revisioned and idempotent. Cancellation is durable,
+  session-wide, and leaves protected completed artifacts intact; startup
+  reconciliation only classifies interrupted boundaries and never deletes data.
 - SSE publishes named, sequenced, replayable events and an authoritative snapshot.
 - `/api/storage/inventory` is inventory-only: all entries are `preserve`, and deletion candidates are always zero.
 

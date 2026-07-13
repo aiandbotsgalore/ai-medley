@@ -1,0 +1,12 @@
+flowchart TD
+  Start[Automatic v4 session] --> Local[Local analysis and deterministic design]
+  Local --> Arrangement[Constrained arrangement decision]
+  Arrangement -->|valid authoritative plan| Compile[Compile and execute]
+  Arrangement -->|invalid or no permitted correction| Manual[manual_review_required]
+  Compile --> Technical{Technical gate passes?}
+  Technical -->|no| Correct[Targeted permitted correction]
+  Technical -->|yes| Musical{Musical review approves?}
+  Musical -->|no| Correct
+  Musical -->|yes| Promote[Promote selected candidate]
+  Correct -->|limit reached| Manual
+  Correct -->|allowed| Compile

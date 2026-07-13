@@ -1,0 +1,10 @@
+flowchart TD
+  Interrupted[Interrupted boundary] --> State[Read revisioned session state]
+  State --> Candidate{Candidate MP3 and validation sidecar exist?}
+  Candidate -->|yes| RecoverCandidate[Recover manifest/evidence without rerender]
+  Candidate -->|no| Finalization{Finalization journal incomplete?}
+  Finalization -->|yes| Reconcile[Classify finalization_incomplete]
+  Finalization -->|no| Legacy[Classify legacy/output/candidate recovery state]
+  RecoverCandidate --> Review[Resume technical or manual review]
+  Reconcile --> Preserve[Preserve artifacts; never auto-delete]
+  Legacy --> Preserve
