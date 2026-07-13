@@ -394,7 +394,11 @@ await assert.rejects(
   }),
   (error: any) => error?.name === "AbortError",
 );
-assert.ok(contextProviderCalls > 0);
+assert.equal(
+  contextProviderCalls,
+  0,
+  "automatic v4 must not make a context-brief provider request",
+);
 const postedLocalBrief = JSON.parse(contextBriefBody).brief as ProjectBrief;
 assert.equal(postedLocalBrief.summary, "Locally generated project brief from analyzed selected tracks.");
 assert.equal(postedLocalBrief.trackSummaries.length, 2);
@@ -655,35 +659,14 @@ await assert.rejects(
     },
     onMetrics: () => {},
   }),
-  (error: any) => error?.name === "AbortError",
+  (error: any) => /Candidate render failed without an automatic rerender/.test(error?.message || ""),
 );
 assert.equal(renderCallCount, 1);
-assert.ok(
-  recoveryLogs.includes(
-    "Render candidate failed; starting correction cycle 1/3.",
-  ),
-);
-assert.ok(
-  recoveryCheckpoints.some(
-    (checkpoint) =>
-      checkpoint.stage === "correction" && checkpoint.correctionCount === 1,
-  ),
-);
-const correctionRequest = JSON.parse(correctionRequestBody);
-const correctionPrompt = JSON.parse(
-  correctionRequest.messages.findLast((message: any) => message.role === "user")
-    .content,
-);
-assert.equal(correctionPrompt.correctionCount, 1);
-assert.ok(
-  correctionPrompt.repairErrors.some((item: string) =>
-    item.includes("FFmpeg render exploded"),
-  ),
-);
-assert.ok(
-  correctionPrompt.repairErrors.some((item: string) =>
-    item.includes("filtergraph.txt"),
-  ),
+assert.equal(providerCall, 0, "production corrections must not call a provider");
+assert.equal(
+  correctionRequestBody,
+  "",
+  "a failed unchanged render must not generate a production correction request",
 );
 
 globalThis.fetch = originalFetch;

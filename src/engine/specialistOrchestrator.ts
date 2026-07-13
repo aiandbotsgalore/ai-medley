@@ -463,167 +463,70 @@ async function runProductionRole(options: {
   onRepair: () => void;
   onModel: (model: string) => void;
 }): Promise<ExecutionReport> {
-  const { workflow, plan, correctionCount, review, executionVersion } = options;
-  let lastError: unknown = null;
-  for (const model of SPECIALIST_FALLBACKS.production) {
+  const { workflow, plan, correctionCount, executionVersion } = options;
+  assertActive(workflow.signal);
+  // v4 deliberately has no production specialist. The locked arrangement is
+  // compiled directly into authoritative transition requests, which prevents a
+  // model from mutating IDs, timestamps, or retrying an invalid tool payload.
+  workflow.onStage(correctionCount ? "correction" : "production", null, null);
+  workflow.onLog("Deterministic execution compiler: applying locked transitions.");
+  const attemptedTransitions = [];
+  for (const transition of plan.transitions) {
     assertActive(workflow.signal);
-    options.onModel(model);
-    workflow.onStage(
-      correctionCount ? "correction" : "production",
-      "production",
-      model,
-    );
-    workflow.onLog(`Production specialist: ${model}`);
-    const session = createProviderSession(
-      { ...workflow.config, provider: "openrouter", model },
-      SPECIALIST_SYSTEM_PROMPTS.production,
-      [...SPECIALIST_TOOLS.production],
-      0.1,
-      [],
-      {
-        stage: correctionCount ? "correction" : "production",
-        role: "production",
-        onRequestAudit: workflow.onProviderRequestAudit,
-      },
-    );
-    const prompt = JSON.stringify(
-      buildProductionStageData({
+    const request = {
+      transitionId: transition.transitionId,
+      fromTrackId: transition.fromTrackId,
+      fromSectionId: transition.fromSectionId,
+      toTrackId: transition.toTrackId,
+      toSectionId: transition.toSectionId,
+      style: transition.style,
+      duration: transition.duration,
+      beatAlign: transition.beatAlign,
+      notes: transition.notes,
+    };
+    const response = await fetch("/api/apply-transition", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...request,
         sessionId: workflow.sessionId,
         executionVersion,
-        correctionCount,
-        plan,
-        review,
-        repairErrors: options.repairErrors,
       }),
-    );
-    let result: any;
-    let repairUsed = false;
-    try {
-      result = await session.send(prompt, {
-        signal: workflow.signal,
-        requestId: `${workflow.sessionId}:production:${model}:start`,
-        timeoutMs: PROVIDER_REQUEST_TIMEOUT_MS,
-      });
-      for (let turn = 0; turn < PRODUCTION_MAX_TURNS; turn++) {
-        assertActive(workflow.signal);
-        const calls = result.functionCalls ?? [];
-        if (!calls.length)
-          throw new Error("Production specialist returned no tool calls");
-        const responses: ToolResponse[] = [];
-        for (const call of calls) {
-          if (call.name === "apply_musical_transition") {
-            const parsedRequest = TransitionExecutionRequestSchema.safeParse(
-              call.args,
-            );
-            const issues = parsedRequest.success
-              ? validateTransitionExecutionContext(parsedRequest.data, plan)
-              : formatValidationIssues(parsedRequest.error);
-            if (!parsedRequest.success || issues.length) {
-              responses.push({
-                name: call.name,
-                id: call.id,
-                response: {
-                  success: false,
-                  error: "Validation failed",
-                  issues,
-                },
-              });
-              continue;
-            }
-            const response = await fetch("/api/apply-transition", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                ...parsedRequest.data,
-                sessionId: workflow.sessionId,
-                executionVersion,
-              }),
-              signal: workflow.signal,
-            });
-            const data = await response.json().catch(() => ({}));
-            responses.push({
-              name: call.name,
-              id: call.id,
-              response: compactTransitionToolResult(data),
-            });
-            continue;
-          }
-          if (call.name === "submit_execution_report") {
-            const parsed = ExecutionReportSchema.safeParse(call.args);
-            const issues = parsed.success
-              ? validateExecutionContext(parsed.data, plan)
-              : formatValidationIssues(parsed.error);
-            if (!parsed.success || issues.length) {
-              if (repairUsed)
-                throw new Error(
-                  `Execution report validation failed: ${issues.join("; ")}`,
-                );
-              repairUsed = true;
-              options.onRepair();
-              responses.push({
-                name: call.name,
-                id: call.id,
-                response: { error: "Validation failed", issues },
-              });
-              continue;
-            }
-            const response = await fetch("/api/session/execution-report", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                sessionId: workflow.sessionId,
-                report: parsed.data,
-              }),
-              signal: workflow.signal,
-            });
-            if (!response.ok) {
-              const data = await response.json().catch(() => ({}));
-              if (repairUsed) {
-                throw new Error(
-                  data?.error ||
-                    `Execution report rejected (${response.status})`,
-                );
-              }
-              repairUsed = true;
-              options.onRepair();
-              responses.push({
-                name: call.name,
-                id: call.id,
-                response: {
-                  error: "Server validation failed",
-                  issues: String(
-                    data?.error || `Request failed (${response.status})`,
-                  ).split("; "),
-                },
-              });
-              continue;
-            }
-            return parsed.data;
-          }
-          responses.push({
-            name: call.name,
-            id: call.id,
-            response: { error: "Tool is not available in the production role" },
-          });
-        }
-        result = await session.send(responses, {
-          signal: workflow.signal,
-          requestId: `${workflow.sessionId}:production:${model}:${turn}`,
-          timeoutMs: PROVIDER_REQUEST_TIMEOUT_MS,
-        });
-      }
-      throw new Error("Production specialist exceeded the turn limit");
-    } catch (error: any) {
-      lastError = error;
-      if (workflow.signal.aborted) throw error;
-      workflow.onLog(
-        `Production fallback from ${model}: ${error?.message || error}`,
+      signal: workflow.signal,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data?.success === false) {
+      throw new Error(
+        data?.error || `Transition ${transition.transitionId} failed (${response.status})`,
       );
     }
+    attemptedTransitions.push({
+      ...transition,
+      success: true,
+      actualFromExitSec: data.actualFromExitSec,
+      actualToEntrySec: data.actualToEntrySec,
+      previewPath: data.outputPath ?? null,
+      error: null,
+    });
   }
-  throw lastError instanceof Error
-    ? lastError
-    : new Error("All production specialists failed");
+  const report = ExecutionReportSchema.parse({
+    schemaVersion: 1,
+    executionVersion,
+    arrangementVersion: plan.arrangementVersion,
+    attemptedTransitions,
+    technicalWarnings: [],
+    unresolvedFailures: [],
+    completedAt: new Date().toISOString(),
+  });
+  await readJsonResponse(
+    await fetch("/api/session/execution-report", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId: workflow.sessionId, report }),
+      signal: workflow.signal,
+    }),
+  );
+  return report;
 }
 
 function makeCheckpoint(
@@ -690,65 +593,23 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
 
   let projectBrief = checkpoint.projectBrief;
   if (!projectBrief) {
-    options.onStage("context_brief", "context", SPECIALIST_MODELS.context);
+    options.onStage("context_brief", null, null);
     saveProgress({
       stage: "context_brief",
-      activeRole: "context",
-      activeModel: SPECIALIST_MODELS.context,
+      activeRole: null,
+      activeModel: null,
     });
-    try {
-      projectBrief = await requestStructuredArtifact({
-      role: "context",
-      stage: "context_brief",
-      config: options.config,
-      sessionId: options.sessionId,
-      signal: options.signal,
-      schema: ProjectBriefSchema,
-      toolName: "submit_project_brief",
-      systemInstruction: SPECIALIST_SYSTEM_PROMPTS.context,
-      tools: [...SPECIALIST_TOOLS.context],
-      prompt: JSON.stringify(
-        buildContextStageData(
-          options.design,
-          options.sessionId,
-          options.config.targetDuration * 60,
-        ),
-      ),
-      contextualValidate: (brief) => [
-        ...(brief.projectId !== options.sessionId
-          ? ["projectId: Must match the session ID"]
-          : []),
-        ...validateProjectBriefContext(brief, context),
-      ],
-      onLog: options.onLog,
-      onModel: (model) => {
-        options.onStage("context_brief", "context", model);
-        saveProgress({
-          activeRole: "context",
-          activeModel: model,
-          attemptedModels: [...new Set([...checkpoint.attemptedModels, model])],
-        });
-      },
-      onRepair: () => saveProgress({ repairCount: checkpoint.repairCount + 1 }),
-      onRequestAudit: options.onProviderRequestAudit,
-      });
-    } catch (error) {
-      if (options.signal.aborted || isAbortLike(error)) throw error;
-      const targetDurationSec = Number.isFinite(context.targetDurationSec)
-        ? context.targetDurationSec
-        : options.config.targetDuration * 60;
-      const fallback = buildDeterministicProjectBrief(
-        options.design,
-        options.sessionId,
-        targetDurationSec,
-        context,
-      );
-      if (!fallback) throw error;
-      options.onLog(
-        "AI context response was unavailable or invalid; using a locally generated project brief.",
-      );
-      projectBrief = fallback;
-    }
+    const targetDurationSec = Number.isFinite(context.targetDurationSec)
+      ? context.targetDurationSec
+      : options.config.targetDuration * 60;
+    projectBrief = buildDeterministicProjectBrief(
+      options.design,
+      options.sessionId,
+      targetDurationSec,
+      context,
+    );
+    if (!projectBrief) throw new Error("Could not build a deterministic project brief");
+    options.onLog("Deterministic project brief generated locally.");
     await readJsonResponse(
       await fetch("/api/session/project-brief", {
         method: "POST",
@@ -985,18 +846,13 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
           renderPayload,
           error,
         );
-        if (correctionCount >= MAX_CORRECTION_RETRIES) {
-          throw new Error(
-            `Render candidate failed after ${MAX_CORRECTION_RETRIES} correction cycle(s): ${repairErrors.join("; ")}`,
-          );
-        }
-        correctionCount++;
-        productionRepairErrors = repairErrors;
-        options.onLog(
-          `Render candidate failed; starting correction cycle ${correctionCount}/${MAX_CORRECTION_RETRIES}.`,
+        // Rendering the unchanged authoritative arrangement again cannot repair
+        // an FFmpeg/manifest failure. Preserve diagnostics and require a real
+        // correction or recovery instead of burning the correction budget on
+        // identical rerenders.
+        throw new Error(
+          `Candidate render failed without an automatic rerender: ${repairErrors.join("; ")}`,
         );
-        await saveRequired({ stage: "correction", correctionCount });
-        continue;
       }
       productionRepairErrors = [];
       currentCandidate = candidateData.candidate;
