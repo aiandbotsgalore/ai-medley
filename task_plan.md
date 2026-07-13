@@ -13,23 +13,30 @@ Mocked providers only. The live-provider gate is intentionally skipped.
 
 ## Current Master Plan phase
 
-Phase 2 — session-state contract, transaction coordinator, and cross-file commit ordering.
+Phase 11 — offline verification and documentation alignment complete; optional live-provider gate intentionally skipped.
 
 ## Completed phases
 
 - Phase 0: baseline, protected fingerprints, mocked-test audit, disposable production smoke.
 - Phase 1: isolated v4 schemas and focused regression coverage.
+- Phases 2–10: transaction coordination, transactional upload/deletion,
+  deterministic v4 artifacts/compiler, quality limits, targeted correction,
+  manual review, cancellation/SSE/reconciliation, and compatibility adapters.
+- Phase 11: mocked acceptance, failure-injection coverage, documentation, and
+  disposable production verification.
 
 ## Active phase checklist
 
-- [x] Define v4 per-session state coordinator with optimistic revisions and legal transition matrix.
-- [ ] Route all same-session mutations through one coordinator.
-- [ ] Define and test durable cross-file commit sequences.
-- [ ] Add idempotency replay for all listed state-changing operations.
+- [x] Run complete mocked suite, full isolated v4 upload-to-final acceptance,
+  lint, route-document contract, and diff validation.
+- [x] Run disposable build and production-start smoke using an isolated data root.
+- [x] Confirm no live provider calls were made; the optional live gate is skipped.
 
 ## Last verified safe checkpoint
 
-Commit `1b78593`: v4 session coordinator focused test and TypeScript passed; no protected data changed.
+Commit `4c268b7`: v4 documentation alignment, after commits `c6b8aef`,
+`c2b1a19`, and `dc4a31b` completed durable cancellation/replay, test-gate,
+and strict automatic end-to-end fixes. All checks used temporary data roots.
 
 ## Unresolved blockers
 
@@ -37,6 +44,6 @@ Commit `1b78593`: v4 session coordinator focused test and TypeScript passed; no 
 
 ## Exact next actions
 
-1. Integrate the coordinator with candidate render, review, finalization, cancellation, and SSE paths.
-2. Add concurrency/idempotency/failure-injection tests using temporary roots and mocked providers.
-3. Continue through Phases 3–11 under the authoritative plan.
+1. Hand off the completed offline implementation and verification evidence.
+2. If the user elects to do a live-provider acceptance run, obtain separate
+   cost authorization first; it is outside this offline plan.

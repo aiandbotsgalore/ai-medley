@@ -1,5 +1,28 @@
 # Progress: Provider API Key Settings
 
+## 2026-07-13 Master Plan offline completion
+
+- Completed the remaining workflow-upgrade offline gates using mocked provider
+  behavior and isolated temporary data roots only.
+- Fixed durable automatic cancellation and the idempotency replay stale-revision
+  failure path; a successful state-changing operation can no longer be marked
+  failed when its replay record is saved.
+- Fixed v4 automatic-session ownership and stopped preview-only execution facts
+  from mutating strict arrangement objects. The isolated end-to-end acceptance
+  now exercises the strict v4 route through upload, local analysis, design,
+  arrangement, deterministic FFmpeg execution, candidate technical/musical
+  review, exact promotion, playback, and download.
+- Added existing cross-drive upload and targeted-correction focused tests to
+  the standard `npm test` gate.
+- Verified `npm test`, `npm run lint`, `npm run test:e2e`,
+  `npm run test:release-contract`, `git diff --check`, and a build plus
+  production-start smoke in a disposable worktree with isolated
+  `AI_MEDLEY_DATA_ROOT`. The first disposable install used `--ignore-scripts`
+  and correctly failed because it suppresses the bundled FFmpeg installation;
+  the normal isolated install/build/smoke passed.
+- Live-provider acceptance remains intentionally skipped. No protected library
+  or workdir data was used by acceptance tests.
+
 ## 2026-07-04 stabilization continuation
 
 - Read the stabilization implementation progress and audit findings before editing.

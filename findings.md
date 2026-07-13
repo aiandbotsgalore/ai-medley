@@ -1,5 +1,26 @@
 # Findings: Provider API Key Settings
 
+## 2026-07-13 Master Plan completion findings
+
+- Confirmed and fixed a false-failure path: `replayAutomaticSessionIdempotent`
+  previously saved its replay record using the revision from before a successful
+  state transition. It now rereads the durable state before recording the
+  idempotent result.
+- Confirmed and fixed a strict-schema path matching reported user failures:
+  automatic transition preview metadata was being written into a strict locked
+  arrangement, causing the next execution-report validation to reject the app's
+  own mutated object. Automatic v4 keeps preview/timing facts in execution
+  records; legacy manual behavior remains separate.
+- Confirmed and fixed automatic-v4 session classification in server memory so
+  candidate rendering uses authoritative transition resolution rather than the
+  legacy selection branch.
+- The complete mocked v4 acceptance case passed with exact candidate/final
+  SHA-256 equality. Test provider audits remain mocked (78 bounded request
+  shapes; largest measured request 12,186 bytes / 4,056 estimated tokens).
+- Disposable production startup passed after a normal isolated install. The
+  `--ignore-scripts` variant is not a valid FFmpeg smoke setup because it
+  prevents `ffmpeg-static` from downloading its bundled executable.
+
 ## Stabilization continuation — 2026-07-04
 
 - Phase 6 is administratively marked in progress but has no implementation yet.
