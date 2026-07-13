@@ -28,12 +28,29 @@ function statePath(workDir: string, sessionId: string) {
   return path.join(getSessionDirectory(workDir, sessionId), "session-state.json");
 }
 
-function writeAtomic(file: string, value: unknown) {
+export type AutomaticStateWrite = (file: string, value: unknown) => void;
+
+export const writeAutomaticStateAtomic: AutomaticStateWrite = (file, value) => {
   const temporary = `${file}.tmp-${process.pid}-${randomUUID()}`;
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-  fs.renameSync(temporary, file);
-}
+  let descriptor: number | null = null;
+  try {
+    descriptor = fs.openSync(temporary, "wx");
+    fs.writeFileSync(descriptor, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    fs.fsyncSync(descriptor);
+    fs.closeSync(descriptor);
+    descriptor = null;
+    fs.renameSync(temporary, file);
+  } catch (error) {
+    if (descriptor !== null) fs.closeSync(descriptor);
+    try {
+      if (fs.existsSync(temporary)) fs.rmSync(temporary, { force: true });
+    } catch {
+      // Preserve the original failed-write cause.
+    }
+    throw error;
+  }
+};
 
 export function readAutomaticSessionState(workDir: string, sessionId: string) {
   const file = statePath(workDir, sessionId);
@@ -45,6 +62,7 @@ export function writeAutomaticSessionState(
   workDir: string,
   state: AutomaticSessionStateV1,
   expectedRevision: number,
+  write: AutomaticStateWrite = writeAutomaticStateAtomic,
 ) {
   const current = readAutomaticSessionState(workDir, state.sessionId);
   const actualRevision = current?.stateRevision ?? -1;
@@ -55,7 +73,7 @@ export function writeAutomaticSessionState(
     stateRevision: expectedRevision + 1,
     updatedAt: new Date().toISOString(),
   });
-  writeAtomic(statePath(workDir, state.sessionId), next);
+  write(statePath(workDir, state.sessionId), next);
   return next;
 }
 

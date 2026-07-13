@@ -13,6 +13,15 @@ try {
   assert.equal(first.stateRevision, 0);
   assert.throws(() => writeAutomaticSessionState(root, first, -1), /revision conflict/);
   assert.equal(readAutomaticSessionState(root, "session-1")?.stateRevision, 0);
+  assert.throws(
+    () => writeAutomaticSessionState(root, first, 0, () => { throw new Error("injected atomic write failure"); }),
+    /injected atomic write failure/,
+  );
+  assert.equal(
+    readAutomaticSessionState(root, "session-1")?.stateRevision,
+    0,
+    "a failed write must preserve the prior durable state",
+  );
   assert.doesNotThrow(() => assertLegalSessionTransition("created", "analyzing"));
   assert.throws(() => assertLegalSessionTransition("completed", "planning"), /Illegal/);
   const order: number[] = [];
