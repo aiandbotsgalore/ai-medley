@@ -19,6 +19,7 @@ export type AudioProbeSummary = {
   durationSec: number;
   audioStreams: number;
   channels: number;
+  codec: string;
 };
 
 export function validateUploadMetadata(file: {
@@ -43,6 +44,8 @@ export function validateAudioProbe(probe: AudioProbeSummary) {
     throw new Error("Uploaded content has no audio stream");
   if (!Number.isInteger(probe.channels) || probe.channels < 1 || probe.channels > 8)
     throw new Error("Uploaded audio has an unsupported channel count");
+  if (typeof probe.codec !== "string" || !/^[a-z0-9_+-]{1,80}$/i.test(probe.codec))
+    throw new Error("Uploaded audio has no supported codec identifier");
 }
 
 export function sha256File(filePath: string) {

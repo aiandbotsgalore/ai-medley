@@ -1126,6 +1126,7 @@ async function probeUploadedAudio(filePath: string) {
   const output = await execFfmpeg(["-i", filePath], 30_000);
   const durationSec = parseDuration(output);
   const audioLines = output.split(/\r?\n/).filter((line) => /Audio:/i.test(line));
+  const codec = audioLines[0]?.match(/Audio:\s*([^,\s]+)/i)?.[1] || "";
   const layout = audioLines[0]?.match(/\b(mono|stereo|\d+\.\d+)\b/i)?.[1]?.toLowerCase();
   const channels =
     layout === "mono"
@@ -1135,7 +1136,7 @@ async function probeUploadedAudio(filePath: string) {
         : layout?.includes(".")
           ? layout.split(".").reduce((sum, value) => sum + Number(value), 0)
           : 2;
-  const probe = { durationSec, audioStreams: audioLines.length, channels };
+  const probe = { durationSec, audioStreams: audioLines.length, channels, codec };
   validateAudioProbe(probe);
   return probe;
 }
