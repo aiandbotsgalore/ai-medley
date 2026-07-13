@@ -28,6 +28,7 @@ export const AutomaticSessionStatusV1Schema = z.enum([
 
 export const IdempotencyOperationV1Schema = z.enum([
   "session_creation",
+  "project_brief",
   "arrangement_submission",
   "execution_compilation",
   "transition_execution",

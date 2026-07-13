@@ -2331,16 +2331,20 @@ app.post("/api/session/project-brief", async (req, res) => {
   const { sessionId, brief } = req.body || {};
   try {
     validateSessionId(sessionId);
+    const idempotencyKey = String(
+      req.get("Idempotency-Key") || req.body?.idempotencyKey || "",
+    ).trim();
     return await withSessionLock(sessionId, async () => {
+      const execute = async () => {
       let parsed = ProjectBriefSchema.parse(brief);
       if (parsed.projectId !== sessionId) {
-        return res.status(400).json({ error: "projectId must match sessionId" });
+        throw new Error("projectId must match sessionId");
       }
       const specialistContext = buildSpecialistContext(sessionId);
       parsed = bindLegacyProjectBriefAuthority(parsed, specialistContext);
       const contextualErrors = validateProjectBriefContext(parsed, specialistContext);
       if (contextualErrors.length) {
-        return res.status(400).json({ error: contextualErrors.join("; ") });
+        throw new Error(contextualErrors.join("; "));
       }
       if (!sessions[sessionId])
         sessions[sessionId] = { status: "running", logs: [] };
@@ -2353,7 +2357,28 @@ app.post("/api/session/project-brief", async (req, res) => {
       );
       sessions[sessionId].workflowMode = "automatic";
       sessions[sessionId].workflowStage = "arrangement";
-      return res.json({ success: true, brief: parsed });
+      return { success: true, brief: parsed };
+      };
+      const automaticState = readAutomaticSessionState(workDir, sessionId);
+      const replay = idempotencyKey && automaticState
+        ? await replayAutomaticSessionIdempotent({
+            workDir,
+            sessionId,
+            operation: "project_brief",
+            key: idempotencyKey,
+            request: brief,
+            execute,
+          })
+        : idempotencyKey
+          ? await replayIdempotent({
+              sessionId,
+              operation: "project_brief",
+              key: idempotencyKey,
+              request: brief,
+              execute,
+            })
+          : { replayed: false, result: await execute() };
+      return res.json({ ...replay.result, idempotent: replay.replayed });
     });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
