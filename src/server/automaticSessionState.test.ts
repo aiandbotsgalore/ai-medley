@@ -27,6 +27,14 @@ try {
   const order: number[] = [];
   await Promise.all([withAutomaticSessionTransaction("session-1", async () => { order.push(1); }), withAutomaticSessionTransaction("session-1", async () => { order.push(2); })]);
   assert.deepEqual(order, [1, 2]);
+  const nested: string[] = [];
+  await withAutomaticSessionTransaction("session-1", async () => {
+    nested.push("outer");
+    await withAutomaticSessionTransaction("session-1", async () => {
+      nested.push("inner");
+    });
+  });
+  assert.deepEqual(nested, ["outer", "inner"]);
   let simultaneous = 0;
   await Promise.all([
     withAutomaticSessionTransaction("session-1", async () => { simultaneous += 1; await new Promise((resolve) => setTimeout(resolve, 5)); simultaneous -= 1; }),
