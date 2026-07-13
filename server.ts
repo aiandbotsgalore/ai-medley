@@ -126,6 +126,7 @@ import {
 } from "./src/server/automaticDesignV4";
 import {
   readDesignSnapshotV4,
+  writeArrangementVersionV1,
   writeDesignSnapshotV4,
 } from "./src/server/automaticSessionArtifacts";
 import {
@@ -2747,6 +2748,37 @@ app.post("/api/session/design-plan", async (req, res) => {
     }
     if (contextualErrors.length) {
       throw new Error(contextualErrors.join("; "));
+    }
+    const automaticState = readAutomaticSessionState(workDir, sessionId);
+    if (automaticState) {
+      const snapshot = readDesignSnapshotV4(workDir, sessionId);
+      if (!snapshot || snapshot.designHash !== automaticState.designHash) {
+        throw new Error("Automatic v4 design snapshot is missing or does not match session state");
+      }
+      transitionAutomaticSessionState({
+        workDir,
+        sessionId,
+        to: "validating_arrangement",
+      });
+      writeArrangementVersionV1(workDir, {
+        schemaVersion: 1,
+        workflowVersion: AUTOMATIC_WORKFLOW_VERSION,
+        sessionId,
+        arrangementVersion: authoritativePlan.arrangementVersion,
+        designHash: snapshot.designHash,
+        arrangement: authoritativePlan,
+        submittedAt: new Date().toISOString(),
+      });
+      const validatingState = readAutomaticSessionState(workDir, sessionId)!;
+      writeAutomaticSessionState(workDir, {
+        ...validatingState,
+        activeArrangementVersion: authoritativePlan.arrangementVersion,
+      }, validatingState.stateRevision);
+      transitionAutomaticSessionState({
+        workDir,
+        sessionId,
+        to: "executing_transitions",
+      });
     }
     sessions[sessionId].designPlan = authoritativePlan;
     sessions[sessionId].workflowStage = "production";
