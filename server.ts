@@ -150,8 +150,8 @@ import { persistOpenRouterApiKey } from "./src/server/credentialStore";
 import {
   collectTransitionTrackIds,
   executeFinalizationTransaction,
-  listFinalizationJournals,
 } from "./src/server/finalizationTransaction";
+import { reconcileStartupState } from "./src/server/startupReconciliation";
 
 const localEnvPath = path.join(process.cwd(), ".env.local");
 dotenv.config({ path: [localEnvPath, path.join(process.cwd(), ".env")] });
@@ -4369,34 +4369,9 @@ app.all("/api/*", (req, res) => {
     .json({ error: `API route ${req.method} ${req.path} not found` });
 });
 
-function reconcileIncompleteFinalizations() {
-  for (const journal of listFinalizationJournals(workDir)) {
-    if (journal.status === "completed") continue;
-    if (journal.candidateId === "legacy-output") {
-      console.warn(
-        `[finalization-reconcile] Legacy session ${journal.sessionId} requires an explicit retry`,
-      );
-      continue;
-    }
-    try {
-      finalizeRegisteredCandidate(
-        journal.sessionId,
-        journal.candidateId,
-        journal.summary,
-      );
-      console.log(
-        `[finalization-reconcile] Completed interrupted session ${journal.sessionId}`,
-      );
-    } catch (error) {
-      console.error(
-        `[finalization-reconcile] Could not complete ${journal.sessionId}:`,
-        error,
-      );
-    }
-  }
+for (const record of reconcileStartupState({ workDir, history: getHistory() })) {
+  console.warn(`[startup-reconcile] ${record.sessionId}: ${record.status} — ${record.detail}`);
 }
-
-reconcileIncompleteFinalizations();
 
 async function startServer() {
   const httpServer = http.createServer(app);
