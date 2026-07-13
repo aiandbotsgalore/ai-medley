@@ -103,6 +103,26 @@ export function transitionAutomaticSessionState(input: {
   );
 }
 
+/**
+ * Cancellation is an operator interrupt, not an ordinary workflow step. It is
+ * allowed from every non-terminal automatic state so an in-flight render,
+ * review, or recovery cannot remain deceptively resumable after its process
+ * has been stopped. Completed sessions are intentionally left immutable.
+ */
+export function cancelAutomaticSessionState(input: {
+  workDir: string;
+  sessionId: string;
+}) {
+  const current = readAutomaticSessionState(input.workDir, input.sessionId);
+  if (!current) return null;
+  if (["completed", "cancelled", "failed"].includes(current.state)) return current;
+  return writeAutomaticSessionState(
+    input.workDir,
+    { ...current, state: "cancelled", recoverableError: null },
+    current.stateRevision,
+  );
+}
+
 export async function withAutomaticSessionTransaction<T>(
   sessionId: string,
   operation: () => Promise<T>,
@@ -151,12 +171,18 @@ export async function replayAutomaticSessionIdempotent<T>(input: {
     }
     const result = await input.execute();
     const response = cloneJson(result);
+    // The operation may legally cross one or more durable state boundaries
+    // (for example rendering -> technical_review). Re-read before recording
+    // the replay result so we never write a stale pre-operation revision over
+    // that work.
+    const stateAfterOperation = readAutomaticSessionState(input.workDir, input.sessionId);
+    if (!stateAfterOperation) throw new Error("Automatic v4 session state is missing after operation");
     writeAutomaticSessionState(
       input.workDir,
       {
-        ...state,
+        ...stateAfterOperation,
         idempotencyRecords: [
-          ...state.idempotencyRecords,
+          ...stateAfterOperation.idempotencyRecords,
           {
             operation,
             key: input.key,
@@ -167,7 +193,7 @@ export async function replayAutomaticSessionIdempotent<T>(input: {
           },
         ],
       },
-      state.stateRevision,
+      stateAfterOperation.stateRevision,
     );
     return { replayed: false, result };
   });

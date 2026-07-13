@@ -134,6 +134,7 @@ import {
   writeDesignSnapshotV4,
 } from "./src/server/automaticSessionArtifacts";
 import {
+  cancelAutomaticSessionState,
   readAutomaticIdempotencyResult,
   readAutomaticSessionState,
   replayAutomaticSessionIdempotent,
@@ -1484,7 +1485,8 @@ app.post("/api/session/:id/cancel", async (req, res) => {
       const execute = async () => {
       const proc = activeRenderProcesses[sessionId];
       const activeAnalyses = activeAnalysisJobs[sessionId];
-      if (sessions[sessionId]?.status === "completed") {
+      const automaticState = readAutomaticSessionState(workDir, sessionId);
+      if (sessions[sessionId]?.status === "completed" || automaticState?.state === "completed") {
         return { success: true, message: "Session is already completed; cancellation was not applied." };
       }
       if (proc && !proc.killed) {
@@ -1495,12 +1497,13 @@ app.post("/api/session/:id/cancel", async (req, res) => {
       if (activeAnalyses?.size) {
         for (const job of activeAnalyses) analysisJobs.cancel(job);
       }
+      if (automaticState) cancelAutomaticSessionState({ workDir, sessionId });
       if (sessions[sessionId]) {
         sessions[sessionId].status = "cancelled";
         sessions[sessionId].workflowStage = "cancelled";
         logToSession(sessionId, "[session] Cancelled by user.");
-        broadcastToSession(sessionId, "cancelled", { sessionId });
       }
+      broadcastToSession(sessionId, "cancelled", { sessionId });
       return {
         success: true,
         message: proc

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { AUTOMATIC_WORKFLOW_VERSION } from "../types/automaticWorkflowV4";
-import { assertLegalSessionTransition, readAutomaticIdempotencyResult, readAutomaticSessionState, replayAutomaticSessionIdempotent, transitionAutomaticSessionState, withAutomaticSessionTransaction, writeAutomaticSessionState } from "./automaticSessionState";
+import { assertLegalSessionTransition, cancelAutomaticSessionState, readAutomaticIdempotencyResult, readAutomaticSessionState, replayAutomaticSessionIdempotent, transitionAutomaticSessionState, withAutomaticSessionTransaction, writeAutomaticSessionState } from "./automaticSessionState";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "ai-medley-v4-state-"));
 const now = "2026-07-13T00:00:00.000Z";
@@ -36,6 +36,18 @@ try {
     to: "planning",
   });
   assert.equal(planning.stateRevision, 2);
+  const cancelled = cancelAutomaticSessionState({ workDir: root, sessionId: "session-1" });
+  assert.equal(cancelled?.state, "cancelled");
+  assert.equal(cancelled?.stateRevision, 3);
+  assert.equal(
+    cancelAutomaticSessionState({ workDir: root, sessionId: "session-1" })?.stateRevision,
+    3,
+    "repeated cancellation must not create a second state revision",
+  );
+  assert.throws(
+    () => transitionAutomaticSessionState({ workDir: root, sessionId: "session-1", to: "planning" }),
+    /Illegal/,
+  );
   const order: number[] = [];
   await Promise.all([withAutomaticSessionTransaction("session-1", async () => { order.push(1); }), withAutomaticSessionTransaction("session-1", async () => { order.push(2); })]);
   assert.deepEqual(order, [1, 2]);
@@ -71,6 +83,25 @@ try {
   await assert.rejects(
     () => replayAutomaticSessionIdempotent({ workDir: root, sessionId: "session-1", operation: "candidate_rendering", key: "render-1", request: { candidate: 2 }, execute: async () => ({}) }),
     /different request/,
+  );
+  writeAutomaticSessionState(root, { ...base, sessionId: "session-2" }, -1);
+  const stateChangingReplay = await replayAutomaticSessionIdempotent({
+    workDir: root,
+    sessionId: "session-2",
+    operation: "project_brief",
+    key: "brief-1",
+    request: { version: 4 },
+    execute: async () => {
+      transitionAutomaticSessionState({ workDir: root, sessionId: "session-2", to: "analyzing" });
+      return { accepted: true };
+    },
+  });
+  assert.equal(stateChangingReplay.replayed, false);
+  assert.equal(readAutomaticSessionState(root, "session-2")?.state, "analyzing");
+  assert.equal(
+    readAutomaticSessionState(root, "session-2")?.idempotencyRecords.length,
+    1,
+    "a state-changing idempotent operation must record its replay after its transition",
   );
 } finally { fs.rmSync(root, { recursive: true, force: true }); }
 console.log("automaticSessionState tests passed");
