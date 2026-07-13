@@ -240,6 +240,19 @@ try {
   });
   assert.equal(repeated.idempotent, true);
 
+  const cancel = await jsonRequest(`/api/session/${sessionId}/cancel`, {
+    method: "POST",
+    headers: { "Idempotency-Key": "isolated-cancel" },
+  });
+  assert.equal(cancel.idempotent, false);
+  assert.match(cancel.message, /already completed/);
+  const repeatedCancel = await jsonRequest(`/api/session/${sessionId}/cancel`, {
+    method: "POST",
+    headers: { "Idempotency-Key": "isolated-cancel" },
+  });
+  assert.equal(repeatedCancel.idempotent, true);
+  assert.equal(repeatedCancel.message, cancel.message);
+
   const history = (await jsonRequest("/api/history")) as Array<any>;
   assert.equal(history.length, 1);
   assert.equal(history[0].candidateId, "candidate-001");

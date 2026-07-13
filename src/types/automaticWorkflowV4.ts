@@ -37,6 +37,7 @@ export const IdempotencyOperationV1Schema = z.enum([
   "musical_review",
   "correction_submission",
   "human_approval",
+  "cancellation",
   "finalization",
 ]);
 

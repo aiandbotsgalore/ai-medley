@@ -1457,8 +1457,15 @@ app.post("/api/session/:id/cancel", async (req, res) => {
   const sessionId = req.params.id;
   try {
     validateSessionId(sessionId);
+    const idempotencyKey = String(
+      req.get("Idempotency-Key") || req.body?.idempotencyKey || "",
+    ).trim();
     return await withSessionLock(sessionId, async () => {
+      const execute = async () => {
       const proc = activeRenderProcesses[sessionId];
+      if (sessions[sessionId]?.status === "completed") {
+        return { success: true, message: "Session is already completed; cancellation was not applied." };
+      }
       if (proc && !proc.killed) {
         console.log(`[Cancel] Killing active FFmpeg render for session ${sessionId}`);
         proc.kill("SIGKILL");
@@ -1470,10 +1477,31 @@ app.post("/api/session/:id/cancel", async (req, res) => {
         logToSession(sessionId, "[session] Cancelled by user.");
         broadcastToSession(sessionId, "cancelled", { sessionId });
       }
-      return res.json({
+      return {
         success: true,
         message: proc ? "Render process terminated." : "Session cancelled.",
-      });
+      };
+      };
+      const automaticState = readAutomaticSessionState(workDir, sessionId);
+      const replay = idempotencyKey && automaticState
+        ? await replayAutomaticSessionIdempotent({
+            workDir,
+            sessionId,
+            operation: "cancellation",
+            key: idempotencyKey,
+            request: {},
+            execute,
+          })
+        : idempotencyKey
+          ? await replayIdempotent({
+              sessionId,
+              operation: "cancellation",
+              key: idempotencyKey,
+              request: {},
+              execute,
+            })
+          : { replayed: false, result: await execute() };
+      return res.json({ ...replay.result, idempotent: replay.replayed });
     });
   } catch (error: any) {
     return res.status(400).json({ success: false, error: error.message });
