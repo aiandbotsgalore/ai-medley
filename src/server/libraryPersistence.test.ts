@@ -63,6 +63,7 @@ try {
       unknownField: { preserve: true },
     },
   ];
+  let deletionRecords: any[] = [];
   const deleteFailureStore: LibraryStoreOperations = {
     read: () => structuredClone(originalLibrary),
     write: () => {
@@ -74,6 +75,10 @@ try {
       deleteLibraryEntryTransactional({
         id: "source",
         store: deleteFailureStore,
+        deletionStore: {
+          read: () => structuredClone(deletionRecords),
+          write: (records) => { deletionRecords = structuredClone(records); },
+        },
       }),
     /database write failed/,
   );
@@ -83,6 +88,7 @@ try {
     [],
     "A failed delete commit must restore the source filename",
   );
+  assert.deepEqual(deletionRecords, []);
 
   let committedLibrary: unknown[] = [];
   const successfulDeleteStore: LibraryStoreOperations = {
@@ -94,10 +100,19 @@ try {
   const result = deleteLibraryEntryTransactional({
     id: "source",
     store: successfulDeleteStore,
+    deletionStore: {
+      read: () => structuredClone(deletionRecords),
+      write: (records) => { deletionRecords = structuredClone(records); },
+    },
+    now: () => "2026-07-13T00:00:00.000Z",
   });
   assert.equal(result.deleted, true);
   assert.deepEqual(committedLibrary, []);
   assert.equal(fs.existsSync(source.path), false);
+  assert.ok(result.quarantinePath);
+  assert.equal(fs.readFileSync(result.quarantinePath!, "utf8"), "protected source bytes");
+  assert.equal(deletionRecords.length, 1);
+  assert.equal(deletionRecords[0].status, "quarantined");
 } finally {
   fs.rmSync(root, { recursive: true, force: true });
 }

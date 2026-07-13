@@ -1559,7 +1559,7 @@ app.delete("/api/library/:id", (req, res) => {
   try {
     const result = deleteLibraryEntryTransactional({
       id: req.params.id,
-      store: { read: getLibrary, write: saveLibrary },
+      dbPath,
     });
     res.json({ success: true, deleted: result.deleted });
   } catch (error: any) {
