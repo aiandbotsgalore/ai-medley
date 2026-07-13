@@ -264,3 +264,18 @@ local arrangement exists. User cancellation still stops immediately. Mocked
 checks pass. Resuming an older saved arrangement now validates it again and
 replaces it locally when it no longer matches the current authoritative facts.
 No live provider call or protected-data mutation occurred.
+
+## Cross-drive upload transfer — 2026-07-13
+
+Status: complete
+
+Fix the Windows `EXDEV` upload failure between the OS temporary directory and
+the workspace audio library. Keep rename as the fast same-drive path; on EXDEV
+only, use exclusive copy followed by temporary-file removal, rolling the new
+copy back if that removal fails. Verify with a mocked filesystem regression,
+the full suite, TypeScript, and whitespace validation. Do not perform a real
+upload during verification because library audio is protected.
+
+Verification passed: mocked EXDEV transfer, failed-copy rollback, full `npm
+test`, `npm run lint`, and `git diff --check`. The real failed upload was not
+retried, and no protected library path was inspected, deleted, or rewritten.

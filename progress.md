@@ -478,3 +478,13 @@
 - Added and verified resumed-session handling: an invalid saved arrangement is
   replaced by the local plan without calling a provider, then checkpointed
   before production. The complete mocked suite passed again afterward.
+
+# 2026-07-13 — Cross-drive upload fix in progress
+
+- Reproduced the reported failure from its exact `EXDEV` message and replaced
+  the unsafe cross-drive rename with a narrowly scoped copy-then-remove
+  fallback. The regression is simulated with a fake filesystem; no actual
+  library audio was created, removed, or rewritten during verification.
+- Complete: simulated EXDEV, failed-copy cleanup, the full test suite,
+  TypeScript, and whitespace validation all pass. The production change is
+  ready to restart and retry with the user's original audio file.

@@ -407,3 +407,14 @@ Sources:
   plan in the background. Resumed plans are revalidated using the saved target;
   an old invalid plan is replaced locally before it can call a provider or
   reach FFmpeg.
+
+# 2026-07-13 — Cross-drive upload failure
+
+- Multer stages browser uploads in the Windows temp directory (`C:`), while
+  this workspace's library is on `G:`. The upload route used `renameSync`,
+  which Windows rejects across drives with `EXDEV` before any library entry is
+  written.
+- Upload transfer now uses rename when possible and falls back only for EXDEV:
+  exclusive copy to the intended new library path, then removal of the source
+  temporary file. A failed temporary-file removal rolls the new copy back, so
+  an unregistered library file is not silently left behind.

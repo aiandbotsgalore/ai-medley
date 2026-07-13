@@ -71,6 +71,7 @@ import {
   validateAudioProbe,
   validateUploadMetadata,
 } from "./src/server/uploadPolicy";
+import { moveUploadedAudioFile } from "./src/server/uploadTransfer";
 import { redactSensitive } from "./src/server/redaction";
 import {
   appendBoundedLog,
@@ -1509,7 +1510,7 @@ app.post("/api/library", (req, res) => {
           throw new Error(`Duplicate audio content: ${file.originalname}`);
         incomingHashes.add(sha256);
         const permanentPath = path.join(audioDir, file.filename);
-        fs.renameSync(file.path, permanentPath);
+        moveUploadedAudioFile(file.path, permanentPath);
         file.path = permanentPath;
         (file as any).sha256 = sha256;
       }
