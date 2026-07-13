@@ -10,6 +10,7 @@ import {
   nextCandidateIdentity,
   promoteCandidate,
   readCandidateManifest,
+  recoverUnregisteredRenderedCandidate,
   registerCandidate,
   sha256File,
   validateLegacyFinalOutput,
@@ -218,6 +219,76 @@ assert.throws(
       sha256: sha256File(fifthCandidatePath),
     }),
   /Candidate limit reached/,
+);
+
+const recoverySession = "registration-recovery";
+const recoveryDir = path.join(root, recoverySession);
+fs.mkdirSync(recoveryDir, { recursive: true });
+const recoveryOutput = path.join(recoveryDir, "candidate-001.mp3");
+fs.writeFileSync(recoveryOutput, "completed render");
+const recoveryCandidate: RenderCandidate = {
+  candidateId: "candidate-001",
+  candidateVersion: 1,
+  parentCandidateId: null,
+  arrangementVersion: 2,
+  executionVersion: 3,
+  outputPath: recoveryOutput,
+  debugPaths: [],
+  previewPaths: [],
+  sizeBytes: fs.statSync(recoveryOutput).size,
+  sha256: sha256File(recoveryOutput),
+  durationSec: 30,
+  technicallyValid: true,
+  metrics: {},
+  reviewStatus: "pending",
+  warnings: [],
+  createdAt: new Date().toISOString(),
+};
+fs.writeFileSync(
+  path.join(recoveryDir, "candidate-001-validation.json"),
+  JSON.stringify({ candidate: recoveryCandidate, quality: { score: 90 } }),
+);
+const recovered = recoverUnregisteredRenderedCandidate({
+  workDir: root,
+  sessionId: recoverySession,
+  candidateId: "candidate-001",
+  candidateVersion: 1,
+  arrangementVersion: 2,
+  executionVersion: 3,
+  parentCandidateId: null,
+  workflowMode: "automatic",
+});
+assert.equal(recovered?.candidate.outputPath, recoveryOutput);
+assert.equal(readCandidateManifest(root, recoverySession).candidates.length, 1);
+
+const overwriteSession = "final-overwrite-guard";
+const overwriteDir = path.join(root, overwriteSession);
+fs.mkdirSync(overwriteDir, { recursive: true });
+const overwriteCandidatePath = path.join(overwriteDir, "candidate-001.mp3");
+fs.writeFileSync(overwriteCandidatePath, "candidate final bytes");
+registerCandidate(root, overwriteSession, {
+  ...recoveryCandidate,
+  arrangementVersion: 1,
+  executionVersion: 1,
+  outputPath: overwriteCandidatePath,
+  sizeBytes: fs.statSync(overwriteCandidatePath).size,
+  sha256: sha256File(overwriteCandidatePath),
+});
+const guardedFinalPath = path.join(overwriteDir, "medley_final.mp3");
+fs.writeFileSync(guardedFinalPath, "different existing final");
+assert.throws(
+  () => promoteCandidate(root, overwriteSession, "candidate-001"),
+  /refusing to overwrite/,
+);
+assert.equal(fs.readFileSync(guardedFinalPath, "utf8"), "different existing final");
+fs.writeFileSync(guardedFinalPath, "candidate final bytes");
+assert.equal(
+  promoteCandidate(root, overwriteSession, "candidate-001").idempotent,
+  true,
+);
+assert.equal(
+  readCandidateManifest(root, overwriteSession).finalizedCandidateId,
+  "candidate-001",
 );
 
 const discardSession = "discard-test";

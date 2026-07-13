@@ -50,18 +50,18 @@ The default configuration is version 3:
 - Style: smooth transitions.
 - Target: 10 minutes; crossfade: 5 seconds.
 - Manual capability: `contained`.
-- Manual OpenRouter fallback default: `meta-llama/llama-3.3-70b-instruct:free`.
+- Manual OpenRouter default: `google/gemini-2.5-pro`; routine fallback: `google/gemini-2.5-flash`.
 - Gemini manual default: `gemini-2.5-flash`; `gemini-2.5-pro` is also listed.
 
 Automatic roles are fixed and bounded:
 
 | Role | Primary model |
 |---|---|
-| Context | `nvidia/nemotron-3-super-120b-a12b:free` |
-| Arrangement and quality review | `nvidia/nemotron-3-ultra-550b-a55b:free` |
-| Production and correction | `nex-agi/nex-n2-pro:free` |
+| Context | `google/gemini-2.5-pro` |
+| Arrangement and quality review | `google/gemini-2.5-pro` |
+| Production and correction | `google/gemini-2.5-flash` |
 
-Each role can fall back only across that three-model roster. Provider requests are rejected before network access above 100 KiB or 24,000 estimated tokens, with a 16,000-token regression target. One bounded 429 retry may honor at most 30 seconds of `Retry-After`.
+Each role can fall back only across this two-model roster. Provider requests are rejected before network access above 100 KiB or 24,000 estimated tokens, with a 16,000-token regression target. One bounded 429 retry may honor at most 30 seconds of `Retry-After`.
 
 Manual Model mode supports the Gemini and OpenRouter models listed in `src/components/ConfigPanel.tsx`, plus a custom OpenRouter model ID. Saved provider/model pairs are validated and visibly migrated to a compatible default when necessary.
 

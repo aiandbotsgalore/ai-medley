@@ -4,9 +4,18 @@ import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import {
+  collectTransitionTrackIds,
   executeFinalizationTransaction,
   readFinalizationJournal,
 } from "./finalizationTransaction";
+
+assert.deepEqual(
+  collectTransitionTrackIds([
+    { fromTrackId: "a", toTrackId: "b" },
+    { fromTrackId: "b", toTrackId: "c" },
+  ]),
+  ["a", "b", "c"],
+);
 
 const root = fs.mkdtempSync(
   path.join(os.tmpdir(), "ai-medley-finalization-transaction-"),

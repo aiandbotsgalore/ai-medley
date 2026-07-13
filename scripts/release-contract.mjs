@@ -54,7 +54,7 @@ for (const value of [
   "Manual Model",
   "contained",
   "expert",
-  "meta-llama/llama-3.3-70b-instruct:free",
+  "google/gemini-2.5-pro",
   "gemini-2.5-flash",
 ]) {
   assert.ok(

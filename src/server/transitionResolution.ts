@@ -1,4 +1,5 @@
 import {
+  ResolvedTransitionSchema,
   TransitionExecutionRequestSchema,
   validateTransitionExecutionContext,
   type ArrangementPlan,
@@ -21,6 +22,21 @@ export type ServerTransitionExecutionRecords = Record<
   string,
   ServerTransitionExecutionRecord | undefined
 >;
+
+/** Keeps render-only scratch timings out of strict persisted manifests. */
+export function sanitizeResolvedTransitionsForManifest(
+  transitions: unknown[],
+): ResolvedTransition[] {
+  return transitions.map((transition) => {
+    const record = transition as Record<string, unknown>;
+    const {
+      _resolvedFromExitSec: _ignoredFromExitSec,
+      _resolvedToEntrySec: _ignoredToEntrySec,
+      ...persistedTransition
+    } = record;
+    return ResolvedTransitionSchema.parse(persistedTransition);
+  });
+}
 
 function assertFiniteSectionTime(
   errors: string[],

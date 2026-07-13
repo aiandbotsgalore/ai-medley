@@ -44,5 +44,10 @@ assert.match(serverSource, /maxBuffer:\s*10 \* 1024 \* 1024/);
 assert.match(serverSource, /\[apply-transition\] Wisdom logging failed:/);
 assert.match(serverSource, /\[session-metrics\] Wisdom logging failed:/);
 assert.match(serverSource, /const renderArtifacts = await runFfmpegWithStrictLogging/);
+assert.match(
+  serverSource,
+  /const httpServer = http\.createServer\(app\);[\s\S]*createViteServer\(\{[\s\S]*hmr:\s*\{\s*server:\s*httpServer\s*\}/,
+  "Vite middleware HMR must share the owned loopback HTTP server instead of using fallback port 24678",
+);
 
 console.log("reliabilityHardening tests passed");

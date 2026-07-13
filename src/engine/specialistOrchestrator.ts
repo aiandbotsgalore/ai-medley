@@ -472,6 +472,9 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
     ? makeCheckpoint({
         ...options.resume,
         activeRequestSequence: options.requestSequence,
+        selectedTrackIds: options.library.length
+          ? options.library.map((track) => track.id)
+          : options.resume.selectedTrackIds,
       })
     : makeCheckpoint({
         sessionId: options.sessionId,
@@ -482,6 +485,7 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
         attemptedModels: [],
         repairCount: 0,
         correctionCount: 0,
+        selectedTrackIds: options.library.map((track) => track.id),
         projectBrief: null,
         arrangementPlan: null,
         executionReport: null,
@@ -704,23 +708,35 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
       options.onStage("review_candidate", null, null);
       let renderPayload: unknown = null;
       try {
-        const response = await fetch("/api/render-review-candidate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            sessionId: options.sessionId,
-            arrangementVersion: arrangementPlan.arrangementVersion,
-            executionVersion,
-            parentCandidateId: currentCandidate?.candidateId ?? null,
-          }),
-          signal: options.signal,
-        });
-        renderPayload = await response.json().catch(() => ({}));
-        if (
-          !response.ok ||
-          (renderPayload as any)?.success === false ||
-          !(renderPayload as any)?.candidate
-        ) {
+        for (let registrationAttempt = 0; registrationAttempt < 2; registrationAttempt++) {
+          const response = await fetch("/api/render-review-candidate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sessionId: options.sessionId,
+              arrangementVersion: arrangementPlan.arrangementVersion,
+              executionVersion,
+              parentCandidateId: currentCandidate?.candidateId ?? null,
+            }),
+            signal: options.signal,
+          });
+          renderPayload = await response.json().catch(() => ({}));
+          if (
+            response.ok &&
+            (renderPayload as any)?.success !== false &&
+            (renderPayload as any)?.candidate
+          ) {
+            break;
+          }
+          if (
+            registrationAttempt === 0 &&
+            (renderPayload as any)?.registrationPending === true
+          ) {
+            options.onLog(
+              "Candidate audio rendered successfully; retrying manifest registration without rerendering.",
+            );
+            continue;
+          }
           const renderError = new Error(
             (renderPayload as any)?.error ||
               `Render candidate request failed (${response.status})`,
@@ -731,6 +747,11 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
         candidateData = renderPayload as typeof candidateData;
       } catch (error) {
         if (options.signal.aborted || isAbortLike(error)) throw error;
+        if ((renderPayload as any)?.registrationPending === true) {
+          throw new Error(
+            "Candidate audio rendered successfully but manifest registration could not be recovered. The rendered MP3 was preserved; do not rerender until the manifest write failure is resolved.",
+          );
+        }
         const repairErrors = normalizeRenderFailureFeedback(
           renderPayload,
           error,

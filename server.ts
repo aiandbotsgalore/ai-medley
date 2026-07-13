@@ -1,4 +1,5 @@
 import express from "express";
+import http from "node:http";
 import multer from "multer";
 import fs from "fs";
 import path from "path";
@@ -20,6 +21,7 @@ import {
   commitUploadedFiles,
   deleteLibraryEntryTransactional,
 } from "./src/server/libraryPersistence";
+import { recoverOrphanedLibraryAudio } from "./src/server/libraryRecovery";
 import {
   buildMedleyDesignPayload,
   buildTrackIntelligence,
@@ -80,15 +82,20 @@ import {
   type ArtifactReference,
 } from "./src/server/artifactInventory";
 import { resolveServerStartupConfig } from "./src/server/startupConfig";
+import { selectLibraryEntriesById } from "./src/utils/librarySelection";
+import {
+  OpenRouterPreflightError,
+  runOpenRouterPreflight,
+} from "./src/server/openRouterPreflight";
 import {
   applyCandidateReview,
   assertCandidateStorageAvailable,
-  cleanupRejectedCandidates,
   discardAutomaticSessionFiles,
   getSessionDirectory,
   nextCandidateIdentity,
   promoteCandidate,
   readCandidateManifest,
+  recoverUnregisteredRenderedCandidate,
   registerCandidate,
   sha256File,
   validateLegacyFinalOutput,
@@ -105,6 +112,7 @@ import {
   selectSessionTrackIntelligence,
 } from "./src/server/automaticSessionGuard";
 import { selectRenderTransitions } from "./src/server/renderTransitionSelection";
+import { sanitizeResolvedTransitionsForManifest } from "./src/server/transitionResolution";
 import {
   buildCanonicalAcrossfade,
   getTransitionStyleConfig,
@@ -130,6 +138,7 @@ import {
 } from "./src/server/checkpointBinding";
 import { persistOpenRouterApiKey } from "./src/server/credentialStore";
 import {
+  collectTransitionTrackIds,
   executeFinalizationTransaction,
   listFinalizationJournals,
 } from "./src/server/finalizationTransaction";
@@ -1236,6 +1245,15 @@ function buildSpecialistContext(sessionId?: string): SpecialistContext {
 
 function broadcastToSession(sessionId: string, event: string, data: any) {
   const safeData = redactSensitive(data);
+  const session = sessions[sessionId];
+  if (session) {
+    if (event === "progress") session.renderProgress = safeData;
+    if (event === "metrics") session.metrics = safeData;
+    if (event === "completed") {
+      session.status = "completed";
+      if (safeData?.summary) session.summary = safeData.summary;
+    }
+  }
   const journal =
     sessionEventJournals[sessionId] ||
     (sessionEventJournals[sessionId] = new SessionEventJournal());
@@ -1268,6 +1286,23 @@ app.put("/api/config/openrouter-key", (req, res) => {
     res.json({ success: true, hasOpenrouterApiKey: true });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
+  }
+});
+
+app.post("/api/provider/openrouter/preflight", async (_req, res) => {
+  try {
+    const result = await runOpenRouterPreflight({
+      apiKey: openrouterApiKey,
+      referer: `http://${HOST}:${PORT}`,
+    });
+    res.json({ status: "available", ...result });
+  } catch (error) {
+    if (error instanceof OpenRouterPreflightError)
+      return res.status(error.status).json({ status: error.code, error: error.message });
+    res.status(502).json({
+      status: "unavailable",
+      error: "OpenRouter could not complete the connection check.",
+    });
   }
 });
 
@@ -1360,6 +1395,7 @@ app.get("/api/session/:id/stream", (req, res) => {
       snapshot: {
         status: sessions[sessionId].status,
         metrics: sessions[sessionId].metrics || null,
+        renderProgress: sessions[sessionId].renderProgress || null,
         summary: sessions[sessionId].summary || null,
         workflowStage: sessions[sessionId].workflowStage || null,
       },
@@ -1424,6 +1460,18 @@ app.post("/api/session/:id/cancel", (req, res) => {
 
 app.get("/api/library", (req, res) => {
   res.json(getLibrary());
+});
+
+app.post("/api/library/recover", (_req, res) => {
+  try {
+    const recovered = recoverOrphanedLibraryAudio({
+      audioDir,
+      store: { read: getLibrary, write: saveLibrary },
+    });
+    res.json({ success: true, recovered });
+  } catch (error: any) {
+    res.status(500).json({ error: `Could not recover saved tracks: ${error?.message || String(error)}` });
+  }
 });
 
 app.post("/api/library", (req, res) => {
@@ -1781,9 +1829,9 @@ app.post("/api/session/finish", async (req, res) => {
         designPlan: sessionData.designPlan || null,
         finalAudioPath: resolvedPath,
         candidateId: "legacy-output",
-        tracksInvolved:
-          sessionData.designPlan?.transitions?.map((t: any) => t.fromTrackId) ||
-          [],
+        tracksInvolved: collectTransitionTrackIds(
+          sessionData.designPlan?.transitions,
+        ),
         ...(finalQuality ? { finalQuality } : {}),
       }),
       deleteCheckpoint: () =>
@@ -2020,9 +2068,43 @@ app.post("/api/audio-analysis/local", async (req, res) => {
 });
 
 app.post("/api/medley-intelligence/design", (req, res) => {
-  const { library: requestLibrary, userConstraints, sessionId } = req.body || {};
-  const source =
-    sessionId || !Array.isArray(requestLibrary) ? getLibrary() : requestLibrary;
+  const {
+    library: requestLibrary,
+    trackIds: requestedTrackIds,
+    userConstraints,
+    sessionId,
+  } = req.body || {};
+  const persistedLibrary = getLibrary();
+  let source =
+    sessionId || !Array.isArray(requestLibrary)
+      ? persistedLibrary
+      : requestLibrary;
+  if (sessionId && !Array.isArray(requestedTrackIds)) {
+    return res.status(400).json({
+      error: "Automatic design requires explicit selected track IDs.",
+    });
+  }
+  if (sessionId) {
+    const trackIds: string[] = (requestedTrackIds as unknown[]).filter(
+      (value: unknown): value is string => typeof value === "string",
+    );
+    const uniqueIds = [...new Set(trackIds)];
+    if (
+      uniqueIds.length !== requestedTrackIds.length ||
+      uniqueIds.length < 2 ||
+      uniqueIds.length > 25
+    ) {
+      return res.status(400).json({
+        error: "Automatic design requires 2 to 25 unique selected track IDs.",
+      });
+    }
+    source = selectLibraryEntriesById(persistedLibrary, uniqueIds);
+    if (source.length !== uniqueIds.length) {
+      return res.status(400).json({
+        error: "One or more selected tracks are no longer in the library.",
+      });
+    }
+  }
   const tracks = source
     .map((entry: any) => {
       if (entry.medleyIntelligence) return entry.medleyIntelligence;
@@ -3020,6 +3102,14 @@ app.post("/api/render-review-candidate", async (req, res) => {
     }
     const manifest = readCandidateManifest(workDir, sessionId);
     const { candidateId, candidateVersion } = nextCandidateIdentity(manifest);
+    const immutableOutputPath = path.join(
+      sessionWorkDir,
+      `${candidateId}.mp3`,
+    );
+    const validationPath = path.join(
+      sessionWorkDir,
+      `${candidateId}-validation.json`,
+    );
     assertCandidateStorageAvailable(workDir, sessionId, 150 * 1024 * 1024);
     const safeMp3Name = `${candidateId}.mp3.part`;
     const outputPath = path.join(sessionWorkDir, safeMp3Name);
@@ -3049,6 +3139,36 @@ app.post("/api/render-review-candidate", async (req, res) => {
     }
 
     try {
+      const recovered = recoverUnregisteredRenderedCandidate({
+        workDir,
+        sessionId,
+        candidateId,
+        candidateVersion,
+        arrangementVersion,
+        executionVersion,
+        parentCandidateId,
+        workflowMode: legacy ? "legacy" : "automatic",
+      });
+      if (recovered) {
+        sessions[sessionId].workflowStage = "quality_review";
+        sessions[sessionId].currentCandidate = recovered.candidate;
+        logToSession(
+          sessionId,
+          `[candidate-render] Recovered completed ${candidateId} after interrupted manifest registration.`,
+        );
+        return res.json({
+          success: true,
+          candidate: recovered.candidate,
+          manifest: recovered.manifest,
+          quality: recovered.quality,
+          resolvedTransitions: recovered.candidate.resolvedTransitions,
+          outputPath: recovered.candidate.outputPath,
+          renderPath: "recovered-candidate-registration",
+          recoveredAfterRegistrationFailure: true,
+          message:
+            "Recovered the existing rendered candidate without rerendering audio.",
+        });
+      }
       const selectedTransitions = selectRenderTransitions({
         sessionId,
         session,
@@ -3599,10 +3719,6 @@ app.post("/api/render-review-candidate", async (req, res) => {
       delete activeRenderProcesses[sessionId];
       const renderElapsed = (Date.now() - renderStartTime) / 1000;
 
-      const immutableOutputPath = path.join(
-        sessionWorkDir,
-        `${candidateId}.mp3`,
-      );
       if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size <= 0) {
         throw new Error("Candidate render produced no usable audio file");
       }
@@ -3629,17 +3745,15 @@ app.post("/api/render-review-candidate", async (req, res) => {
         .map((item: any) => item.outputPath)
         .map((item: unknown) => getServerGeneratedPreviewPath(sessionId, item))
         .filter((item: string | null): item is string => item !== null);
-      const validationPath = path.join(
-        sessionWorkDir,
-        `${candidateId}-validation.json`,
-      );
       const candidate = {
         candidateId,
         candidateVersion,
         parentCandidateId,
         arrangementVersion,
         executionVersion,
-        resolvedTransitions: automaticSession ? transitions : undefined,
+        resolvedTransitions: automaticSession
+          ? sanitizeResolvedTransitionsForManifest(transitions)
+          : undefined,
         outputPath: immutableOutputPath,
         debugPaths: [
           renderArtifacts.graphFile,
@@ -3732,6 +3846,8 @@ app.post("/api/render-review-candidate", async (req, res) => {
       });
     } catch (err: any) {
       fs.rmSync(outputPath, { force: true });
+      const registrationPending =
+        fs.existsSync(immutableOutputPath) && fs.existsSync(validationPath);
       console.error(
         "[candidate-render] HARD FAIL (no fallback, no silent concat):",
         err.message,
@@ -3768,9 +3884,13 @@ app.post("/api/render-review-candidate", async (req, res) => {
       res.status(500).json({
         success: false,
         error: err.message || "Failed to render review candidate",
+        renderSucceeded: registrationPending,
+        registrationPending,
         noFallback: true,
         renderPath: "pure-clean-mvp-failed",
-        note: "No medley file was written by this handler. Any existing .mp3 in the folder came from outside the pure-clean path.",
+        note: registrationPending
+          ? "The rendered candidate was preserved and can be recovered by retrying this same registration request."
+          : "No new candidate MP3 was completed by this request.",
         logFiles: {
           error: path.join(sessionWorkDir, `${artifactPrefix}-error.json`),
           graph: path.join(sessionWorkDir, `${artifactPrefix}-filtergraph.txt`),
@@ -3837,8 +3957,9 @@ function finalizeRegisteredCandidate(
       designPlan: session.designPlan || null,
       finalAudioPath,
       candidateId,
-      tracksInvolved:
-        session.designPlan?.transitions?.map((t: any) => t.fromTrackId) || [],
+      tracksInvolved: collectTransitionTrackIds(
+        session.designPlan?.transitions,
+      ),
     }),
     deleteCheckpoint: () =>
       fs.rmSync(path.join(checkpointDir, `${sessionId}.json`), { force: true }),
@@ -3867,12 +3988,6 @@ app.post("/api/finalize-medley", async (req, res) => {
         candidateId,
         summary,
       );
-      let cleanupWarning: string | null = null;
-      try {
-        cleanupRejectedCandidates(workDir, sessionId);
-      } catch (error: any) {
-        cleanupWarning = error.message;
-      }
       broadcastToSession(sessionId, "completed", { summary });
       return res.json({
         success: true,
@@ -3880,7 +3995,7 @@ app.post("/api/finalize-medley", async (req, res) => {
         candidateId,
         sha256: transaction.journal.sha256,
         idempotent: transaction.idempotent,
-        cleanupWarning,
+        cleanupWarning: null,
       });
     });
   } catch (error: any) {
@@ -4221,10 +4336,11 @@ function reconcileIncompleteFinalizations() {
 reconcileIncompleteFinalizations();
 
 async function startServer() {
+  const httpServer = http.createServer(app);
   // Vite integration
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, hmr: { server: httpServer } },
       appType: "spa",
     });
     app.use(vite.middlewares);
@@ -4235,7 +4351,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, HOST, () => {
+  httpServer.listen(PORT, HOST, () => {
     console.log(`Server running on http://${HOST}:${PORT}`);
   });
 }

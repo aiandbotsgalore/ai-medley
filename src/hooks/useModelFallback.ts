@@ -45,11 +45,8 @@ export function useModelFallback(config: MedleyConfig) {
         ? [config.model, "gemini-2.5-flash", "gemini-2.5-pro"]
         : [
             config.model,
-            "qwen/qwen3-coder:free",
-            "deepseek/deepseek-v4-flash:free",
-            "nousresearch/hermes-3-llama-3.1-405b:free",
-            "nvidia/nemotron-3-super-120b-a12b:free",
-            "meta-llama/llama-3.3-70b-instruct:free",
+            "google/gemini-2.5-flash",
+            "google/gemini-2.5-pro",
           ]
     ).filter((m, i, arr) => arr.indexOf(m) === i);
   }, [config.provider, config.model]);

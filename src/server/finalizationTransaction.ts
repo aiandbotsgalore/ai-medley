@@ -27,6 +27,21 @@ export type FinalizationJournal = {
   completedAt: string | null;
 };
 
+export function collectTransitionTrackIds(
+  transitions: Array<{ fromTrackId?: unknown; toTrackId?: unknown }> | null | undefined,
+) {
+  return [
+    ...new Set(
+      (transitions ?? []).flatMap((transition) =>
+        [transition.fromTrackId, transition.toTrackId].filter(
+          (trackId): trackId is string =>
+            typeof trackId === "string" && trackId.length > 0,
+        ),
+      ),
+    ),
+  ];
+}
+
 type FinalizationEntry = Record<string, any>;
 
 export type FinalizationTransactionInput = {

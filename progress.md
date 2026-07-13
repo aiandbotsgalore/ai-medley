@@ -237,3 +237,194 @@
 - Phase 11 inventory proved `@google/generative-ai` is the sole dead duplicate SDK and identified stale README/AGENTS/CLAUDE environment, packaging, provider, capability, and persistence guidance. `.env.example` remains protected and will not be edited.
 - Completed Phase 11: removed the proven-dead legacy Gemini SDK, Motion runtime, and unused Autoprefixer declaration; added checked current operations/API/plan-history documentation.
 - Verified a new G:-only clean install (242 packages), full tests, type-check, build, production start, and offline zero-vulnerability audit; main checks and protected hashes pass. All implementation phases are complete.
+## 2026-07-10 — OpenRouter connection preflight
+
+- Added a user-triggered Configuration-panel connection test backed by a local
+  server route and a minimal Gemini 2.5 Flash request (8 output-token cap).
+- Added mocked success, authentication, insufficient-credit, rate-limit, and
+  missing-credential tests. No live provider request was made.
+- Verification passed: `npm test`, `npm run lint`, and `git diff --check`.
+## 2026-07-10 — Configuration declutter
+
+- Reduced the default Configuration screen to the recommended automatic mix,
+  connection, local analysis, common style choices, and timing controls.
+- Moved manual model/provider, cloud-analysis, and uncommon style controls to
+  Advanced controls without removing existing functionality.
+- Verified with `npm test`, `npm run lint`, and `git diff --check`.
+- Follow-up: legacy saved Manual mode no longer expands provider, model, or
+  shell-capability controls. It now offers one compact action to switch to the
+  recommended automatic mix; verification was rerun successfully.
+## 2026-07-10 — Library recovery and per-mix selection
+
+- Diagnosed the empty sidebar: `library/db.json` was an empty array while three
+  MP3 files remained under `library/audio/`. Historical backup records pointed
+  only to missing audio and were left untouched.
+- Added and locally invoked a non-destructive recovery route. It registered the
+  three existing MP3s without modifying their bytes.
+- Added selected-for-this-mix checkboxes, count, select-all/clear, and run-time
+  filtering so only selected tracks are analyzed and rendered.
+- Verified with `npm test`, `npm run lint`, and a local API recovery response.
+## 2026-07-10 — Responsive UI polish
+
+- Rebuilt Configuration as a fixed-header, scrollable-content, fixed-action
+  dialog and compacted the common style controls into a desktop grid.
+- Bounded the desktop workspace to the viewport and refined library/footer
+  separation for a cleaner production-console layout.
+- Verified with tests/type-checking and Playwright at 1440×900 and 1366×768;
+  the Apply action remained visible in both viewports.
+## 2026-07-11 — Candidate manifest timing-field fix
+
+- Fixed automatic candidate registration rejecting render-only
+  `_resolvedFromExitSec` / `_resolvedToEntrySec` fields.
+- Added a strict manifest sanitizer and a regression test using the exact
+  leaked-field shape reported by the failed run.
+- Verified with `npm test`, `npm run lint`, and restarted the local dev server.
+# 2026-07-11 — End-to-end medley workflow audit
+
+- Drafted a release-readiness follow-up plan at the user's request. Status is
+  awaiting approval; no implementation, test execution, provider call, git
+  staging, commit, push, or protected-data operation was performed.
+
+- Read the repository instructions and the code-review/file-planning skills.
+- Ran session catch-up, captured the dirty worktree, branch, package scripts,
+  and source/test inventory without touching protected data.
+- Began mapping the real client/server workflow and preserving all prior edits.
+- Baseline full offline tests passed in 18.8 seconds; captured four `dist/`
+  file hashes for later restoration/verification.
+- Traced selected-track flow, automatic/manual orchestration, provider audits,
+  SSE replay, candidate rendering/manifest registration, and final promotion.
+- Confirmed six scoped workflow defects and began focused fixes/tests.
+- Implemented explicit selected-track authority and checkpoint binding for
+  Automatic mode and safe resume filtering.
+- Removed the unnecessary provider turn after Manual finalization and preserved
+  failed-tool streaks so validation/execution retries can reach model fallback.
+- Added SSE snapshot hydration and last-event replay on reconnect.
+- Added recoverable candidate registration, bounded same-request retries,
+  terminal handling when registration remains unavailable, and pre-existing
+  final overwrite refusal with interrupted-promotion recovery.
+- Stopped automatic deletion of rejected candidate artifacts and fixed wisdom
+  track attribution to include both transition endpoints.
+- Full tests, TypeScript, diff checks, controlled build/start, exact `dist/`
+  restoration, and isolated synthetic upload/analyze/design/render/register/
+  finalize smoke passed. No real provider request was made.
+# 2026-07-11 — Release-plan reconciliation
+
+- Verified the Git repository, branch, commits, ignore rules, tracked protected
+  paths, payload audit, and security-test wiring.
+- Split the 781-line mixed task plan into a concise active plan and historical
+  archive.
+- Moved the open Bluetooth reboot/SFC follow-up to a separate operations note.
+- Removed stale model recommendations and corrected the obsolete Git warning.
+- Added unrelated-change disposition, payload/security/secret gates,
+  disposable-build policy, and live-run pass/abort criteria.
+- Release execution remains paused pending user approval.
+- Final combined documentation check returned exit 1 only because `rg` found
+  none of the stale model/Bluetooth/status strings; `git diff --check` itself
+  passed. Verified the no-match result separately rather than treating it as a
+  document failure.
+
+## Release execution
+
+- Phase 1 started after uninterrupted execution authorization.
+- Initial protected fingerprinting encountered the active
+  `workdir/current-dev.stderr.log` lock. The existing process was not stopped.
+  Retry will use a read-sharing hash stream and mark active dev logs volatile so
+  they do not create a false protected-data comparison failure.
+- The first de-tracking guard expected seven tracked protected paths but the
+  inventory contains eight (three library JSON stores and five workdir files).
+  The command stopped before changing the index. Correct the verified count and
+  rerun the index-only operation.
+- Workdir index removal succeeded, but three library JSON files remained because
+  they carried Git's skip-worktree flag. The first local hash-check helper name
+  `H` collided with PowerShell's `Get-History` alias, so that verification was
+  invalid despite the files remaining present. Use a non-conflicting helper,
+  verify the five workdir hashes, clear skip-worktree only on the three library
+  paths, then remove them from the index and verify their hashes.
+- Phase 1 complete: classified the dirty tree as cohesive release work plus
+  requested documentation housekeeping; captured a 491-file protected manifest
+  (489 stable files, two active volatile dev logs; stable root SHA-256
+  `CA347EADA6999C9C86D890B130108C39D98282E19B36529179D34728658F09B8`);
+  added full library/provider-audit ignore rules; removed eight protected paths
+  from the Git index; and verified all eight local files still match baseline.
+- The first permanent end-to-end test reached finalization successfully, then
+  asserted track attribution against the first wisdom record. Candidate-render
+  wisdom legitimately precedes completion wisdom, so the test must select the
+  `completed_medley` record before checking both track IDs.
+- Browser acceptance exposed `0/3 selected` after a refreshed initial library
+  load. `fetchLibrary` mutated selection refs inside a React state updater;
+  Strict Mode can invoke that updater more than once and erase the default
+  selection. Move reconciliation/ref updates outside the updater, centralize
+  selection commits, and add a repeated-initial-load regression assertion.
+- Browser console inspection found Vite websocket failures on port 24678. The
+  inline `createViteServer({ server: { middlewareMode: true } })` object
+  overrode the configured `hmr: false`. Set `hmr: false` at the real runtime
+  boundary and add a reliability source contract.
+- The first resolved-Vite-config probe used top-level await through tsx's CJS
+  eval path and failed before inspecting config. Retry with an async IIFE.
+- Resolved config confirmed `hmr:false`, but Vite 6 middleware mode still
+  injects `/@vite/client`, whose client code selects fallback port 24678 even
+  when the HMR server is disabled. Switch the dev integration to `appType:
+  "custom"`, transform the SPA index explicitly, and remove only the injected
+  disabled-HMR client script.
+- CSS transformation still imported `/@vite/client` for style injection, so
+  stripping the HTML client was insufficient. Replace the interim approach with
+  the supported single-server design: create one Node HTTP server, pass it to
+  Vite's HMR configuration, and bind that same server on loopback. This avoids
+  fallback port 24678 while retaining required dev CSS injection.
+- The first restart command after the single-server change used PowerShell's
+  reserved `$PID` variable name and stopped before touching the server. Tests
+  and TypeScript had already passed. Retry with `$ownerPid`.
+- The first full mocked Automatic browser run reached model orchestration, but
+  the temporary browser fixture used an outdated strategy shape and crashed
+  `MedleyMatchPanel` while mapping `orderedTracks`. Production code was not at
+  fault; update the disposable fixture to the current `MedleyOrderStrategy`
+  contract and restart the browser scenario with clean console state.
+- The second mocked Automatic browser run correctly used only two selected
+  tracks and rendered the Medley Match panel, then stopped because the temporary
+  checkpoint mock returned `{success:true}` while the client requires
+  `{ok:true}`. Update the disposable checkpoint response and restart cleanly.
+- The third mocked Automatic run passed checkpoint persistence but the fixture
+  answered with historical tool name `submit_arrangement_plan`; the current
+  arrangement contract requires `set_design_plan`. Correct the disposable mock
+  and restart with clean state.
+- Clean browser acceptance passed with zero console errors: three recovered
+  tracks loaded selected, one was deselected, Automatic Specialist Team used
+  exactly the remaining two, completed, exposed the MP3 download, and populated
+  history. The final audio route was mocked at the browser transport boundary.
+- Browser acceptance also exposed and fixed two release defects: Strict Mode
+  could erase initial track selection because refs were mutated inside a state
+  updater; Vite middleware could connect to a stray port 24678 because it was
+  not sharing the Express HTTP server. Focused regressions and a clean browser
+  rerun now pass.
+- Focused recovery/security suites, full `npm test`, `npm run test:e2e`, explicit
+  78-request payload audit, Phase 34 security tests, `npm run lint`, and
+  `git diff --check` passed. Provider behavior remained fully mocked.
+- A disposable 172-file repository copy contained no `library/`, `workdir/`,
+  `.env*`, or `dist/`; `npm ci`, `npm run build`, and isolated
+  `npm run test:production-start` passed on loopback port 31410.
+- The secret gate found no credential value in the proposed diff, isolated
+  build, final browser capture, or protected text logs/audits. The intentional
+  redaction-test canary remained test-only; a minified `pageToken` assignment
+  was classified as a false positive. `.env` and `.env.local` are ignored and
+  untracked; only `.env.example` is tracked.
+- Final protected-data comparison passed: all 489 stable files match their
+  baseline SHA-256 values, and the complete 491-path inventory has no added or
+  missing path. The eight index-only removals still exist locally with their
+  original bytes.
+- **Release handoff blocker (2026-07-12):** a repeat protected-data comparison
+  after the final gate found two stable library source MP3s different from the
+  original baseline. Each is 521 bytes larger and has a July 12 modification
+  time. Only path/length/timestamp metadata was inspected; no source-audio
+  contents were opened, restored, copied, deleted, staged, or committed. No AI
+  Medley server process was running at the time of inspection. Do not proceed
+  with commit/push/PR until the user directs preservation or recovery.
+- Read-only follow-up: neither affected UUID-named MP3 is tracked by Git or has
+  Git history, both remain parseable as MP3, and the additional 521 bytes are
+  not a standard ID3/TAG suffix. An exact-name whole-`G:` duplicate search was
+  bounded and stopped without a result before it could become an unbounded disk
+  operation. No source bytes changed during investigation.
+- Under the user's instruction to use the recommended path, current source
+  bytes are preserved in place and explicitly excluded from the code-only
+  handoff. A focused Documents/OneDrive/other-`G:\\ai-medley*` exact-name
+  search found no backup duplicate. The integrity exception remains documented
+  as a follow-up risk rather than being hidden by an altered baseline.

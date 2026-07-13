@@ -1,9 +1,9 @@
 import { z } from "zod";
 
 export const SPECIALIST_MODELS = {
-  context: "nvidia/nemotron-3-super-120b-a12b:free",
-  arrangement: "nvidia/nemotron-3-ultra-550b-a55b:free",
-  production: "nex-agi/nex-n2-pro:free",
+  context: "google/gemini-2.5-pro",
+  arrangement: "google/gemini-2.5-pro",
+  production: "google/gemini-2.5-flash",
 } as const;
 
 export type SpecialistRole = keyof typeof SPECIALIST_MODELS;
@@ -11,18 +11,15 @@ export type SpecialistRole = keyof typeof SPECIALIST_MODELS;
 export const SPECIALIST_FALLBACKS: Record<SpecialistRole, string[]> = {
   context: [
     SPECIALIST_MODELS.context,
-    SPECIALIST_MODELS.arrangement,
     SPECIALIST_MODELS.production,
   ],
   arrangement: [
     SPECIALIST_MODELS.arrangement,
-    SPECIALIST_MODELS.context,
     SPECIALIST_MODELS.production,
   ],
   production: [
     SPECIALIST_MODELS.production,
     SPECIALIST_MODELS.arrangement,
-    SPECIALIST_MODELS.context,
   ],
 };
 
@@ -252,6 +249,7 @@ export const AutomaticWorkflowCheckpointSchema = z.strictObject({
   attemptedModels: z.array(z.string().trim().min(1).max(300)).max(20),
   repairCount: z.number().int().nonnegative(),
   correctionCount: z.number().int().min(0).max(MAX_CORRECTION_RETRIES),
+  selectedTrackIds: z.array(Id).min(2).max(25).optional(),
   projectBrief: ProjectBriefSchema.nullable(),
   arrangementPlan: ArrangementPlanSchema.nullable(),
   executionReport: ExecutionReportSchema.nullable(),

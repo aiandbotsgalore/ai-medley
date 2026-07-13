@@ -8,6 +8,7 @@ coverage/
 !.env.example
 .aider*
 workdir/
+library/
 library/audio/
 repomix-output.txt
 repomix.config.json
@@ -21,3 +22,4 @@ mcps/
 
 # local data backups
 library/*.bak
+provider-payload-audit*.json

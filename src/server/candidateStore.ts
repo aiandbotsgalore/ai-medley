@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import {
   CandidateManifestSchema,
   MAX_COMPLETE_CANDIDATES,
+  RenderCandidateSchema,
   chooseBestCandidate,
   type CandidateManifest,
   type QualityReview,
@@ -325,6 +326,79 @@ export function registerCandidate(
   return next;
 }
 
+export function recoverUnregisteredRenderedCandidate(options: {
+  workDir: string;
+  sessionId: string;
+  candidateId: string;
+  candidateVersion: number;
+  arrangementVersion: number;
+  executionVersion: number;
+  parentCandidateId: string | null;
+  workflowMode: "automatic" | "legacy";
+}) {
+  const {
+    workDir,
+    sessionId,
+    candidateId,
+    candidateVersion,
+    arrangementVersion,
+    executionVersion,
+    parentCandidateId,
+    workflowMode,
+  } = options;
+  const sessionDir = getSessionDirectory(workDir, sessionId);
+  const outputPath = path.join(sessionDir, `${candidateId}.mp3`);
+  const validationPath = path.join(
+    sessionDir,
+    `${candidateId}-validation.json`,
+  );
+  if (!fs.existsSync(outputPath) && !fs.existsSync(validationPath)) return null;
+  if (!fs.existsSync(outputPath) || !fs.existsSync(validationPath)) {
+    throw new Error(
+      `Incomplete unregistered candidate ${candidateId} was preserved for inspection`,
+    );
+  }
+  for (const filePath of [outputPath, validationPath]) {
+    const stat = fs.lstatSync(filePath);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw new Error(`Unregistered candidate artifact is not a regular file`);
+    }
+    if (fs.realpathSync.native(path.dirname(filePath)) !== fs.realpathSync.native(sessionDir)) {
+      throw new Error("Unregistered candidate artifact escapes its session directory");
+    }
+  }
+  const validation = JSON.parse(fs.readFileSync(validationPath, "utf8"));
+  const parsed = RenderCandidateSchema.parse(validation?.candidate);
+  if (
+    parsed.candidateId !== candidateId ||
+    parsed.candidateVersion !== candidateVersion ||
+    parsed.arrangementVersion !== arrangementVersion ||
+    parsed.executionVersion !== executionVersion ||
+    parsed.parentCandidateId !== parentCandidateId ||
+    path.resolve(parsed.outputPath) !== path.resolve(outputPath)
+  ) {
+    throw new Error(
+      `Unregistered candidate ${candidateId} does not match the active render request`,
+    );
+  }
+  const stat = fs.statSync(outputPath);
+  if (stat.size !== parsed.sizeBytes || sha256File(outputPath) !== parsed.sha256) {
+    throw new Error(`Unregistered candidate ${candidateId} failed integrity validation`);
+  }
+  const manifest = registerCandidate(
+    workDir,
+    sessionId,
+    parsed,
+    workflowMode,
+  );
+  return {
+    candidate: parsed,
+    manifest,
+    quality: validation?.quality ?? null,
+    qualityGate: validation?.qualityGate ?? null,
+  };
+}
+
 export function applyCandidateReview(
   workDir: string,
   sessionId: string,
@@ -383,6 +457,14 @@ export function promoteCandidate(
   if (!candidate) {
     throw new Error("Candidate is missing or technically invalid");
   }
+  if (
+    manifest.finalizedCandidateId &&
+    manifest.finalizedCandidateId !== candidateId
+  ) {
+    throw new Error(
+      `Session is already finalized with ${manifest.finalizedCandidateId}`,
+    );
+  }
   if (options.requireApproved && candidate.reviewStatus !== "approved") {
     throw new Error("Automatic finalization requires an approved candidate");
   }
@@ -431,14 +513,30 @@ export function promoteCandidate(
     return { manifest, finalPath, idempotent: true };
   }
   const partPath = path.join(sessionDir, "medley_final.mp3.part");
-  fs.copyFileSync(source, partPath);
-  const copiedSize = fs.statSync(partPath).size;
-  const copiedHash = sha256File(partPath);
-  if (copiedSize !== sizeBytes || copiedHash !== sourceHash) {
-    fs.rmSync(partPath, { force: true });
-    throw new Error("Final copy integrity check failed");
+  let recoveredInterruptedPromotion = false;
+  if (fs.existsSync(finalPath)) {
+    const existing = fs.lstatSync(finalPath);
+    if (
+      existing.isSymbolicLink() ||
+      !existing.isFile() ||
+      existing.size !== sizeBytes ||
+      sha256File(finalPath) !== sourceHash
+    ) {
+      throw new Error(
+        "A different final output already exists; refusing to overwrite it",
+      );
+    }
+    recoveredInterruptedPromotion = true;
+  } else {
+    fs.copyFileSync(source, partPath);
+    const copiedSize = fs.statSync(partPath).size;
+    const copiedHash = sha256File(partPath);
+    if (copiedSize !== sizeBytes || copiedHash !== sourceHash) {
+      fs.rmSync(partPath, { force: true });
+      throw new Error("Final copy integrity check failed");
+    }
+    fs.renameSync(partPath, finalPath);
   }
-  fs.renameSync(partPath, finalPath);
   const next: CandidateManifest = {
     ...manifest,
     selectedCandidateId: candidateId,
@@ -447,7 +545,11 @@ export function promoteCandidate(
     updatedAt: new Date().toISOString(),
   };
   writeCandidateManifestAtomic(workDir, sessionId, next);
-  return { manifest: next, finalPath, idempotent: false };
+  return {
+    manifest: next,
+    finalPath,
+    idempotent: recoveredInterruptedPromotion,
+  };
 }
 
 export function cleanupRejectedCandidates(workDir: string, sessionId: string) {

@@ -240,3 +240,114 @@ Sources:
 - Binding to `127.0.0.1` removes local-network access while preserving normal use through `localhost`.
 - Local-origin validation now accepts the app's HTTP port on `localhost`, `127.0.0.1`, and IPv6 loopback only.
 - Mutating requests with a cross-site browser signal are rejected even when the request omits an Origin header.
+## 2026-07-10 — Empty library diagnosis
+
+- Active `library/db.json` contains an empty JSON array, which is why the UI
+  has no source tracks.
+- `library/db.json.bak` contains one record and `library/db.backup.json`
+  contains four, but all referenced audio files are absent. They must be
+  preserved as evidence, not restored as broken entries.
+- `library/audio/` contains three intact orphaned MP3s. The recovery path is to
+  reconstruct valid library metadata from those existing files without deleting
+  or changing any source audio.
+# 2026-07-11 — End-to-end medley workflow audit
+
+- The starting worktree is intentionally dirty with prior in-scope workflow
+  changes. Preserve and audit them in place; do not reset or overwrite them.
+- Current uncommitted areas include library recovery/per-mix selection,
+  OpenRouter preflight/config UI, model fallback, candidate transition
+  sanitization, documentation, and planning records.
+- The full offline test script already covers most workflow boundaries with
+  direct TypeScript test executables; provider tests are mocked and must remain
+  offline.
+- Baseline `npm test` passes (78 provider-payload request shapes audited); no
+  real provider call was made. Baseline `dist/` SHA-256 fingerprints were
+  captured before any controlled build.
+- Confirmed high-impact selection failure: `runAutomaticWorkflow` supplies a
+  `sessionId` to `/api/medley-intelligence/design`, and that route selects the
+  entire persisted library whenever `sessionId` is present. The selected UI
+  subset is therefore discarded before automatic context/arrangement work.
+- Confirmed false-failure path in Manual mode: after candidate promotion sets
+  the UI to completed, the loop still makes one more provider request to report
+  the tool result. If that unnecessary request fails, the outer catch changes
+  the already-completed run to `error` even though the final MP3 exists.
+- Confirmed retry-state failure in Manual mode: tool execution exceptions
+  increment the failure streak, but the batch unconditionally resets that
+  streak before the next model turn. Repeated invalid tool output therefore
+  cannot reach the intended fallback threshold.
+- Confirmed SSE recovery gap: the server emits a connected snapshot and keeps
+  a replay journal, but the client ignores the snapshot and creates reconnect
+  URLs without the last event ID. A reconnect can miss progress/completion and
+  leave UI state behind server state.
+- Confirmed candidate transaction gap: rendering renames the `.part` output to
+  immutable `candidate-NNN.mp3` before strict manifest registration. A
+  registration/write failure preserves an unregistered MP3 but reports that no
+  medley was written; the next correction attempts a new render instead of
+  recovering the completed candidate.
+- Confirmed final overwrite risk: if `medley_final.mp3` exists but the manifest
+  write was interrupted, promotion blindly replaces the path. It should recover
+  an identical file and reject a different pre-existing file.
+- Confirmed retention violation: successful finalization calls
+  `cleanupRejectedCandidates`, silently deleting non-selected candidate audio
+  and diagnostics. Candidate artifacts are protected and should be preserved.
+- Confirmed wisdom attribution bug: both legacy and candidate finalization
+  recorded only each transition's `fromTrackId`, omitting the final destination
+  track. Completion wisdom now records the unique union of both endpoints.
+- Final verification passed: full `npm test` (including 78 mocked/offline
+  provider request shapes), `npm run lint`, `git diff --check`, controlled
+  `npm run build`, and isolated `npm run test:production-start`.
+- The controlled build was restored exactly: all four baseline `dist/` paths,
+  sizes, and SHA-256 hashes match the pre-build snapshot.
+- Isolated runtime smoke used three generated 24-second WAVs and a temporary
+  `AI_MEDLEY_DATA_ROOT`: three uploads succeeded, only two selected tracks
+  entered server-authoritative design, FFmpeg rendered and registered
+  `candidate-001`, and final promotion produced an exact candidate/final hash
+  match. The owned server and temporary root were removed afterward.
+# 2026-07-11 — Release-plan reconciliation
+
+- Git is active at `G:/ai-medley--main` on `payload-optimization`; the archived
+  “not a git repository” statement was historical.
+- `dist/`, `.env*`, `workdir/`, and `library/audio/` are ignored, but protected
+  library JSON files and several old workdir artifacts are already tracked.
+  Safe correction requires approval-gated index-only de-tracking plus local
+  hash verification; ignore rules alone are insufficient.
+- `npm test` invokes the provider payload audit and Phase 34 security suites.
+  The active plan now names them explicitly and adds a canary secret-leak gate.
+- Historical payload coverage was 117 requests; the current bounded two-model
+  roster produces 78. The 16,000-token regression target and 24,000-token/
+  100-KiB hard limits remain authoritative.
+- `dist/` is ignored and untracked. Future release builds should run in a
+  disposable copy rather than repeatedly mutating/restoring workspace `dist/`.
+
+# 2026-07-11 — Release verification findings
+
+- React Strict Mode can invoke functional state updaters more than once. The
+  prior library refresh path mutated selection refs inside such an updater, so
+  a normal initial refresh could show `0/3 selected`. Selection reconciliation
+  now happens before the updater and commits state/ref authority together.
+- Vite middleware mode still injects its client when HMR is disabled, and the
+  client can fall back to port 24678. Express and Vite now share one Node HTTP
+  server, keeping dev HMR on the owned loopback listener without a stray socket.
+- Clean mocked browser acceptance completed Automatic Specialist Team mode with
+  exactly two selected tracks, truthful completed state, history, and download,
+  with zero console errors. Manual completion/no-post-final-provider behavior,
+  fallback, correction, resume, and SSE branches are covered by focused mocked
+  contract tests rather than paid/live calls.
+- The current payload matrix contains 78 requests because the bounded roster is
+  two models rather than the historical three-model/117-request matrix. The
+  largest current request is 12,964 bytes / 4,314 estimated tokens, below the
+  16,000-token regression target and hard pre-network limits.
+- Disposable install/build/start and the real-FFmpeg synthetic end-to-end test
+  passed. No real provider request was made. Protected data remained unchanged:
+  489 stable hashes match, with the same complete 491-path inventory.
+
+# 2026-07-12 — Protected source-audio integrity blocker
+
+- A post-gate comparison detected two library source MP3s whose SHA-256 and
+  length no longer match the release baseline. Both are valid MP3s and are 521
+  bytes longer; the appended bytes do not begin with standard ID3/TAG metadata.
+  The UUID files are untracked and have no Git history, so Git cannot recover
+  their earlier bytes. A bounded read-only exact-name `G:` search found no
+  duplicate before it was stopped to avoid an unbounded scan. The source of the
+  mutation remains undetermined, and release handoff must remain blocked until
+  the current bytes are explicitly accepted or a verified backup is supplied.

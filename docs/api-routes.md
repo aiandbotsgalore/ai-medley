@@ -32,12 +32,14 @@ This list is generated from the Express registrations in `server.ts` and checked
 - `POST /api/file-write`
 - `POST /api/finalize-medley`
 - `POST /api/library`
+- `POST /api/library/recover`
 - `POST /api/library/analysis`
 - `POST /api/library/cache`
 - `POST /api/medley-intelligence/design`
 - `POST /api/medley-quality`
 - `POST /api/provider/gemini`
 - `POST /api/provider/openrouter`
+- `POST /api/provider/openrouter/preflight`
 - `POST /api/render-review-candidate`
 - `POST /api/section-pair-evaluate`
 - `POST /api/session/:id/cancel`

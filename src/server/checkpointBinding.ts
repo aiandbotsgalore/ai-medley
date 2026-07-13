@@ -12,7 +12,8 @@ function digest(value: unknown) {
 
 export function buildResumeBinding(checkpoint: any, library: any[]): ResumeBinding {
   const trackIds = [
-    ...(checkpoint?.projectBrief?.recommendedOrderIds ||
+    ...(checkpoint?.selectedTrackIds ||
+      checkpoint?.projectBrief?.recommendedOrderIds ||
       checkpoint?.arrangementPlan?.orderedTrackIds ||
       []),
   ].sort();

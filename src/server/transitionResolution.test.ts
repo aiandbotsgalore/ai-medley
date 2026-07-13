@@ -3,7 +3,10 @@ import {
   ArrangementPlanSchema,
   type SpecialistContext,
 } from "../types/specialistWorkflow";
-import { resolveAutomaticRenderTransitions } from "./transitionResolution";
+import {
+  resolveAutomaticRenderTransitions,
+  sanitizeResolvedTransitionsForManifest,
+} from "./transitionResolution";
 
 const plan = ArrangementPlanSchema.parse({
   schemaVersion: 1,
@@ -80,6 +83,17 @@ assert.equal(
   resolved.transitions[0].outputPath,
   "workdir/session-1/transition.mp3",
 );
+const renderTimeTransition = {
+  ...resolved.transitions[0],
+  _resolvedFromExitSec: 79,
+  _resolvedToEntrySec: 12,
+};
+const persisted = sanitizeResolvedTransitionsForManifest([renderTimeTransition]);
+assert.equal(persisted.length, 1);
+assert.equal(persisted[0].actualFromExitSec, 79);
+assert.equal(persisted[0].actualToEntrySec, 12);
+assert.equal("_resolvedFromExitSec" in persisted[0], false);
+assert.equal("_resolvedToEntrySec" in persisted[0], false);
 
 const forged = resolveAutomaticRenderTransitions({
   plan,

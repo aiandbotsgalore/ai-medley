@@ -27,11 +27,15 @@ export interface LibraryFile {
 
 interface LibrarySidebarProps {
   library: LibraryFile[];
+  selectedTrackIds: string[];
   status: string;
   provider: ProviderId;
   apiReady: boolean;
   onRemove: (id: string) => void;
   onReorder: (ids: string[]) => void;
+  onToggleSelected: (id: string) => void;
+  onSelectAll: () => void;
+  onRecover: () => void;
 }
 
 function Waveform({
@@ -86,6 +90,8 @@ function TrackItem({
   position,
   total,
   onMove,
+  selected,
+  onToggleSelected,
 }: {
   file: LibraryFile;
   canRemove: boolean;
@@ -95,6 +101,8 @@ function TrackItem({
   position: number;
   total: number;
   onMove: (delta: -1 | 1) => void;
+  selected: boolean;
+  onToggleSelected: () => void;
 }) {
   const [peaks, setPeaks] = useState<number[]>([]);
   const [duration, setDuration] = useState<number | null>(null);
@@ -119,6 +127,13 @@ function TrackItem({
   return (
     <div className="p-2.5 bg-[#111]/80 border border-[#222] rounded-lg group relative hover:border-[#00F0FF]/30 transition-all duration-200">
       <div className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={onToggleSelected}
+          aria-label={`Use ${file.originalName} in this mix`}
+          className="w-4 h-4 accent-[#00F0FF] shrink-0"
+        />
         <div aria-hidden="true" className="cursor-grab text-[#777] transition-colors">
           <GripVertical className="w-3.5 h-3.5" />
         </div>
@@ -201,11 +216,15 @@ function TrackItem({
 
 export default function LibrarySidebar({
   library,
+  selectedTrackIds,
   status,
   provider,
   apiReady,
   onRemove,
   onReorder,
+  onToggleSelected,
+  onSelectAll,
+  onRecover,
 }: LibrarySidebarProps) {
   const canModify = status === "idle" || status === "error";
   const [dragIdx, setDragIdx] = useState<number | null>(null);
@@ -251,18 +270,26 @@ export default function LibrarySidebar({
   };
 
   return (
-    <aside className="w-full md:w-72 max-h-[55vh] md:max-h-none border-b md:border-b-0 md:border-r border-[#1A1A1A] bg-[#090909] flex flex-col shrink-0">
+    <aside className="w-full md:w-80 max-h-[55vh] md:max-h-none border-b md:border-b-0 md:border-r border-[#1A1A1A] bg-[#090909] flex flex-col shrink-0 shadow-[8px_0_24px_rgba(0,0,0,0.12)]">
       <div className="p-4 flex-1 overflow-y-auto custom-scrollbar">
         <div className="flex items-center justify-between mb-4">
           <div className="text-[10px] uppercase tracking-widest text-[#555] font-semibold flex items-center gap-2">
             <FileAudio className="w-3 h-3" /> Source Material
           </div>
-          <span className="text-[10px] font-mono text-[#444]">
-            {library.length} tracks
+          <span className="text-[10px] font-mono text-[#00F0FF]">
+            {selectedTrackIds.length}/{library.length} selected
           </span>
         </div>
         {library.length > 0 ? (
-          <ol className="space-y-2" aria-label="Source track order">
+          <>
+            <button
+              type="button"
+              onClick={onSelectAll}
+              className="mb-3 min-h-11 text-[10px] font-mono uppercase tracking-wider text-[#8BEAF2] hover:text-white"
+            >
+              {selectedTrackIds.length === library.length ? "Clear selection" : "Select all tracks"}
+            </button>
+            <ol className="space-y-2" aria-label="Source track order">
             {library.map((file, i) => (
               <li
                 key={file.id}
@@ -280,18 +307,28 @@ export default function LibrarySidebar({
                   position={i}
                   total={library.length}
                   onMove={(delta) => moveTrack(i, delta)}
+                  selected={selectedTrackIds.includes(file.id)}
+                  onToggleSelected={() => onToggleSelected(file.id)}
                 />
               </li>
             ))}
-          </ol>
+            </ol>
+          </>
         ) : (
           <div className="text-[11px] font-mono text-[#444] border border-dashed border-[#222] p-6 rounded-lg text-center">
             <FileAudio className="w-6 h-6 mx-auto mb-2 text-[#333]" />
             Awaiting source audio...
+            <button
+              type="button"
+              onClick={onRecover}
+              className="mt-3 min-h-11 px-3 border border-[#00F0FF]/35 rounded text-[#8BEAF2] hover:text-white"
+            >
+              Recover saved tracks
+            </button>
           </div>
         )}
       </div>
-      <div className="p-4 border-t border-[#1A1A1A] shrink-0">
+      <div className="p-4 border-t border-[#1A1A1A] shrink-0 bg-[#0C0C0C]">
         <div className="text-[10px] uppercase tracking-widest text-[#555] mb-3 font-semibold">
           Environment
         </div>
