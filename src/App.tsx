@@ -1796,7 +1796,10 @@ export default function App() {
     try {
       const authorityResponse = await fetch("/api/medley-intelligence/design", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": `${sid}:session-creation`,
+        },
         body: JSON.stringify({
           sessionId: sid,
           trackIds: lib.map((track) => track.id),

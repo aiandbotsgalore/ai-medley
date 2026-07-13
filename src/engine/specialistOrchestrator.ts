@@ -726,7 +726,10 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
     await readJsonResponse(
       await fetch("/api/session/project-brief", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": `${options.sessionId}:project-brief`,
+        },
         body: JSON.stringify({
           sessionId: options.sessionId,
           brief: projectBrief,
@@ -739,7 +742,10 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
     await readJsonResponse(
       await fetch("/api/session/project-brief", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": `${options.sessionId}:project-brief`,
+        },
         body: JSON.stringify({
           sessionId: options.sessionId,
           brief: projectBrief,
@@ -840,7 +846,10 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
     await readJsonResponse(
       await fetch("/api/session/design-plan", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": `${options.sessionId}:arrangement:${arrangementPlan.arrangementVersion}`,
+        },
         body: JSON.stringify({
           sessionId: options.sessionId,
           plan: arrangementPlan,
@@ -853,7 +862,10 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
     await readJsonResponse(
       await fetch("/api/session/design-plan", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": `${options.sessionId}:arrangement:${arrangementPlan.arrangementVersion}`,
+        },
         body: JSON.stringify({
           sessionId: options.sessionId,
           plan: arrangementPlan,
@@ -1178,7 +1190,10 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
   const finalData = await readJsonResponse(
     await fetch("/api/finalize-medley", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": `${options.sessionId}:finalization:${candidateId}`,
+      },
       body: JSON.stringify({
         sessionId: options.sessionId,
         candidateId,
