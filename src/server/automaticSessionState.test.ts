@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { AUTOMATIC_WORKFLOW_VERSION } from "../types/automaticWorkflowV4";
-import { assertLegalSessionTransition, readAutomaticSessionState, replayAutomaticSessionIdempotent, withAutomaticSessionTransaction, writeAutomaticSessionState } from "./automaticSessionState";
+import { assertLegalSessionTransition, readAutomaticIdempotencyResult, readAutomaticSessionState, replayAutomaticSessionIdempotent, withAutomaticSessionTransaction, writeAutomaticSessionState } from "./automaticSessionState";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "ai-medley-v4-state-"));
 const now = "2026-07-13T00:00:00.000Z";
@@ -51,6 +51,10 @@ try {
   assert.equal(replaySecond.replayed, true);
   assert.deepEqual(replaySecond.result, { rendered: 1 });
   assert.equal(calls, 1);
+  assert.deepEqual(
+    readAutomaticIdempotencyResult({ workDir: root, sessionId: "session-1", operation: "candidate_rendering", key: "render-1", request: { candidate: 1 } }),
+    { rendered: 1 },
+  );
   assert.equal(readAutomaticSessionState(root, "session-1")?.idempotencyRecords.length, 1);
   await assert.rejects(
     () => replayAutomaticSessionIdempotent({ workDir: root, sessionId: "session-1", operation: "candidate_rendering", key: "render-1", request: { candidate: 2 }, execute: async () => ({}) }),

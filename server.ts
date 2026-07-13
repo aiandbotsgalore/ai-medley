@@ -119,6 +119,7 @@ import {
   AUTOMATIC_WORKFLOW_VERSION,
 } from "./src/types/automaticWorkflowV4";
 import {
+  readAutomaticIdempotencyResult,
   readAutomaticSessionState,
   replayAutomaticSessionIdempotent,
   writeAutomaticSessionState,
@@ -3241,8 +3242,31 @@ app.post("/api/render-review-candidate", async (req, res) => {
   } catch (error: any) {
     return res.status(400).json({ success: false, error: error.message });
   }
+  const idempotencyKey = String(
+    req.get("Idempotency-Key") || req.body?.idempotencyKey || "",
+  ).trim();
+  const idempotencyRequest = {
+    parentCandidateId,
+    legacy,
+    arrangementVersion,
+    executionVersion,
+    contractVersion: contractVersion ?? null,
+  };
 
   return withSessionLock(sessionId, async () => {
+    if (idempotencyKey) {
+      const replayed = readAutomaticIdempotencyResult<{
+        success: boolean;
+        [key: string]: unknown;
+      }>({
+        workDir,
+        sessionId,
+        operation: "candidate_rendering",
+        key: idempotencyKey,
+        request: idempotencyRequest,
+      });
+      if (replayed) return res.json({ ...replayed, idempotent: true });
+    }
     const session = sessions[sessionId];
     if (!session || !session.designPlan) {
       return res.status(400).json({
@@ -4079,7 +4103,7 @@ app.post("/api/render-review-candidate", async (req, res) => {
         });
       }
 
-      return res.json({
+      const responsePayload = {
         success: true,
         candidate,
         manifest: updatedManifest,
@@ -4098,7 +4122,19 @@ app.post("/api/render-review-candidate", async (req, res) => {
         stderrLog: renderArtifacts.stderrLog,
         segments: numSegments,
         crossfades: xfadeDurations.length,
-      });
+      };
+      if (idempotencyKey && readAutomaticSessionState(workDir, sessionId)) {
+        const replay = await replayAutomaticSessionIdempotent({
+          workDir,
+          sessionId,
+          operation: "candidate_rendering",
+          key: idempotencyKey,
+          request: idempotencyRequest,
+          execute: async () => responsePayload,
+        });
+        return res.json({ ...replay.result, idempotent: replay.replayed });
+      }
+      return res.json(responsePayload);
     } catch (err: any) {
       fs.rmSync(outputPath, { force: true });
       const registrationPending =

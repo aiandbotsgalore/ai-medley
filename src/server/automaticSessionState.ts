@@ -150,3 +150,27 @@ export async function replayAutomaticSessionIdempotent<T>(input: {
     return { replayed: false, result };
   });
 }
+
+/** Read an already-completed durable replay record without executing work. */
+export function readAutomaticIdempotencyResult<T>(input: {
+  workDir: string;
+  sessionId: string;
+  operation: unknown;
+  key: string;
+  request: unknown;
+}): T | null {
+  const operation = IdempotencyOperationV1Schema.parse(input.operation);
+  const state = readAutomaticSessionState(input.workDir, input.sessionId);
+  if (!state) return null;
+  const record = state.idempotencyRecords.find(
+    (item) => item.operation === operation && item.key === input.key,
+  );
+  if (!record) return null;
+  if (record.requestHash !== stableHash(input.request)) {
+    throw new Error("Idempotency key was reused with a different request");
+  }
+  if (record.responseHash !== stableHash(record.response)) {
+    throw new Error("Persisted idempotency response integrity check failed");
+  }
+  return cloneJson(record.response) as T;
+}

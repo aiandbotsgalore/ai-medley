@@ -187,12 +187,19 @@ try {
 
   const render = await jsonRequest("/api/render-review-candidate", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "isolated-render" },
     body: JSON.stringify({ sessionId, legacy: true }),
   });
   assert.equal(render.candidate.candidateId, "candidate-001");
   assert.equal(render.manifest.candidates.length, 1);
   assert.equal(fs.existsSync(render.candidate.outputPath), true);
+  const repeatedRender = await jsonRequest("/api/render-review-candidate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "isolated-render" },
+    body: JSON.stringify({ sessionId, legacy: true }),
+  });
+  assert.equal(repeatedRender.idempotent, true);
+  assert.equal(repeatedRender.candidate.candidateId, render.candidate.candidateId);
 
   const reviewRequest = {
     sessionId,
