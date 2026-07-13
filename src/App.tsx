@@ -83,7 +83,7 @@ import { parseManualToolCall } from "./engine/manualToolContracts";
 import { redactSensitive } from "./server/redaction";
 import { getAdjacentTab } from "./utils/accessibility";
 
-type AppStatus = "idle" | "uploading" | "running" | "completed" | "error";
+type AppStatus = "idle" | "uploading" | "running" | "manual_review_required" | "completed" | "error";
 
 type CheckpointData = {
   schemaVersion?: 2;
@@ -1750,6 +1750,7 @@ export default function App() {
     review_candidate: "REVIEW CANDIDATE",
     quality_review: "QUALITY REVIEW",
     correction: "CORRECTIONS",
+    manual_review_required: "MANUAL REVIEW REQUIRED",
     final_render: "FINAL RENDER",
     completed: "COMPLETED",
   };
@@ -1876,6 +1877,12 @@ export default function App() {
       });
       if (!isActiveRequest()) return;
       setSummary(result.summary);
+      if (result.manualReviewRequired) {
+        setStatus("manual_review_required");
+        setRunStartedAt(null);
+        await fetchCheckpoints();
+        return;
+      }
       setStatus("completed");
       setRunStartedAt(null);
       await fetchCheckpoints();
@@ -2489,6 +2496,18 @@ export default function App() {
                     <div className="font-bold uppercase">Error</div>
                     <div className="mt-1 text-[10px] opacity-80">
                       {errorMessage}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {status === "manual_review_required" && (
+                <div role="status" aria-live="polite" className="mt-6 border border-amber-400/30 bg-amber-400/5 text-amber-200 p-4 text-[11px] font-mono flex items-start gap-3 rounded-xl w-full max-w-lg">
+                  <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+                  <div>
+                    <div className="font-bold uppercase">Manual review required</div>
+                    <div className="mt-1 text-[10px] opacity-80">
+                      Automatic corrections are exhausted. Your rendered candidates were preserved; review and approve a technically valid candidate before finalizing.
                     </div>
                   </div>
                 </div>

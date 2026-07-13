@@ -486,7 +486,10 @@ async function runProductionRole(options: {
     };
     const response = await fetch("/api/apply-transition", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": `${workflow.sessionId}:transition:${executionVersion}:${transition.transitionId}`,
+      },
       body: JSON.stringify({
         ...request,
         sessionId: workflow.sessionId,
@@ -521,7 +524,10 @@ async function runProductionRole(options: {
   await readJsonResponse(
     await fetch("/api/session/execution-report", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": `${workflow.sessionId}:execution-report:${executionVersion}`,
+      },
       body: JSON.stringify({ sessionId: workflow.sessionId, report }),
       signal: workflow.signal,
     }),
@@ -807,7 +813,10 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
         for (let registrationAttempt = 0; registrationAttempt < 2; registrationAttempt++) {
           const response = await fetch("/api/render-review-candidate", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: {
+              "Content-Type": "application/json",
+              "Idempotency-Key": `${options.sessionId}:candidate:${arrangementPlan.arrangementVersion}:${executionVersion}:${currentCandidate?.candidateId ?? "root"}`,
+            },
             body: JSON.stringify({
               sessionId: options.sessionId,
               arrangementVersion: arrangementPlan.arrangementVersion,
@@ -952,7 +961,10 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
       await readJsonResponse(
         await fetch("/api/session/quality-review", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": `${options.sessionId}:musical-review:${currentCandidate.candidateId}`,
+          },
           body: JSON.stringify({
             sessionId: options.sessionId,
             review: qualityReview,
@@ -965,9 +977,22 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
 
     if (qualityReview.approved) break;
     if (correctionCount >= MAX_CORRECTION_RETRIES) {
-      throw new Error(
-        `Automatic correction limit reached without an approved candidate (${MAX_CORRECTION_RETRIES} correction cycle(s)).`,
-      );
+      const summary =
+        `Automatic correction limit reached after ${MAX_CORRECTION_RETRIES} correction cycle(s). ` +
+        "The latest technically valid candidate was preserved for manual review; nothing was finalized.";
+      options.onStage("manual_review_required", null, null);
+      await saveRequired({
+        stage: "manual_review_required",
+        currentCandidate,
+        qualityReview,
+      });
+      return {
+        summary,
+        candidateId: null,
+        outputPath: null,
+        qualityReview,
+        manualReviewRequired: true,
+      };
     }
     correctionCount++;
     options.onLog(
@@ -1022,5 +1047,6 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
     candidateId,
     outputPath: finalData.outputPath,
     qualityReview,
+    manualReviewRequired: false,
   };
 }

@@ -31,6 +31,7 @@ export const WORKFLOW_STAGES = [
   "review_candidate",
   "quality_review",
   "correction",
+  "manual_review_required",
   "final_render",
   "completed",
 ] as const;
