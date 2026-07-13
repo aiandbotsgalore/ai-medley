@@ -196,6 +196,28 @@ function buildContext(design: MedleyDesignPayload): SpecialistContext {
   };
 }
 
+function validateArrangementForWorkflow(
+  plan: ArrangementPlan,
+  context: SpecialistContext,
+  projectBrief: ProjectBrief,
+  sessionId: string,
+) {
+  const errors = validateArrangementContext(plan, context);
+  if (plan.projectId !== sessionId)
+    errors.push("projectId: Must match the session ID");
+  const expected = new Set(projectBrief.recommendedOrderIds);
+  const actual = new Set(plan.orderedTrackIds);
+  if (
+    expected.size !== actual.size ||
+    [...expected].some((trackId) => !actual.has(trackId))
+  ) {
+    errors.push(
+      "orderedTrackIds: Must include every track from the project brief",
+    );
+  }
+  return errors;
+}
+
 function styleForTransitionType(
   type: MedleyDesignPayload["transitionMatrixSummary"][number]["transitionType"],
 ): ArrangementPlan["transitions"][number]["style"] {
@@ -682,7 +704,37 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
     );
   }
 
+  const arrangementContext: SpecialistContext = {
+    ...context,
+    targetDurationSec: projectBrief.targetDurationSec,
+  };
   let arrangementPlan = checkpoint.arrangementPlan;
+  let replacedInvalidResumedArrangement = false;
+  if (arrangementPlan) {
+    const resumeErrors = validateArrangementForWorkflow(
+      arrangementPlan,
+      arrangementContext,
+      projectBrief,
+      options.sessionId,
+    );
+    if (resumeErrors.length) {
+      const fallback = buildDeterministicArrangementFallback(
+        options.design,
+        projectBrief,
+        arrangementContext,
+      );
+      if (!fallback) {
+        throw new Error(
+          `Saved arrangement is no longer valid: ${resumeErrors.join("; ")}`,
+        );
+      }
+      options.onLog(
+        "Saved arrangement is no longer valid; using a locally validated target-length arrangement.",
+      );
+      arrangementPlan = fallback;
+      replacedInvalidResumedArrangement = true;
+    }
+  }
   if (!arrangementPlan) {
     options.onStage(
       "arrangement",
@@ -708,22 +760,13 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
       prompt: JSON.stringify(
         buildArrangementStageData(projectBrief, options.design),
       ),
-      contextualValidate: (plan) => {
-        const errors = validateArrangementContext(plan, context);
-        if (plan.projectId !== options.sessionId)
-          errors.push("projectId: Must match the session ID");
-        const expected = new Set(projectBrief!.recommendedOrderIds);
-        const actual = new Set(plan.orderedTrackIds);
-        if (
-          expected.size !== actual.size ||
-          [...expected].some((trackId) => !actual.has(trackId))
-        ) {
-          errors.push(
-            "orderedTrackIds: Must include every track from the project brief",
-          );
-        }
-        return errors;
-      },
+      contextualValidate: (plan) =>
+        validateArrangementForWorkflow(
+          plan,
+          arrangementContext,
+          projectBrief,
+          options.sessionId,
+        ),
       onLog: options.onLog,
       onModel: (model) => {
         options.onStage("arrangement", "arrangement", model);
@@ -741,7 +784,7 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
       const fallback = buildDeterministicArrangementFallback(
         options.design,
         projectBrief,
-        context,
+        arrangementContext,
       );
       if (!fallback) throw error;
       options.onLog(
@@ -773,6 +816,8 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
         signal: options.signal,
       }),
     );
+    if (replacedInvalidResumedArrangement)
+      await saveRequired({ stage: "production", arrangementPlan });
   }
 
   let correctionCount = checkpoint.correctionCount;

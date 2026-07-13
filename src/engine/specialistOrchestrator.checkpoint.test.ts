@@ -21,7 +21,7 @@ const sessionId = "checkpoint-stop";
 const projectBrief: ProjectBrief = {
   schemaVersion: 1,
   projectId: sessionId,
-  targetDurationSec: 120,
+  targetDurationSec: 106,
   trackSummaries: [
     {
       trackId: "a",
@@ -186,6 +186,9 @@ const design: MedleyDesignPayload = {
     mustNotInventSongMeaning: true,
   },
 };
+
+arrangementPlan.transitions[0].transitionCandidateId =
+  createTransitionCandidateAuthority(design.transitionMatrixSummary[0]);
 
 const localFallback = buildDeterministicArrangementFallback(
   design,
@@ -388,6 +391,43 @@ assert.equal(fallbackPlan.strategy, "Local target-matched fallback");
 assert.equal(fallbackPlan.transitions[0].fromSectionId, "a-1");
 assert.equal(fallbackPlan.transitions[0].toSectionId, "b-1");
 
+const invalidResumedCheckpoint: AutomaticWorkflowCheckpoint = {
+  ...resumeCheckpoint(),
+  arrangementPlan: {
+    ...arrangementPlan,
+    transitions: [
+      { ...arrangementPlan.transitions[0], fromExitSec: 20 },
+    ],
+  },
+};
+const providerCallsBeforeResumeRecovery = fallbackProviderCalls;
+await assert.rejects(
+  runAutomaticSpecialistWorkflow({
+    sessionId,
+    config: {
+      ...DEFAULT_CONFIG,
+      openrouterApiKey: SERVER_MANAGED_API_KEY,
+    },
+    library: [],
+    design,
+    signal: new AbortController().signal,
+    requestSequence: 14,
+    resume: invalidResumedCheckpoint,
+    onLog: () => {},
+    onStage: () => {},
+    onCheckpoint: async (checkpoint) => {
+      if (checkpoint.stage === "production")
+        throw new DOMException("Test complete", "AbortError");
+    },
+    onMetrics: () => {},
+  }),
+  (error: any) => error?.name === "AbortError",
+);
+assert.equal(fallbackProviderCalls, providerCallsBeforeResumeRecovery);
+const recoveredResumePlan = JSON.parse(fallbackPlanBody).plan as ArrangementPlan;
+assert.equal(recoveredResumePlan.strategy, "Local target-matched fallback");
+assert.equal(recoveredResumePlan.transitions[0].fromExitSec, 80);
+
 const abortedArrangementController = new AbortController();
 let abortFallbackPlanPosted = false;
 globalThis.fetch = (async (url: RequestInfo | URL) => {
@@ -412,7 +452,7 @@ await assert.rejects(
     library: [],
     design,
     signal: abortedArrangementController.signal,
-    requestSequence: 14,
+    requestSequence: 15,
     resume: fallbackCheckpoint,
     onLog: () => {},
     onStage: () => {},

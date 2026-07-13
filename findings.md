@@ -400,8 +400,10 @@ Sources:
   arrangement specialist's repair output, before FFmpeg. The AI was changing
   locked transition facts while attempting to repair the plan. A provider 504
   is a separate availability failure at the same request.
-- A provider-free fallback is being added: it uses only analyzed, authoritative
+- The provider-free fallback uses only analyzed, authoritative
   local transition candidates and chooses a target-matched combination before
   any production or FFmpeg work begins.
-- The fallback must rethrow cancellation so stopping a session cannot start a
-  local plan in the background; this is covered before handoff.
+- The fallback rethrows cancellation so stopping a session cannot start a local
+  plan in the background. Resumed plans are revalidated using the saved target;
+  an old invalid plan is replaced locally before it can call a provider or
+  reach FFmpeg.

@@ -261,4 +261,6 @@ only authoritative transition candidates from the local analysis, requires the
 same target-duration validation as any AI plan, and never renders when no valid
 local arrangement exists. User cancellation still stops immediately. Mocked
 504, invalid-plan, cancellation, payload, full-suite, TypeScript, and diff
-checks pass; no live provider call or protected-data mutation occurred.
+checks pass. Resuming an older saved arrangement now validates it again and
+replaces it locally when it no longer matches the current authoritative facts.
+No live provider call or protected-data mutation occurred.

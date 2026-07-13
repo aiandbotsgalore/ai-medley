@@ -475,3 +475,6 @@
 - Verification passed: `npm test`, `npm run lint`, `git diff --check`, and the
   78-request payload audit. All provider behavior was mocked and test files
   used temporary storage only.
+- Added and verified resumed-session handling: an invalid saved arrangement is
+  replaced by the local plan without calling a provider, then checkpointed
+  before production. The complete mocked suite passed again afterward.
