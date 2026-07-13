@@ -137,6 +137,14 @@ try {
     new Set(designResult.design.tracks.map((track: any) => track.trackId)),
     new Set(selectedIds),
   );
+  const sessionState = JSON.parse(
+    fs.readFileSync(
+      path.join(dataRoot, "workdir", sessionId, "session-state.json"),
+      "utf8",
+    ),
+  );
+  assert.equal(sessionState.workflowVersion, 4);
+  assert.deepEqual(sessionState.selectedTrackIds, selectedIds);
 
   const transition = {
     fromTrackId: selectedIds[0],
