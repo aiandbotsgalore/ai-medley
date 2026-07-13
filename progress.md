@@ -459,3 +459,19 @@
   state the exact-copy/target requirement. Target tolerance is 10%; focused
   schema, quality-gate, specialist-payload, and 78-request payload audits pass
   (largest request 12,186 bytes / 4,056 estimated tokens).
+
+# 2026-07-13 — Local arrangement fallback in progress
+
+- Focused mocked checks pass for the deterministic arrangement builder, payload
+  audit, TypeScript, and whitespace validation. No provider call, source-audio
+  write, candidate recovery, or render was performed.
+- Found and fixed one safety follow-up: an explicit user abort now bypasses the
+  fallback. Adding a mocked workflow regression for provider failure next.
+
+- Complete: the mocked workflow now returns a 504 from the arrangement
+  provider, proves the locally validated plan is saved, and halts before any
+  production/render request. A separate cancellation regression proves no
+  fallback plan is saved after the user cancels.
+- Verification passed: `npm test`, `npm run lint`, `git diff --check`, and the
+  78-request payload audit. All provider behavior was mocked and test files
+  used temporary storage only.

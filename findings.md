@@ -393,3 +393,15 @@ Sources:
   while still rejecting the 493.6-second candidate. Arrangement payloads retain
   a compact per-track-pair best-score and earliest-exit choice so the model can
   select a valid shorter transition without inventing timestamps.
+
+# 2026-07-13 — Invalid-arrangement and timeout fallback
+
+- The reported transition-ID mismatch and 72.8-second result occur during the
+  arrangement specialist's repair output, before FFmpeg. The AI was changing
+  locked transition facts while attempting to repair the plan. A provider 504
+  is a separate availability failure at the same request.
+- A provider-free fallback is being added: it uses only analyzed, authoritative
+  local transition candidates and chooses a target-matched combination before
+  any production or FFmpeg work begins.
+- The fallback must rethrow cancellation so stopping a session cannot start a
+  local plan in the background; this is covered before handoff.

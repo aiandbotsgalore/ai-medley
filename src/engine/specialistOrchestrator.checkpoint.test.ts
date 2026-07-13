@@ -5,14 +5,16 @@ import path from "node:path";
 import { DEFAULT_CONFIG } from "../components/ConfigPanel";
 import type { MedleyDesignPayload } from "./medleyIntelligence";
 import {
+  buildDeterministicArrangementFallback,
   normalizeRenderFailureFeedback,
   runAutomaticSpecialistWorkflow,
   type AutomaticWorkflowCheckpoint,
 } from "./specialistOrchestrator";
 import { SERVER_MANAGED_API_KEY } from "../constants/provider";
-import type {
-  ArrangementPlan,
-  ProjectBrief,
+import {
+  createTransitionCandidateAuthority,
+  type ArrangementPlan,
+  type ProjectBrief,
 } from "../types/specialistWorkflow";
 
 const sessionId = "checkpoint-stop";
@@ -185,6 +187,28 @@ const design: MedleyDesignPayload = {
   },
 };
 
+const localFallback = buildDeterministicArrangementFallback(
+  design,
+  { ...projectBrief, targetDurationSec: 106 },
+  {
+    trackIds: new Set(["a", "b"]),
+    sectionsById: new Map([
+      ["a-1", { trackId: "a", startSec: 0, endSec: 90 }],
+      ["b-1", { trackId: "b", startSec: 10, endSec: 60 }],
+    ]),
+    durationsByTrackId: new Map([
+      ["a", 120],
+      ["b", 140],
+    ]),
+    targetDurationSec: 106,
+    transitionCandidatesById: new Map([
+      [createTransitionCandidateAuthority(design.transitionMatrixSummary[0]), design.transitionMatrixSummary[0]],
+    ]),
+  },
+);
+assert.equal(localFallback?.transitions[0].fromSectionId, "a-1");
+assert.equal(localFallback?.transitions[0].toSectionId, "b-1");
+
 function resumeCheckpoint(): AutomaticWorkflowCheckpoint {
   return {
     schemaVersion: 3,
@@ -310,6 +334,95 @@ const originalWindow = (globalThis as any).window;
   clearTimeout,
   location: { origin: "http://localhost" },
 };
+
+const fallbackCheckpoint: AutomaticWorkflowCheckpoint = {
+  ...resumeCheckpoint(),
+  stage: "arrangement",
+  arrangementPlan: null,
+};
+let fallbackPlanBody = "";
+let fallbackProviderCalls = 0;
+globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+  const target = String(url);
+  if (target === "/api/session/project-brief")
+    return new Response(JSON.stringify({ success: true }), { status: 200 });
+  if (target === "/api/provider/openrouter") {
+    fallbackProviderCalls++;
+    return new Response(JSON.stringify({ error: "gateway timed out" }), {
+      status: 504,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+  if (target === "/api/session/design-plan") {
+    fallbackPlanBody = String(init?.body ?? "");
+    return new Response(JSON.stringify({ success: true }), { status: 200 });
+  }
+  throw new Error(`Unexpected fallback fetch: ${target}`);
+}) as typeof fetch;
+
+await assert.rejects(
+  runAutomaticSpecialistWorkflow({
+    sessionId,
+    config: {
+      ...DEFAULT_CONFIG,
+      openrouterApiKey: SERVER_MANAGED_API_KEY,
+    },
+    library: [],
+    design,
+    signal: new AbortController().signal,
+    requestSequence: 13,
+    resume: fallbackCheckpoint,
+    onLog: () => {},
+    onStage: () => {},
+    onCheckpoint: async (checkpoint) => {
+      if (checkpoint.stage === "production")
+        throw new DOMException("Test complete", "AbortError");
+    },
+    onMetrics: () => {},
+  }),
+  (error: any) => error?.name === "AbortError",
+);
+assert.ok(fallbackProviderCalls > 0);
+const fallbackPlan = JSON.parse(fallbackPlanBody).plan as ArrangementPlan;
+assert.equal(fallbackPlan.strategy, "Local target-matched fallback");
+assert.equal(fallbackPlan.transitions[0].fromSectionId, "a-1");
+assert.equal(fallbackPlan.transitions[0].toSectionId, "b-1");
+
+const abortedArrangementController = new AbortController();
+let abortFallbackPlanPosted = false;
+globalThis.fetch = (async (url: RequestInfo | URL) => {
+  const target = String(url);
+  if (target === "/api/session/project-brief")
+    return new Response(JSON.stringify({ success: true }), { status: 200 });
+  if (target === "/api/provider/openrouter") {
+    abortedArrangementController.abort(new DOMException("Canceled", "AbortError"));
+    throw abortedArrangementController.signal.reason;
+  }
+  if (target === "/api/session/design-plan") abortFallbackPlanPosted = true;
+  throw new Error(`Unexpected abort fetch: ${target}`);
+}) as typeof fetch;
+
+await assert.rejects(
+  runAutomaticSpecialistWorkflow({
+    sessionId,
+    config: {
+      ...DEFAULT_CONFIG,
+      openrouterApiKey: SERVER_MANAGED_API_KEY,
+    },
+    library: [],
+    design,
+    signal: abortedArrangementController.signal,
+    requestSequence: 14,
+    resume: fallbackCheckpoint,
+    onLog: () => {},
+    onStage: () => {},
+    onCheckpoint: async () => {},
+    onMetrics: () => {},
+  }),
+  (error: any) => error?.name === "AbortError",
+);
+assert.equal(abortFallbackPlanPosted, false);
+
 const recoveryController = new AbortController();
 const recoveryLogs: string[] = [];
 const recoveryCheckpoints: AutomaticWorkflowCheckpoint[] = [];

@@ -249,3 +249,16 @@ pauses. Phases 1–7 may proceed autonomously, including index-only de-tracking,
 staging, committing, pushing, and PR creation where access permits. Optional
 Phase 8 remains excluded because no provider spending ceiling was supplied and
 real provider calls are unnecessary for release readiness.
+
+## Local arrangement fallback — 2026-07-13
+
+Status: complete
+
+When the Automatic Specialist Team's arrangement request times out, exhausts
+its provider fallbacks, or still produces an invalid plan after repair, the
+workflow now tries a provider-free, locally validated arrangement. It copies
+only authoritative transition candidates from the local analysis, requires the
+same target-duration validation as any AI plan, and never renders when no valid
+local arrangement exists. User cancellation still stops immediately. Mocked
+504, invalid-plan, cancellation, payload, full-suite, TypeScript, and diff
+checks pass; no live provider call or protected-data mutation occurred.
