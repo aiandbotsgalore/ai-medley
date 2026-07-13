@@ -122,7 +122,7 @@ try {
   const sessionId = "isolated-e2e";
   const designResult = await jsonRequest("/api/medley-intelligence/design", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "isolated-session-create" },
     body: JSON.stringify({
       sessionId,
       trackIds: selectedIds,
@@ -145,6 +145,21 @@ try {
   );
   assert.equal(sessionState.workflowVersion, 4);
   assert.deepEqual(sessionState.selectedTrackIds, selectedIds);
+  const repeatedDesign = await jsonRequest("/api/medley-intelligence/design", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "isolated-session-create" },
+    body: JSON.stringify({
+      sessionId,
+      trackIds: selectedIds,
+      userConstraints: {
+        style: "smooth",
+        targetDurationMinutes: 1,
+        crossfadeDurationSeconds: 2,
+      },
+    }),
+  });
+  assert.equal(repeatedDesign.idempotent, true);
+  assert.deepEqual(repeatedDesign.design, designResult.design);
 
   const transition = {
     fromTrackId: selectedIds[0],

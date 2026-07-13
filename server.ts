@@ -2098,7 +2098,7 @@ app.post("/api/audio-analysis/local", async (req, res) => {
   }
 });
 
-app.post("/api/medley-intelligence/design", (req, res) => {
+app.post("/api/medley-intelligence/design", async (req, res) => {
   const {
     library: requestLibrary,
     trackIds: requestedTrackIds,
@@ -2215,10 +2215,32 @@ app.post("/api/medley-intelligence/design", (req, res) => {
     sessions[sessionId].medleyDesign = structuredClone(design);
   }
 
-  res.json({
+  const responsePayload = {
     success: true,
     design,
-  });
+  };
+  const idempotencyKey = String(
+    req.get("Idempotency-Key") || req.body?.idempotencyKey || "",
+  ).trim();
+  if (sessionId && idempotencyKey) {
+    try {
+      const replay = await replayAutomaticSessionIdempotent({
+        workDir,
+        sessionId,
+        operation: "session_creation",
+        key: idempotencyKey,
+        request: {
+          selectedTrackIds: source.map((entry: any) => entry.id),
+          userConstraints: userConstraints || {},
+        },
+        execute: async () => responsePayload,
+      });
+      return res.json({ ...replay.result, idempotent: replay.replayed });
+    } catch (error: any) {
+      return res.status(409).json({ success: false, error: error.message });
+    }
+  }
+  return res.json(responsePayload);
 });
 
 // Section pair evaluation (uses the cache populated by the design route)
