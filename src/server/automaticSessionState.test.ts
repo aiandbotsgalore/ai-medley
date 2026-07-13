@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { AUTOMATIC_WORKFLOW_VERSION } from "../types/automaticWorkflowV4";
-import { assertLegalSessionTransition, readAutomaticIdempotencyResult, readAutomaticSessionState, replayAutomaticSessionIdempotent, withAutomaticSessionTransaction, writeAutomaticSessionState } from "./automaticSessionState";
+import { assertLegalSessionTransition, readAutomaticIdempotencyResult, readAutomaticSessionState, replayAutomaticSessionIdempotent, transitionAutomaticSessionState, withAutomaticSessionTransaction, writeAutomaticSessionState } from "./automaticSessionState";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "ai-medley-v4-state-"));
 const now = "2026-07-13T00:00:00.000Z";
@@ -24,6 +24,18 @@ try {
   );
   assert.doesNotThrow(() => assertLegalSessionTransition("created", "analyzing"));
   assert.throws(() => assertLegalSessionTransition("completed", "planning"), /Illegal/);
+  const analyzing = transitionAutomaticSessionState({
+    workDir: root,
+    sessionId: "session-1",
+    to: "analyzing",
+  });
+  assert.equal(analyzing.state, "analyzing");
+  const planning = transitionAutomaticSessionState({
+    workDir: root,
+    sessionId: "session-1",
+    to: "planning",
+  });
+  assert.equal(planning.stateRevision, 2);
   const order: number[] = [];
   await Promise.all([withAutomaticSessionTransaction("session-1", async () => { order.push(1); }), withAutomaticSessionTransaction("session-1", async () => { order.push(2); })]);
   assert.deepEqual(order, [1, 2]);

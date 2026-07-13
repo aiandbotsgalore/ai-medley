@@ -81,6 +81,28 @@ export function assertLegalSessionTransition(from: string, to: string) {
   if (!allowed.get(from)?.has(to)) throw new Error(`Illegal session transition: ${from} -> ${to}`);
 }
 
+/** Advance only one legal durable workflow boundary at a time. */
+export function transitionAutomaticSessionState(input: {
+  workDir: string;
+  sessionId: string;
+  to: AutomaticSessionStateV1["state"];
+  recoverableError?: string | null;
+}) {
+  const current = readAutomaticSessionState(input.workDir, input.sessionId);
+  if (!current) throw new Error("Automatic v4 session state is missing");
+  if (current.state === input.to) return current;
+  assertLegalSessionTransition(current.state, input.to);
+  return writeAutomaticSessionState(
+    input.workDir,
+    {
+      ...current,
+      state: input.to,
+      recoverableError: input.recoverableError ?? current.recoverableError,
+    },
+    current.stateRevision,
+  );
+}
+
 export async function withAutomaticSessionTransaction<T>(
   sessionId: string,
   operation: () => Promise<T>,

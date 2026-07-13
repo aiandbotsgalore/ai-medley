@@ -119,9 +119,20 @@ import {
   AUTOMATIC_WORKFLOW_VERSION,
 } from "./src/types/automaticWorkflowV4";
 import {
+  DETERMINISTIC_DESIGN_ALGORITHM_VERSION,
+  TRANSITION_SCORING_POLICY_VERSION,
+  canonicalSha256,
+  createDesignSnapshotV4,
+} from "./src/server/automaticDesignV4";
+import {
+  readDesignSnapshotV4,
+  writeDesignSnapshotV4,
+} from "./src/server/automaticSessionArtifacts";
+import {
   readAutomaticIdempotencyResult,
   readAutomaticSessionState,
   replayAutomaticSessionIdempotent,
+  transitionAutomaticSessionState,
   writeAutomaticSessionState,
 } from "./src/server/automaticSessionState";
 import {
@@ -2202,16 +2213,14 @@ app.post("/api/medley-intelligence/design", async (req, res) => {
 
   if (sessionId) {
     validateSessionId(sessionId);
-    const existingState = readAutomaticSessionState(workDir, sessionId);
-    const selectedTrackIds = source.map((entry: any) => String(entry.id));
-    const selectionHash = stableHash(selectedTrackIds);
-    if (existingState) {
-      if (existingState.selectionHash !== selectionHash) {
-        return res.status(409).json({
-          error: "Session is already pinned to a different selected-track set.",
-        });
-      }
-    } else {
+    try {
+      await withSessionLock(sessionId, async () => {
+        const existingState = readAutomaticSessionState(workDir, sessionId);
+        const selectedTrackIds = source.map((entry: any) => String(entry.id));
+        const selectionHash = stableHash(selectedTrackIds);
+        if (existingState && existingState.selectionHash !== selectionHash) {
+          throw new Error("Session is already pinned to a different selected-track set.");
+        }
       const sourceAudioSha256 = Object.fromEntries(
         source.map((entry: any) => [
           entry.id,
@@ -2221,23 +2230,74 @@ app.post("/api/medley-intelligence/design", async (req, res) => {
         ]),
       );
       const now = new Date().toISOString();
-      writeAutomaticSessionState(workDir, {
-        schemaVersion: 1,
-        workflowVersion: AUTOMATIC_WORKFLOW_VERSION,
-        sessionId,
-        state: "created",
-        stateRevision: 0,
-        selectedTrackIds,
-        selectionHash,
-        designHash: null,
-        activeArrangementVersion: null,
-        activeExecutionGeneration: 0,
-        currentCandidateId: null,
-        idempotencyRecords: [],
-        recoverableError: null,
-        createdAt: now,
-        updatedAt: now,
-      }, -1);
+        const existingSnapshot = readDesignSnapshotV4(workDir, sessionId);
+        const snapshot = existingSnapshot || createDesignSnapshotV4({
+          schemaVersion: 1,
+          workflowVersion: AUTOMATIC_WORKFLOW_VERSION,
+          deterministicAlgorithmVersion: DETERMINISTIC_DESIGN_ALGORITHM_VERSION,
+          sessionId,
+          selectedTrackIds,
+          selectionHash,
+          sourceAudioSha256,
+          analysisSchemaVersions: Object.fromEntries(source.map((entry: any) => [
+            entry.id,
+            String(entry.localAnalysis?.schemaVersion || "local_audio_analysis_v2"),
+          ])),
+          analyzerVersions: Object.fromEntries(source.map((entry: any) => [
+            entry.id,
+            String(entry.localAnalysis?.analyzerVersion || "local-audio-analysis-v2"),
+          ])),
+          targetDurationSec: Math.max(1, Number(userConstraints?.targetDurationMinutes || 3) * 60),
+          maximumTransitions: 32,
+          workflowConstraints: {
+            selectedTracksOnly: true,
+            crossfadeDurationSeconds: Number(userConstraints?.crossfadeDurationSeconds || 0),
+          },
+          transitionScoringPolicyVersion: TRANSITION_SCORING_POLICY_VERSION,
+          wisdomSnapshotHash: canonicalSha256(getWisdom()),
+          canonicalBrief: {
+            selectedTrackIds,
+            userConstraints: userConstraints || {},
+            designSchemaVersion: design.schemaVersion,
+          },
+          canonicalTransitionCandidates: Array.isArray(design.transitionMatrixSummary)
+            ? design.transitionMatrixSummary.map((candidate: any) => ({ ...candidate }))
+            : [],
+          createdAt: now,
+        });
+        writeDesignSnapshotV4(workDir, snapshot);
+        if (!existingState) {
+          writeAutomaticSessionState(workDir, {
+            schemaVersion: 1,
+            workflowVersion: AUTOMATIC_WORKFLOW_VERSION,
+            sessionId,
+            state: "created",
+            stateRevision: 0,
+            selectedTrackIds,
+            selectionHash,
+            designHash: snapshot.designHash,
+            activeArrangementVersion: null,
+            activeExecutionGeneration: 0,
+            currentCandidateId: null,
+            idempotencyRecords: [],
+            recoverableError: null,
+            createdAt: now,
+            updatedAt: now,
+          }, -1);
+          // The local analysis is already complete when this route is called,
+          // but preserve the state-machine boundaries rather than jumping from
+          // creation directly into planning.
+          transitionAutomaticSessionState({ workDir, sessionId, to: "analyzing" });
+          transitionAutomaticSessionState({ workDir, sessionId, to: "planning" });
+        } else if (existingState.designHash !== snapshot.designHash) {
+          writeAutomaticSessionState(workDir, {
+            ...existingState,
+            designHash: snapshot.designHash,
+          }, existingState.stateRevision);
+        }
+      });
+    } catch (error: any) {
+      return res.status(409).json({ error: error.message });
     }
     if (!sessions[sessionId]) sessions[sessionId] = { status: "running", logs: [] };
     sessions[sessionId].trackIntelligence = structuredClone(tracks);

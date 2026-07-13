@@ -145,6 +145,14 @@ try {
   );
   assert.equal(sessionState.workflowVersion, 4);
   assert.deepEqual(sessionState.selectedTrackIds, selectedIds);
+  const designSnapshot = JSON.parse(
+    fs.readFileSync(
+      path.join(dataRoot, "workdir", sessionId, "design-v4.json"),
+      "utf8",
+    ),
+  );
+  assert.equal(designSnapshot.designHash, sessionState.designHash);
+  assert.deepEqual(designSnapshot.selectedTrackIds, selectedIds);
   const repeatedDesign = await jsonRequest("/api/medley-intelligence/design", {
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": "isolated-session-create" },
