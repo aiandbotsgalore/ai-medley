@@ -321,3 +321,10 @@ reserved for later phases.
 
 Verification passed: `npm run test:v4-schema`, full `npm test`, `npm run lint`,
 and `git diff --check`. No runtime persistence or protected data changed.
+
+## Continuous Phase Execution
+
+Execute all offline phases continuously and autonomously. Phase boundaries are
+internal verification gates only: record findings, run checks, commit/push
+coherent work, and continue immediately. The optional live-provider test is
+skipped; mocked provider calls only. This replaces prior approval-pause wording.
