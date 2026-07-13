@@ -261,6 +261,7 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [summary, setSummary] = useState<string | null>(null);
+  const [manualReviewData, setManualReviewData] = useState<any>(null);
   const [newSessionReady, setNewSessionReady] = useState(false);
   const metricsManager = useMetricsManager();
   const sessionManager = useSessionState();
@@ -1878,6 +1879,13 @@ export default function App() {
       if (!isActiveRequest()) return;
       setSummary(result.summary);
       if (result.manualReviewRequired) {
+        const reviewResponse = await fetch(
+          `/api/session/${encodeURIComponent(sid)}/state`,
+          { signal },
+        );
+        if (reviewResponse.ok) {
+          setManualReviewData(await reviewResponse.json());
+        }
         setStatus("manual_review_required");
         setRunStartedAt(null);
         await fetchCheckpoints();
@@ -2508,6 +2516,62 @@ export default function App() {
                     <div className="font-bold uppercase">Manual review required</div>
                     <div className="mt-1 text-[10px] opacity-80">
                       Automatic corrections are exhausted. Your rendered candidates were preserved; review and approve a technically valid candidate before finalizing.
+                    </div>
+                    <div className="mt-3 space-y-2">
+                      {(manualReviewData?.manifest?.candidates || [])
+                        .filter((candidate: any) => candidate.technicallyValid)
+                        .map((candidate: any) => (
+                          <button
+                            key={candidate.candidateId}
+                            type="button"
+                            className="block w-full text-left border border-amber-300/30 rounded px-2 py-1.5 hover:bg-amber-300/10"
+                            onClick={async () => {
+                              try {
+                                const reviewResponse = await fetch("/api/session/human-review", {
+                                  method: "POST",
+                                  headers: {
+                                    "Content-Type": "application/json",
+                                    "Idempotency-Key": `${sessionId}:human-approve:${candidate.candidateId}`,
+                                  },
+                                  body: JSON.stringify({
+                                    sessionId,
+                                    expectedRevision: manualReviewData.state.stateRevision,
+                                    review: {
+                                      candidateId: candidate.candidateId,
+                                      decision: "approved",
+                                      notes: ["Approved in Manual Review"],
+                                      reviewedAt: new Date().toISOString(),
+                                    },
+                                  }),
+                                });
+                                const reviewData = await reviewResponse.json().catch(() => ({}));
+                                if (!reviewResponse.ok) throw new Error(reviewData.error || "Could not approve candidate");
+                                const finalResponse = await fetch("/api/finalize-medley", {
+                                  method: "POST",
+                                  headers: {
+                                    "Content-Type": "application/json",
+                                    "Idempotency-Key": `${sessionId}:manual-finalize:${candidate.candidateId}`,
+                                  },
+                                  body: JSON.stringify({
+                                    sessionId,
+                                    candidateId: candidate.candidateId,
+                                    summary: "Medley approved through manual review.",
+                                  }),
+                                });
+                                const finalData = await finalResponse.json().catch(() => ({}));
+                                if (!finalResponse.ok) throw new Error(finalData.error || "Could not finalize candidate");
+                                setSummary("Medley approved through manual review.");
+                                setStatus("completed");
+                                setManualReviewData(null);
+                              } catch (error: any) {
+                                setErrorMessage(error.message || "Could not complete manual approval");
+                                setStatus("error");
+                              }
+                            }}
+                          >
+                            Approve {candidate.candidateId} and finalize
+                          </button>
+                        ))}
                     </div>
                   </div>
                 </div>

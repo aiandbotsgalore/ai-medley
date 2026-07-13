@@ -671,6 +671,17 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
         currentCandidate: null,
         qualityReview: null,
       });
+  if (checkpoint.stage === "manual_review_required") {
+    options.onStage("manual_review_required", null, null);
+    return {
+      summary:
+        "Manual review is still required. No provider request or rerender was made while restoring this session.",
+      candidateId: null,
+      outputPath: null,
+      qualityReview: checkpoint.qualityReview,
+      manualReviewRequired: true,
+    };
+  }
   const saveProgress = (patch: Partial<AutomaticWorkflowCheckpoint>) => {
     checkpoint = makeCheckpoint({ ...checkpoint, ...patch });
     Promise.resolve(options.onCheckpoint(checkpoint)).catch((error) => {

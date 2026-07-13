@@ -2666,6 +2666,21 @@ app.get("/api/session/:sessionId/candidates", (req, res) => {
   }
 });
 
+app.get("/api/session/:sessionId/state", (req, res) => {
+  try {
+    validateSessionId(req.params.sessionId);
+    const state = readAutomaticSessionState(workDir, req.params.sessionId);
+    if (!state) return res.status(404).json({ error: "Automatic v4 session state not found" });
+    return res.json({
+      success: true,
+      state,
+      manifest: readCandidateManifest(workDir, req.params.sessionId),
+    });
+  } catch (error: any) {
+    return res.status(400).json({ error: error.message });
+  }
+});
+
 app.post("/api/session/manual-review-required", async (req, res) => {
   const { sessionId, reason } = req.body || {};
   try {
