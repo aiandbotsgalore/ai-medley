@@ -1275,15 +1275,16 @@ function buildSpecialistContext(sessionId?: string): SpecialistContext {
 
 function broadcastToSession(sessionId: string, event: string, data: any) {
   const safeData = redactSensitive(data);
-  const session = sessions[sessionId];
-  if (session) {
-    if (event === "progress") session.renderProgress = safeData;
-    if (event === "metrics") session.metrics = safeData;
-    if (event === "completed") {
-      session.status = "completed";
-      if (safeData?.summary) session.summary = safeData.summary;
-    }
+  const status = sessions[sessionId]?.status;
+  if (
+    (status === "cancelled" || status === "completed") &&
+    (event === "progress" || event === "metrics")
+  ) {
+    return;
   }
+  // SSE is a projection only. Durable/request-owned code updates the session
+  // before publishing an event, so a delayed FFmpeg callback cannot overwrite
+  // cancellation or completion state merely by emitting stale progress.
   const journal =
     sessionEventJournals[sessionId] ||
     (sessionEventJournals[sessionId] = new SessionEventJournal());
