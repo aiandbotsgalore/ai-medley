@@ -432,3 +432,10 @@
   workflow handoff`) was pushed to `origin/payload-optimization`, and PR #1 was
   opened against `master`. The Git index contains no source-audio addition; the
   protected-data integrity exception remains local, documented, and untouched.
+- Chrome inspection of the current app confirmed the candidate error is real,
+  not stale UI. The `bknfa639` sidecar shows strict validation rejected only
+  `_resolvedFromExitSec` and `_resolvedToEntrySec` during interrupted manifest
+  recovery. Patched recovery to sanitize those known internal-only fields before
+  strict validation; added exact regression coverage. `candidateStore` tests,
+  TypeScript, and `git diff --check` pass. The real candidate/manifests were not
+  retried, rerendered, or changed.

@@ -351,3 +351,18 @@ Sources:
   duplicate before it was stopped to avoid an unbounded scan. The source of the
   mutation remains undetermined, and release handoff must remain blocked until
   the current bytes are explicitly accepted or a verified backup is supplied.
+
+# 2026-07-13 — Candidate registration diagnosis
+
+- The visible Automatic Specialist Team error belonged to preserved session
+  `bknfa639`. Its candidate MP3 and validation sidecar exist, but its manifest
+  does not. The server error sidecar records a `ZodError` rejecting exactly
+  `_resolvedFromExitSec` and `_resolvedToEntrySec` inside two
+  `resolvedTransitions` objects during recovery.
+- The initial registration path already removed those internal render-only
+  fields, but `recoverUnregisteredRenderedCandidate` parsed the sidecar directly
+  with the strict schema. Applying the existing narrow sanitizer before that
+  parse restores recoverability without allowing arbitrary extra keys.
+- The real preserved session was not retried, rerendered, or mutated during
+  diagnosis. The regression uses a temporary candidate artifact and reproduces
+  the exact scratch keys.

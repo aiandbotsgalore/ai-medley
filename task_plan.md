@@ -1,6 +1,6 @@
 # Active Plan: Release Readiness and Handoff
 
-Status: complete with recorded source-audio integrity exception; optional live-provider acceptance excluded
+Status: in progress — candidate-registration recovery hotfix under verification
 
 Last updated: 2026-07-11
 
@@ -206,6 +206,17 @@ potential protected-data mutation. The user authorized the recommended
 preservation path: leave the current bytes untouched, do not stage them, and
 complete only the code/docs handoff. A bounded exact-name search of likely
 backup locations found no duplicate; Git has no tracked copy or history.
+
+## Candidate registration hotfix — 2026-07-13
+
+Chrome inspection and the preserved `bknfa639` error sidecar identified a
+strict-schema recovery failure: `resolvedTransitions` retained only the two
+internal render scratch fields `_resolvedFromExitSec` and
+`_resolvedToEntrySec`. Recovery now applies the same narrow transition
+sanitizer used by initial manifest registration before strict candidate parsing.
+The preserved real candidate has not been retried or rewritten. Focused
+candidate recovery, TypeScript, and diff checks pass; complete the code-only
+hotfix handoff after final review.
 
 ## Execution authorization update
 

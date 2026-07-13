@@ -11,6 +11,7 @@ import {
   type QualityReview,
   type RenderCandidate,
 } from "../types/specialistWorkflow";
+import { sanitizeResolvedTransitionsForManifest } from "./transitionResolution";
 
 const SESSION_ID_PATTERN = /^[a-zA-Z0-9_-]{3,80}$/;
 const manifestLocks = new Map<string, Promise<void>>();
@@ -368,7 +369,19 @@ export function recoverUnregisteredRenderedCandidate(options: {
     }
   }
   const validation = JSON.parse(fs.readFileSync(validationPath, "utf8"));
-  const parsed = RenderCandidateSchema.parse(validation?.candidate);
+  const candidate = validation?.candidate;
+  const normalizedCandidate =
+    candidate &&
+    typeof candidate === "object" &&
+    Array.isArray(candidate.resolvedTransitions)
+      ? {
+          ...candidate,
+          resolvedTransitions: sanitizeResolvedTransitionsForManifest(
+            candidate.resolvedTransitions,
+          ),
+        }
+      : candidate;
+  const parsed = RenderCandidateSchema.parse(normalizedCandidate);
   if (
     parsed.candidateId !== candidateId ||
     parsed.candidateVersion !== candidateVersion ||

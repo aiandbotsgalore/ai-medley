@@ -244,9 +244,44 @@ const recoveryCandidate: RenderCandidate = {
   warnings: [],
   createdAt: new Date().toISOString(),
 };
+const recoveryCandidateWithRenderScratch = {
+  ...recoveryCandidate,
+  resolvedTransitions: [
+    {
+      transitionId: "transition-001",
+      fromTrackId: "track-a",
+      fromSectionId: "track-a-section-001",
+      toTrackId: "track-b",
+      toSectionId: "track-b-section-001",
+      fromExitSec: 20,
+      toEntrySec: 2,
+      duration: 2,
+      style: "smooth_blend",
+      beatAlign: true,
+      notes: "",
+      executionPermissions: {
+        styleMutable: true,
+        allowedStyles: ["smooth_blend"],
+        durationMutable: true,
+        minDuration: 1,
+        maxDuration: 5,
+      },
+      actualFromExitSec: 20,
+      actualToEntrySec: 2,
+      durationUsed: 2,
+      outputPath: null,
+      executionVersion: 3,
+      _resolvedFromExitSec: 20,
+      _resolvedToEntrySec: 2,
+    },
+  ],
+};
 fs.writeFileSync(
   path.join(recoveryDir, "candidate-001-validation.json"),
-  JSON.stringify({ candidate: recoveryCandidate, quality: { score: 90 } }),
+  JSON.stringify({
+    candidate: recoveryCandidateWithRenderScratch,
+    quality: { score: 90 },
+  }),
 );
 const recovered = recoverUnregisteredRenderedCandidate({
   workDir: root,
@@ -259,6 +294,14 @@ const recovered = recoverUnregisteredRenderedCandidate({
   workflowMode: "automatic",
 });
 assert.equal(recovered?.candidate.outputPath, recoveryOutput);
+assert.equal(
+  "_resolvedFromExitSec" in (recovered?.candidate.resolvedTransitions?.[0] ?? {}),
+  false,
+);
+assert.equal(
+  "_resolvedToEntrySec" in (recovered?.candidate.resolvedTransitions?.[0] ?? {}),
+  false,
+);
 assert.equal(readCandidateManifest(root, recoverySession).candidates.length, 1);
 
 const overwriteSession = "final-overwrite-guard";
