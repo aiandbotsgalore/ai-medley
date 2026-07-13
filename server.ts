@@ -1129,7 +1129,7 @@ function updateLibraryEntry(id: string, updates: Partial<any>) {
 const sessions: Record<
   string,
   {
-    status: "running" | "completed" | "error";
+    status: "running" | "completed" | "cancelled" | "error";
     logs: string[];
 
     finalAudioPath?: string;
@@ -1441,25 +1441,31 @@ app.get("/api/session/:id/stream", (req, res) => {
 });
 
 // Cancel active render for a session
-app.post("/api/session/:id/cancel", (req, res) => {
+app.post("/api/session/:id/cancel", async (req, res) => {
   const sessionId = req.params.id;
-  const proc = activeRenderProcesses[sessionId];
-  if (proc && !proc.killed) {
-    console.log(
-      `[Cancel] Killing active FFmpeg render for session ${sessionId}`,
-    );
-    proc.kill("SIGKILL");
-    delete activeRenderProcesses[sessionId];
-    if (sessions[sessionId]) {
-      sessions[sessionId].status = "error";
-      logToSession(sessionId, "[finalize-medley] Render cancelled by user.");
-    }
-    return res.json({ success: true, message: "Render process terminated." });
+  try {
+    validateSessionId(sessionId);
+    return await withSessionLock(sessionId, async () => {
+      const proc = activeRenderProcesses[sessionId];
+      if (proc && !proc.killed) {
+        console.log(`[Cancel] Killing active FFmpeg render for session ${sessionId}`);
+        proc.kill("SIGKILL");
+        delete activeRenderProcesses[sessionId];
+      }
+      if (sessions[sessionId]) {
+        sessions[sessionId].status = "cancelled";
+        sessions[sessionId].workflowStage = "cancelled";
+        logToSession(sessionId, "[session] Cancelled by user.");
+        broadcastToSession(sessionId, "cancelled", { sessionId });
+      }
+      return res.json({
+        success: true,
+        message: proc ? "Render process terminated." : "Session cancelled.",
+      });
+    });
+  } catch (error: any) {
+    return res.status(400).json({ success: false, error: error.message });
   }
-  res.json({
-    success: false,
-    message: "No active render process found for this session.",
-  });
 });
 
 app.get("/api/library", (req, res) => {
