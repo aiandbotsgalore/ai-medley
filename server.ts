@@ -2784,6 +2784,28 @@ app.post("/api/apply-transition", async (req, res) => {
       return res.status(400).json({ error: error.message });
     }
   }
+  const idempotencyKey = String(
+    req.get("Idempotency-Key") || req.body?.idempotencyKey || "",
+  ).trim();
+  const idempotencyRequest = {
+    transitionId: transitionId || null,
+    fromTrackId,
+    fromSectionId,
+    toTrackId,
+    toSectionId,
+    style,
+    duration: duration ?? null,
+    intensity: intensity ?? null,
+    beatAlign: beatAlign ?? null,
+    notes: notes ?? null,
+    executionVersion: Number(executionVersion) || 1,
+    contractVersion: contractVersion ?? null,
+  };
+  const fail = (statusCode: number, message: string): never => {
+    const error: any = new Error(message);
+    error.statusCode = statusCode;
+    throw error;
+  };
   const runTransition = async () => {
 
   // --- Basic implementation of musical transition ---
@@ -2807,22 +2829,18 @@ app.post("/api/apply-transition", async (req, res) => {
       notes,
     });
     if (!parsedRequest.success) {
-      return res.status(400).json({
-        error: formatValidationIssues(parsedRequest.error).join("; "),
-      });
+      fail(400, formatValidationIssues(parsedRequest.error).join("; "));
     }
     const lockedPlan = ArrangementPlanSchema.safeParse(designPlan);
     if (!lockedPlan.success) {
-      return res
-        .status(400)
-        .json({ error: "No valid locked arrangement exists for this session" });
+      fail(400, "No valid locked arrangement exists for this session");
     }
     const contextualErrors = validateTransitionExecutionContext(
       parsedRequest.data,
       lockedPlan.data,
     );
     if (contextualErrors.length) {
-      return res.status(400).json({ error: contextualErrors.join("; ") });
+      fail(400, contextualErrors.join("; "));
     }
     validatedExecutionRequest = parsedRequest.data;
   } else {
@@ -2844,7 +2862,7 @@ app.post("/api/apply-transition", async (req, res) => {
         { allowLegacy: contractVersion === undefined },
       );
     } catch (error: any) {
-      return res.status(400).json({ error: error.message });
+      fail(400, error.message);
     }
   }
 
@@ -2866,10 +2884,8 @@ app.post("/api/apply-transition", async (req, res) => {
   const fromEntry = getLibrary().find((e: any) => e.id === fromTrackId);
   const toEntry = getLibrary().find((e: any) => e.id === toTrackId);
 
-  if (!fromEntry || !toEntry) {
-    return res
-      .status(404)
-      .json({ error: "One or both tracks not found in library" });
+    if (!fromEntry || !toEntry) {
+    fail(404, "One or both tracks not found in library");
   }
 
   const sessionWorkDir = path.join(workDir, sessionId || "default");
@@ -3113,7 +3129,7 @@ app.post("/api/apply-transition", async (req, res) => {
     const curvesUsed = { curve1, curve2 };
     const extraProcessingApplied = extraFilters ? [extraFilters] : [];
 
-    res.json({
+    return {
       success: true,
       outputPath: outputTransitionPath,
       actualFromExitSec: fromStart + transitionDuration,
@@ -3140,7 +3156,7 @@ app.post("/api/apply-transition", async (req, res) => {
       ),
       assemblyHint:
         "Use actualFromExitSec / actualToEntrySec (or the recommended* fields) to trim the main snippets before concatenating with this transition file. Do NOT concat the full original snippets + this transition file.",
-    });
+    };
   } catch (err: any) {
     fs.rmSync(stagedTransitionPath, { force: true });
     if (sessionId) delete activeRenderProcesses[sessionId];
@@ -3168,7 +3184,8 @@ app.post("/api/apply-transition", async (req, res) => {
       };
     }
     console.error("[apply-transition] Error:", err);
-    res.status(500).json({
+    err.statusCode = err.statusCode || 500;
+    err.responsePayload = {
       success: false,
       error: "Failed to apply transition",
       details: err.message,
@@ -3177,12 +3194,45 @@ app.post("/api/apply-transition", async (req, res) => {
       to: `${toTrackId}:${toSectionId}`,
       attemptedDuration: transitionDuration,
       stack: process.env.NODE_ENV === "development" ? err.stack : undefined,
-    });
+    };
+    throw err;
   }
   };
-  return sessionId
-    ? withSessionLock(sessionId, runTransition)
-    : runTransition();
+  try {
+    const execute = async () => runTransition();
+    const result = sessionId
+      ? await withSessionLock(sessionId, async () => {
+          const automaticState = readAutomaticSessionState(workDir, sessionId);
+          const replay = idempotencyKey && automaticState
+            ? await replayAutomaticSessionIdempotent({
+                workDir,
+                sessionId,
+                operation: "transition_execution",
+                key: idempotencyKey,
+                request: idempotencyRequest,
+                execute,
+              })
+            : idempotencyKey
+              ? await replayIdempotent({
+                  sessionId,
+                  operation: "transition_execution",
+                  key: idempotencyKey,
+                  request: idempotencyRequest,
+                  execute,
+                })
+              : { replayed: false, result: await execute() };
+          return { ...replay.result, idempotent: replay.replayed };
+        })
+      : await execute();
+    return res.json(result);
+  } catch (error: any) {
+    return res.status(error.statusCode || 500).json(
+      error.responsePayload || {
+        success: false,
+        error: error.message || "Failed to apply transition",
+      },
+    );
+  }
 });
 
 // === PURE CLEAN RENDER ===

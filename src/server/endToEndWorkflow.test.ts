@@ -185,6 +185,40 @@ try {
   });
   assert.equal(repeatedArrangement.idempotent, true);
 
+  const transitionExecutionRequest = {
+    sessionId,
+    transitionId: "isolated-transition-001",
+    fromTrackId: transition.fromTrackId,
+    fromSectionId: transition.fromSectionId,
+    toTrackId: transition.toTrackId,
+    toSectionId: transition.toSectionId,
+    style: transition.style,
+    duration: transition.duration,
+    beatAlign: transition.beatAlign,
+    notes: transition.notes,
+    executionVersion: 1,
+  };
+  const transitionExecution = await jsonRequest("/api/apply-transition", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": "isolated-transition-execution",
+    },
+    body: JSON.stringify(transitionExecutionRequest),
+  });
+  assert.equal(transitionExecution.idempotent, false);
+  assert.equal(fs.existsSync(transitionExecution.outputPath), true);
+  const repeatedTransitionExecution = await jsonRequest("/api/apply-transition", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": "isolated-transition-execution",
+    },
+    body: JSON.stringify(transitionExecutionRequest),
+  });
+  assert.equal(repeatedTransitionExecution.idempotent, true);
+  assert.equal(repeatedTransitionExecution.outputPath, transitionExecution.outputPath);
+
   const render = await jsonRequest("/api/render-review-candidate", {
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": "isolated-render" },
