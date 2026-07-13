@@ -213,9 +213,95 @@ const localFallback = buildDeterministicArrangementFallback(
 assert.equal(localFallback?.transitions[0].fromSectionId, "a-1");
 assert.equal(localFallback?.transitions[0].toSectionId, "b-1");
 
+const fallbackTransitionBase = design.transitionMatrixSummary[0];
+const invalidEntryCandidate = {
+  ...fallbackTransitionBase,
+  toSectionId: "b-in",
+  toEntrySec: 62,
+  score: 0.95,
+};
+const validEntryCandidate = {
+  ...fallbackTransitionBase,
+  toSectionId: "b-in",
+  toEntrySec: 56,
+  score: 0.8,
+};
+const exitCandidate = {
+  ...fallbackTransitionBase,
+  fromTrackId: "b",
+  fromSectionId: "b-out",
+  toTrackId: "c",
+  toSectionId: "c-1",
+  fromExitSec: 60,
+  toEntrySec: 10,
+  score: 0.9,
+};
+const threeTrackDesign: MedleyDesignPayload = {
+  ...design,
+  tracks: [
+    ...design.tracks,
+    { ...design.tracks[1], trackId: "c", filename: "c.mp3", durationSec: 100 },
+  ],
+  sections: [
+    design.sections[0],
+    { ...design.sections[1], sectionId: "b-in", startSec: 50, endSec: 70 },
+    { ...design.sections[1], sectionId: "b-out", startSec: 50, endSec: 70 },
+    { ...design.sections[1], sectionId: "c-1", trackId: "c" },
+  ],
+  transitionMatrixSummary: [
+    invalidEntryCandidate,
+    validEntryCandidate,
+    exitCandidate,
+  ],
+};
+const threeTrackBrief: ProjectBrief = {
+  ...projectBrief,
+  targetDurationSec: 100,
+  trackSummaries: [
+    ...projectBrief.trackSummaries,
+    {
+      ...projectBrief.trackSummaries[1],
+      trackId: "c",
+      filename: "c.mp3",
+      durationSec: 100,
+      recommendedSectionIds: ["c-1"],
+    },
+  ],
+  recommendedOrderIds: ["a", "b", "c"],
+};
+const threeTrackCandidates = threeTrackDesign.transitionMatrixSummary.map(
+  (transition) => [
+    createTransitionCandidateAuthority(transition),
+    transition,
+  ] as const,
+);
+const renderableFallback = buildDeterministicArrangementFallback(
+  threeTrackDesign,
+  threeTrackBrief,
+  {
+    trackIds: new Set(["a", "b", "c"]),
+    sectionsById: new Map([
+      ["a-1", { trackId: "a", startSec: 0, endSec: 90 }],
+      ["b-in", { trackId: "b", startSec: 50, endSec: 70 }],
+      ["b-out", { trackId: "b", startSec: 50, endSec: 70 }],
+      ["c-1", { trackId: "c", startSec: 10, endSec: 60 }],
+    ]),
+    durationsByTrackId: new Map([
+      ["a", 120],
+      ["b", 140],
+      ["c", 100],
+    ]),
+    targetDurationSec: 100,
+    transitionCandidatesById: new Map(threeTrackCandidates),
+  },
+);
+assert.equal(renderableFallback?.transitions[0].toEntrySec, 56);
+assert.equal(renderableFallback?.transitions[1].fromExitSec, 60);
+
 function resumeCheckpoint(): AutomaticWorkflowCheckpoint {
   return {
     schemaVersion: 3,
+    workflowVersion: 4,
     sessionId,
     workflowMode: "automatic",
     stage: "production",

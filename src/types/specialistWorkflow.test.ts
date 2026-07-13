@@ -129,6 +129,59 @@ assert.deepEqual(
   }),
   [],
 );
+const invalidIntermediateTimeline = ArrangementPlanSchema.parse({
+  ...plan,
+  orderedTrackIds: ["a", "b", "c"],
+  transitions: [
+    {
+      ...plan.transitions[0],
+      transitionCandidateId: createTransitionCandidateAuthority({
+        fromTrackId: "a", fromSectionId: "a-1", toTrackId: "b", toSectionId: "b-in",
+        fromExitSec: 80, toEntrySec: 62,
+      }),
+      toSectionId: "b-in",
+      toEntrySec: 62,
+    },
+    {
+      ...plan.transitions[0],
+      transitionId: "t2",
+      transitionCandidateId: createTransitionCandidateAuthority({
+        fromTrackId: "b", fromSectionId: "b-out", toTrackId: "c", toSectionId: "c-1",
+        fromExitSec: 60, toEntrySec: 10,
+      }),
+      fromTrackId: "b",
+      fromSectionId: "b-out",
+      toTrackId: "c",
+      toSectionId: "c-1",
+      fromExitSec: 60,
+      toEntrySec: 10,
+      duration: 4,
+    },
+  ],
+});
+assert.match(
+  validateArrangementContext(invalidIntermediateTimeline, {
+    trackIds: new Set(["a", "b", "c"]),
+    sectionsById: new Map([
+      ["a-1", { trackId: "a", startSec: 0, endSec: 90 }],
+      ["b-in", { trackId: "b", startSec: 50, endSec: 70 }],
+      ["b-out", { trackId: "b", startSec: 50, endSec: 70 }],
+      ["c-1", { trackId: "c", startSec: 10, endSec: 60 }],
+    ]),
+    durationsByTrackId: new Map([
+      ["a", 120],
+      ["b", 140],
+      ["c", 100],
+    ]),
+    transitionCandidatesById: new Map(
+      invalidIntermediateTimeline.transitions.map((transition) => [
+        transition.transitionCandidateId!,
+        transition,
+      ]),
+    ),
+  }).join("; "),
+  /intermediate segment.*available/i,
+);
 const durationContext = {
   trackIds: new Set(["a", "b"]),
   sectionsById: new Map([

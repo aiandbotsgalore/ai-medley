@@ -538,12 +538,18 @@ function makeCheckpoint(
   return {
     ...base,
     schemaVersion: 3,
+    workflowVersion: base.workflowVersion ?? 4,
     workflowMode: "automatic",
     savedAt: new Date().toISOString(),
   };
 }
 
 export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
+  if (options.resume && options.resume.workflowVersion !== 4) {
+    throw new Error(
+      "This is an Automatic workflow v3 checkpoint. It is preserved and cannot resume through workflow v4.",
+    );
+  }
   const context = buildContext(options.design);
   let checkpoint = options.resume
     ? makeCheckpoint({

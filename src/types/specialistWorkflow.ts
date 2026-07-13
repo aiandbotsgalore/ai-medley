@@ -262,6 +262,9 @@ export const SpecialistHandoffSchema = z.strictObject({
 
 export const AutomaticWorkflowCheckpointSchema = z.strictObject({
   schemaVersion: z.literal(3),
+  // Checkpoint schema versions and workflow versions are intentionally
+  // independent. Missing means historical v3 behavior, never an implicit v4.
+  workflowVersion: z.union([z.literal(3), z.literal(4)]).optional(),
   sessionId: Id,
   workflowMode: z.literal("automatic"),
   stage: z.enum(WORKFLOW_STAGES),
@@ -634,6 +637,18 @@ export function validateArrangementContext(
     }
     if (toDuration !== undefined && transition.toEntrySec > toDuration) {
       errors.push(`${prefix}.toEntrySec: Exceeds source duration`);
+    }
+  }
+  for (let index = 0; index < plan.transitions.length - 1; index++) {
+    const current = plan.transitions[index];
+    const next = plan.transitions[index + 1];
+    if (current.toTrackId !== next.fromTrackId) continue;
+    const availableSec = next.fromExitSec - current.toEntrySec;
+    const requiredSec = Math.max(current.duration, next.duration);
+    if (availableSec < requiredSec) {
+      errors.push(
+        `transitions[${index + 1}].fromExitSec: Intermediate segment for track ${current.toTrackId} has ${availableSec.toFixed(3)}s available after transitions[${index}].toEntrySec but requires at least ${requiredSec.toFixed(3)}s for adjacent crossfades`,
+      );
     }
   }
   if (context.targetDurationSec && context.targetDurationSec > 0) {
