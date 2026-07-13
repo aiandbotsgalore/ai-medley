@@ -2268,41 +2268,44 @@ app.post("/api/medley-quality", async (req, res) => {
   }
 });
 
-app.post("/api/session/project-brief", (req, res) => {
+app.post("/api/session/project-brief", async (req, res) => {
   const { sessionId, brief } = req.body || {};
   try {
     validateSessionId(sessionId);
-    let parsed = ProjectBriefSchema.parse(brief);
-    if (parsed.projectId !== sessionId) {
-      return res.status(400).json({ error: "projectId must match sessionId" });
-    }
-    const specialistContext = buildSpecialistContext(sessionId);
-    parsed = bindLegacyProjectBriefAuthority(parsed, specialistContext);
-    const contextualErrors = validateProjectBriefContext(parsed, specialistContext);
-    if (contextualErrors.length) {
-      return res.status(400).json({ error: contextualErrors.join("; ") });
-    }
-    if (!sessions[sessionId])
-      sessions[sessionId] = { status: "running", logs: [] };
-    sessions[sessionId].projectBrief = parsed;
-    const existingSessionTracks = getSessionTrackIntelligence(sessionId);
-    sessions[sessionId].trackIntelligence = selectSessionTrackIntelligence(
-      existingSessionTracks,
-      getCurrentTrackIntelligence(),
-      parsed.recommendedOrderIds,
-    );
-    sessions[sessionId].workflowMode = "automatic";
-    sessions[sessionId].workflowStage = "arrangement";
-    res.json({ success: true, brief: parsed });
+    return await withSessionLock(sessionId, async () => {
+      let parsed = ProjectBriefSchema.parse(brief);
+      if (parsed.projectId !== sessionId) {
+        return res.status(400).json({ error: "projectId must match sessionId" });
+      }
+      const specialistContext = buildSpecialistContext(sessionId);
+      parsed = bindLegacyProjectBriefAuthority(parsed, specialistContext);
+      const contextualErrors = validateProjectBriefContext(parsed, specialistContext);
+      if (contextualErrors.length) {
+        return res.status(400).json({ error: contextualErrors.join("; ") });
+      }
+      if (!sessions[sessionId])
+        sessions[sessionId] = { status: "running", logs: [] };
+      sessions[sessionId].projectBrief = parsed;
+      const existingSessionTracks = getSessionTrackIntelligence(sessionId);
+      sessions[sessionId].trackIntelligence = selectSessionTrackIntelligence(
+        existingSessionTracks,
+        getCurrentTrackIntelligence(),
+        parsed.recommendedOrderIds,
+      );
+      sessions[sessionId].workflowMode = "automatic";
+      sessions[sessionId].workflowStage = "arrangement";
+      return res.json({ success: true, brief: parsed });
+    });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
 });
 
-app.post("/api/session/execution-report", (req, res) => {
+app.post("/api/session/execution-report", async (req, res) => {
   const { sessionId, report } = req.body || {};
   try {
     validateSessionId(sessionId);
+    return await withSessionLock(sessionId, async () => {
     const parsed = ExecutionReportSchema.parse(report);
     const planResult = ArrangementPlanSchema.safeParse(
       sessions[sessionId]?.designPlan,
@@ -2377,7 +2380,8 @@ app.post("/api/session/execution-report", (req, res) => {
     }
     sessions[sessionId].executionReport = parsed;
     sessions[sessionId].workflowStage = "review_candidate";
-    res.json({ success: true, report: parsed });
+    return res.json({ success: true, report: parsed });
+    });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
@@ -2448,12 +2452,18 @@ app.get("/api/session/:sessionId/candidates", (req, res) => {
   }
 });
 
-app.post("/api/session/design-plan", (req, res) => {
+app.post("/api/session/design-plan", async (req, res) => {
   const { sessionId, plan, contractVersion } = req.body || {};
   if (!sessionId) return res.status(400).json({ error: "sessionId required" });
   if (!plan || !Array.isArray(plan.transitions)) {
     return res.status(400).json({ error: "plan.transitions must be an array" });
   }
+  try {
+    validateSessionId(sessionId);
+  } catch (error: any) {
+    return res.status(400).json({ error: error.message });
+  }
+  return await withSessionLock(sessionId, async () => {
   if (!sessions[sessionId]) {
     sessions[sessionId] = { status: "running", logs: [] };
   }
@@ -2589,6 +2599,7 @@ app.post("/api/session/design-plan", (req, res) => {
     storedTransitions: plan.transitions.length,
     warnings,
   });
+  });
 });
 
 // Musical transition endpoint (high-quality blending tool for the agent)
@@ -2615,6 +2626,15 @@ app.post("/api/apply-transition", async (req, res) => {
         "fromTrackId, fromSectionId, toTrackId, toSectionId, and style are required.",
     });
   }
+
+  if (sessionId) {
+    try {
+      validateSessionId(sessionId);
+    } catch (error: any) {
+      return res.status(400).json({ error: error.message });
+    }
+  }
+  const runTransition = async () => {
 
   // --- Basic implementation of musical transition ---
   console.log(
@@ -3009,6 +3029,10 @@ app.post("/api/apply-transition", async (req, res) => {
       stack: process.env.NODE_ENV === "development" ? err.stack : undefined,
     });
   }
+  };
+  return sessionId
+    ? withSessionLock(sessionId, runTransition)
+    : runTransition();
 });
 
 // === PURE CLEAN RENDER ===
