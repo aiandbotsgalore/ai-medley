@@ -4451,6 +4451,17 @@ app.post("/api/render-review-candidate", async (req, res) => {
         fs.existsSync(immutableOutputPath) && fs.existsSync(validationPath);
       const requiresManualReview =
         /Candidate limit reached|INSUFFICIENT_STORAGE/.test(String(err?.message || ""));
+      const failedRenderState = !legacy
+        ? readAutomaticSessionState(workDir, sessionId)
+        : null;
+      if (!registrationPending && failedRenderState?.state === "rendering_candidate") {
+        transitionAutomaticSessionState({
+          workDir,
+          sessionId,
+          to: "recoverable_error",
+          recoverableError: String(err?.message || "Candidate rendering failed").slice(0, 2_000),
+        });
+      }
       if (requiresManualReview && sessions[sessionId]) {
         sessions[sessionId].workflowStage = "manual_review_required";
         sessions[sessionId].manualReviewReason = String(err.message);
@@ -4601,6 +4612,14 @@ app.post("/api/finalize-medley", async (req, res) => {
         candidateId,
         summary,
       );
+      const finalizingState = readAutomaticSessionState(workDir, sessionId);
+      if (finalizingState?.state === "finalizing") {
+        transitionAutomaticSessionState({
+          workDir,
+          sessionId,
+          to: "completed",
+        });
+      }
       broadcastToSession(sessionId, "completed", { summary });
       return {
         success: true,
