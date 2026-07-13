@@ -2364,19 +2364,21 @@ app.post("/api/session/execution-report", async (req, res) => {
   const { sessionId, report } = req.body || {};
   try {
     validateSessionId(sessionId);
+    const idempotencyKey = String(
+      req.get("Idempotency-Key") || req.body?.idempotencyKey || "",
+    ).trim();
     return await withSessionLock(sessionId, async () => {
+    const execute = async () => {
     const parsed = ExecutionReportSchema.parse(report);
     const planResult = ArrangementPlanSchema.safeParse(
       sessions[sessionId]?.designPlan,
     );
     if (!planResult.success) {
-      return res
-        .status(400)
-        .json({ error: "No valid locked arrangement exists for this session" });
+      throw new Error("No valid locked arrangement exists for this session");
     }
     const contextualErrors = validateExecutionContext(parsed, planResult.data);
     if (contextualErrors.length)
-      return res.status(400).json({ error: contextualErrors.join("; ") });
+      throw new Error(contextualErrors.join("; "));
     if (sessions[sessionId]?.projectBrief) {
       const authoritative =
         sessions[sessionId]?.executionResults?.[parsed.executionVersion] || {};
@@ -2435,11 +2437,32 @@ app.post("/api/session/execution-report", async (req, res) => {
         }
       }
       if (authorityErrors.length)
-        return res.status(400).json({ error: authorityErrors.join("; ") });
+        throw new Error(authorityErrors.join("; "));
     }
     sessions[sessionId].executionReport = parsed;
     sessions[sessionId].workflowStage = "review_candidate";
-    return res.json({ success: true, report: parsed });
+    return { success: true, report: parsed };
+    };
+    const automaticState = readAutomaticSessionState(workDir, sessionId);
+    const replay = idempotencyKey && automaticState
+      ? await replayAutomaticSessionIdempotent({
+          workDir,
+          sessionId,
+          operation: "execution_compilation",
+          key: idempotencyKey,
+          request: report,
+          execute,
+        })
+      : idempotencyKey
+        ? await replayIdempotent({
+            sessionId,
+            operation: "execution_compilation",
+            key: idempotencyKey,
+            request: report,
+            execute,
+          })
+        : { replayed: false, result: await execute() };
+    return res.json({ ...replay.result, idempotent: replay.replayed });
     });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
