@@ -608,6 +608,23 @@ async function runProductionRole(options: {
   return report;
 }
 
+async function requireAutomaticManualReview(
+  workflow: WorkflowOptions,
+  reason: string,
+) {
+  await readJsonResponse(
+    await fetch("/api/session/manual-review-required", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": `${workflow.sessionId}:manual-review:${workflow.requestSequence}`,
+      },
+      body: JSON.stringify({ sessionId: workflow.sessionId, reason }),
+      signal: workflow.signal,
+    }),
+  );
+}
+
 function makeCheckpoint(
   base: Omit<
     AutomaticWorkflowCheckpoint,
@@ -1053,6 +1070,7 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
       const summary =
         `Automatic correction limit reached after ${MAX_CORRECTION_RETRIES} correction cycle(s). ` +
         "The latest technically valid candidate was preserved for manual review; nothing was finalized.";
+      await requireAutomaticManualReview(options, summary);
       options.onStage("manual_review_required", null, null);
       await saveRequired({
         stage: "manual_review_required",
@@ -1075,6 +1093,7 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
       const summary =
         "The musical review did not contain an explicitly permitted transition change. " +
         "The candidate was preserved for manual review instead of rerendering the same plan.";
+      await requireAutomaticManualReview(options, summary);
       options.onStage("manual_review_required", null, null);
       await saveRequired({
         stage: "manual_review_required",

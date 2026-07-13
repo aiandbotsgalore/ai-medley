@@ -2666,6 +2666,52 @@ app.get("/api/session/:sessionId/candidates", (req, res) => {
   }
 });
 
+app.post("/api/session/manual-review-required", async (req, res) => {
+  const { sessionId, reason } = req.body || {};
+  try {
+    validateSessionId(sessionId);
+    const normalizedReason = String(reason || "Manual review is required")
+      .trim()
+      .slice(0, 2_000);
+    if (!normalizedReason) throw new Error("Manual review reason is required");
+    const idempotencyKey = String(
+      req.get("Idempotency-Key") || req.body?.idempotencyKey || "",
+    ).trim();
+    return await withSessionLock(sessionId, async () => {
+      const execute = async () => {
+        const state = readAutomaticSessionState(workDir, sessionId);
+        if (!state) throw new Error("Automatic v4 session state is missing");
+        if (state.state === "manual_review_required") {
+          return { success: true, state, alreadyRequired: true };
+        }
+        if (state.state !== "correcting") {
+          throw new Error(`Manual review cannot be entered while session state is ${state.state}`);
+        }
+        const next = transitionAutomaticSessionState({
+          workDir,
+          sessionId,
+          to: "manual_review_required",
+          recoverableError: normalizedReason,
+        });
+        return { success: true, state: next, alreadyRequired: false };
+      };
+      const replay = idempotencyKey
+        ? await replayAutomaticSessionIdempotent({
+            workDir,
+            sessionId,
+            operation: "correction_submission",
+            key: idempotencyKey,
+            request: { reason: normalizedReason },
+            execute,
+          })
+        : { replayed: false, result: await execute() };
+      return res.json({ ...replay.result, idempotent: replay.replayed });
+    });
+  } catch (error: any) {
+    return res.status(409).json({ success: false, error: error.message });
+  }
+});
+
 app.post("/api/session/human-review", async (req, res) => {
   const { sessionId, review, expectedRevision } = req.body || {};
   try {
