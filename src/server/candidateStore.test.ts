@@ -6,6 +6,7 @@ import {
   applyCandidateReview,
   applyCandidateHumanReview,
   appendCandidateTechnicalEvaluation,
+  assertSessionArtifactBudget,
   cleanupRejectedCandidates,
   createEmptyManifest,
   discardAutomaticSessionFiles,
@@ -223,6 +224,10 @@ for (let version = 1; version <= MAX_COMPLETE_CANDIDATES; version++) {
 assert.throws(
   () => nextCandidateIdentity(readCandidateManifest(root, limitSession)),
   /Candidate limit reached/,
+);
+assert.throws(
+  () => assertSessionArtifactBudget(root, limitSession, 10, 1),
+  /SESSION_ARTIFACT_LIMIT/,
 );
 const fifthCandidatePath = path.join(limitDir, "candidate-005.mp3");
 fs.writeFileSync(fifthCandidatePath, "candidate 5");

@@ -94,6 +94,7 @@ import {
   applyCandidateHumanReview,
   appendCandidateTechnicalEvaluation,
   assertCandidateStorageAvailable,
+  assertSessionArtifactBudget,
   discardAutomaticSessionFiles,
   getSessionDirectory,
   nextCandidateIdentity,
@@ -3702,6 +3703,7 @@ app.post("/api/render-review-candidate", async (req, res) => {
       `${candidateId}-validation.json`,
     );
     assertCandidateStorageAvailable(workDir, sessionId, 150 * 1024 * 1024);
+    assertSessionArtifactBudget(workDir, sessionId, 150 * 1024 * 1024);
     const safeMp3Name = `${candidateId}.mp3.part`;
     const outputPath = path.join(sessionWorkDir, safeMp3Name);
     const artifactPrefix = candidateId;
@@ -4512,7 +4514,7 @@ app.post("/api/render-review-candidate", async (req, res) => {
       const registrationPending =
         fs.existsSync(immutableOutputPath) && fs.existsSync(validationPath);
       const requiresManualReview =
-        /Candidate limit reached|INSUFFICIENT_STORAGE/.test(String(err?.message || ""));
+        /Candidate limit reached|INSUFFICIENT_STORAGE|SESSION_ARTIFACT_LIMIT/.test(String(err?.message || ""));
       const failedRenderState = !legacy
         ? readAutomaticSessionState(workDir, sessionId)
         : null;

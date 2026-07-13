@@ -17,6 +17,7 @@ import { sanitizeResolvedTransitionsForManifest } from "./transitionResolution";
 import { withSessionTransaction } from "./sessionTransaction";
 
 const SESSION_ID_PATTERN = /^[a-zA-Z0-9_-]{3,80}$/;
+export const MAX_SESSION_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024;
 
 export function validateSessionId(sessionId: string) {
   if (!SESSION_ID_PATTERN.test(sessionId)) {
@@ -239,6 +240,36 @@ export function assertCandidateStorageAvailable(
   if (available !== null && available < required) {
     throw new Error(
       `INSUFFICIENT_STORAGE: requires ${required} bytes with safety margin, ${available} available`,
+    );
+  }
+}
+
+function sessionArtifactBytes(directory: string): number {
+  let total = 0;
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const target = path.join(directory, entry.name);
+    if (entry.isDirectory()) total += sessionArtifactBytes(target);
+    else if (entry.isFile()) total += fs.statSync(target).size;
+  }
+  return total;
+}
+
+/** Refuse new artifacts before rendering; never evict existing evidence. */
+export function assertSessionArtifactBudget(
+  workDir: string,
+  sessionId: string,
+  estimatedBytes: number,
+  maximumBytes = MAX_SESSION_ARTIFACT_BYTES,
+) {
+  const sessionDir = getSessionDirectory(workDir, sessionId);
+  ensureDirectory(sessionDir);
+  const existingBytes = sessionArtifactBytes(sessionDir);
+  if (!Number.isFinite(estimatedBytes) || estimatedBytes < 0) {
+    throw new Error("Session artifact estimate is invalid");
+  }
+  if (existingBytes + estimatedBytes > maximumBytes) {
+    throw new Error(
+      `SESSION_ARTIFACT_LIMIT: ${existingBytes + estimatedBytes} bytes would exceed the ${maximumBytes}-byte session limit`,
     );
   }
 }
