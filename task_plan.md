@@ -237,6 +237,10 @@ change the locked arrangement's section boundaries. Arrangement validation now
 estimates the exact deterministic timeline and rejects a plan outside the target
 tolerance before provider production or FFmpeg candidate rendering. The current
 8-minute candidate remains preserved but cannot be promoted as a 4-minute mix.
+The target tolerance is now 10% (24 seconds for a four-minute request), and
+the compact arrangement payload supplies the best-scoring and earliest-exit
+authorized option for every track pair. Payload verification remains below the
+16,000-token release target.
 
 ## Execution authorization update
 

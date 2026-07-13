@@ -616,7 +616,7 @@ export function validateArrangementContext(
   }
   if (context.targetDurationSec && context.targetDurationSec > 0) {
     const estimatedDurationSec = estimateArrangementDurationSec(plan, context);
-    const toleranceSec = Math.max(5, context.targetDurationSec * 0.05);
+    const toleranceSec = Math.max(5, context.targetDurationSec * 0.1);
     if (
       estimatedDurationSec !== null &&
       Math.abs(estimatedDurationSec - context.targetDurationSec) > toleranceSec

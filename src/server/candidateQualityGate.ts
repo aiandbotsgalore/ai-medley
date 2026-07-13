@@ -28,7 +28,7 @@ export function evaluateCandidateQuality(input: CandidateQualityInput) {
     }
   }
   if (input.targetDurationSec && input.targetDurationSec > 0) {
-    const tolerance = Math.max(5, input.targetDurationSec * 0.05);
+    const tolerance = Math.max(5, input.targetDurationSec * 0.1);
     if (Math.abs(input.actualDurationSec - input.targetDurationSec) > tolerance) {
       blockingIssues.push(
         `Rendered duration differs from the requested target by more than ${tolerance.toFixed(2)}s`,

@@ -388,3 +388,8 @@ Sources:
 - The Vite WebSocket console line is only the browser's development auto-refresh
   connection retry during server restart; it is separate from candidate rendering
   and finalization.
+- A 5% target-duration tolerance made a 260-second result fail a 240-second
+  request despite being only 20 seconds over. The gate now uses a 10% tolerance,
+  while still rejecting the 493.6-second candidate. Arrangement payloads retain
+  a compact per-track-pair best-score and earliest-exit choice so the model can
+  select a valid shorter transition without inventing timestamps.

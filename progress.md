@@ -454,3 +454,8 @@
   before production/rendering; focused schema, transition, candidate recovery,
   lint, and diff checks pass. The browser Vite WebSocket warning is a dev
   auto-refresh retry during restart, not a render failure.
+- Added compact shortest-timeline planning support: arrangement payloads now
+  include each pair's best-score and earliest-exit authoritative choice, and
+  state the exact-copy/target requirement. Target tolerance is 10%; focused
+  schema, quality-gate, specialist-payload, and 78-request payload audits pass
+  (largest request 12,186 bytes / 4,056 estimated tokens).
