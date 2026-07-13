@@ -115,6 +115,10 @@ import {
 import { selectRenderTransitions } from "./src/server/renderTransitionSelection";
 import { replayIdempotent } from "./src/server/sessionIdempotency";
 import {
+  readAutomaticSessionState,
+  replayAutomaticSessionIdempotent,
+} from "./src/server/automaticSessionState";
+import {
   isRecoveredCandidateCompatibleWithExecution,
   sanitizeResolvedTransitionsForManifest,
 } from "./src/server/transitionResolution";
@@ -1782,85 +1786,87 @@ app.post("/api/session/finish", async (req, res) => {
   }
   try {
     validateSessionId(sessionId);
-    const manifest = readCandidateManifest(workDir, sessionId);
-    if (
-      requiresAutomaticCandidateApproval({
+    return await withSessionLock(sessionId, async () => {
+      const manifest = readCandidateManifest(workDir, sessionId);
+      if (
+        requiresAutomaticCandidateApproval({
+          sessionId,
+          session: sessions[sessionId],
+          manifest,
+          checkpointDir,
+        })
+      ) {
+        return res.status(409).json({
+          error:
+            "Automatic sessions must finalize through an approved selected candidate.",
+        });
+      }
+      const validated = validateLegacyFinalOutput(
+        workDir,
         sessionId,
-        session: sessions[sessionId],
-        manifest,
-        checkpointDir,
-      })
-    ) {
-      return res.status(409).json({
-        error:
-          "Automatic sessions must finalize through an approved selected candidate.",
-      });
-    }
-    const validated = validateLegacyFinalOutput(
-      workDir,
-      sessionId,
-      finalAudioPath,
-    );
-    const normalizedSummary = typeof summary === "string" ? summary : "";
-    const sessionData = sessions[sessionId] || ({} as any);
-    let finalQuality: any = null;
-    try {
-      finalQuality = await analyzeMedleyQuality(validated.finalPath, workDir);
-    } catch {
-      // The contained regular file is authoritative; quality remains optional here.
-    }
-    const transaction = executeFinalizationTransaction({
-      workDir,
-      sessionId,
-      candidateId: "legacy-output",
-      summary: normalizedSummary,
-      promote: () => ({
-        finalPath: validated.finalPath,
-        manifestVersion: null,
-        sha256: validated.sha256,
-      }),
-      readHistory: getHistory,
-      writeHistory: saveHistory,
-      readWisdom: getWisdom,
-      writeWisdom: saveWisdom,
-      createHistoryEntry: (resolvedPath) => ({
-        id: sessionId,
-        completedAt: new Date().toISOString(),
-        summary: normalizedSummary,
-        finalAudioPath: resolvedPath,
-        metrics: sessionData.metrics,
-        designPlan: sessionData.designPlan || null,
-        candidateId: "legacy-output",
-      }),
-      createWisdomEntry: (resolvedPath) => ({
-        type: "completed_medley",
+        finalAudioPath,
+      );
+      const normalizedSummary = typeof summary === "string" ? summary : "";
+      const sessionData = sessions[sessionId] || ({} as any);
+      let finalQuality: any = null;
+      try {
+        finalQuality = await analyzeMedleyQuality(validated.finalPath, workDir);
+      } catch {
+        // The contained regular file is authoritative; quality remains optional here.
+      }
+      const transaction = executeFinalizationTransaction({
+        workDir,
         sessionId,
-        summary: normalizedSummary,
-        metrics: sessionData.metrics || null,
-        designPlan: sessionData.designPlan || null,
-        finalAudioPath: resolvedPath,
         candidateId: "legacy-output",
-        tracksInvolved: collectTransitionTrackIds(
-          sessionData.designPlan?.transitions,
-        ),
-        ...(finalQuality ? { finalQuality } : {}),
-      }),
-      deleteCheckpoint: () =>
-        fs.rmSync(path.join(checkpointDir, `${sessionId}.json`), {
-          force: true,
+        summary: normalizedSummary,
+        promote: () => ({
+          finalPath: validated.finalPath,
+          manifestVersion: null,
+          sha256: validated.sha256,
         }),
+        readHistory: getHistory,
+        writeHistory: saveHistory,
+        readWisdom: getWisdom,
+        writeWisdom: saveWisdom,
+        createHistoryEntry: (resolvedPath) => ({
+          id: sessionId,
+          completedAt: new Date().toISOString(),
+          summary: normalizedSummary,
+          finalAudioPath: resolvedPath,
+          metrics: sessionData.metrics,
+          designPlan: sessionData.designPlan || null,
+          candidateId: "legacy-output",
+        }),
+        createWisdomEntry: (resolvedPath) => ({
+          type: "completed_medley",
+          sessionId,
+          summary: normalizedSummary,
+          metrics: sessionData.metrics || null,
+          designPlan: sessionData.designPlan || null,
+          finalAudioPath: resolvedPath,
+          candidateId: "legacy-output",
+          tracksInvolved: collectTransitionTrackIds(
+            sessionData.designPlan?.transitions,
+          ),
+          ...(finalQuality ? { finalQuality } : {}),
+        }),
+        deleteCheckpoint: () =>
+          fs.rmSync(path.join(checkpointDir, `${sessionId}.json`), {
+            force: true,
+          }),
+      });
+      sessions[sessionId] = {
+        ...(sessions[sessionId] || { logs: [] }),
+        status: "completed",
+        finalAudioPath: transaction.finalPath,
+        summary: normalizedSummary,
+        workflowStage: "completed",
+      };
+      broadcastToSession(sessionId, "completed", {
+        summary: normalizedSummary,
+      });
+      return res.json({ success: true, idempotent: transaction.idempotent });
     });
-    sessions[sessionId] = {
-      ...(sessions[sessionId] || { logs: [] }),
-      status: "completed",
-      finalAudioPath: transaction.finalPath,
-      summary: normalizedSummary,
-      workflowStage: "completed",
-    };
-    broadcastToSession(sessionId, "completed", {
-      summary: normalizedSummary,
-    });
-    return res.json({ success: true, idempotent: transaction.idempotent });
   } catch (error: any) {
     return res.status(400).json({ error: error.message });
   }
@@ -2335,55 +2341,57 @@ app.post("/api/session/execution-report", (req, res) => {
   }
 });
 
-app.post("/api/session/quality-review", (req, res) => {
+app.post("/api/session/quality-review", async (req, res) => {
   const { sessionId, review } = req.body || {};
   try {
     validateSessionId(sessionId);
-    const parsed = QualityReviewSchema.parse(review);
-    const existingManifest = readCandidateManifest(workDir, sessionId);
-    const reviewedCandidate = existingManifest.candidates.find(
-      (item) => item.candidateId === parsed.candidateId,
-    );
-    if (!reviewedCandidate) {
-      return res
-        .status(400)
-        .json({ error: "Reviewed candidate is not registered" });
-    }
-    if (
-      reviewedCandidate.candidateVersion !== parsed.candidateVersion ||
-      reviewedCandidate.arrangementVersion !== parsed.arrangementVersion
-    ) {
-      return res.status(400).json({
-        error: "Review version does not match the registered candidate",
-      });
-    }
-    if (parsed.approved && parsed.blockingIssues.length) {
-      return res
-        .status(400)
-        .json({ error: "An approved review cannot contain blocking issues" });
-    }
-    const plan = ArrangementPlanSchema.safeParse(
-      sessions[sessionId]?.designPlan,
-    );
-    if (plan.success) {
-      const transitionIds = new Set(
-        plan.data.transitions.map((item) => item.transitionId),
+    return await withSessionLock(sessionId, async () => {
+      const parsed = QualityReviewSchema.parse(review);
+      const existingManifest = readCandidateManifest(workDir, sessionId);
+      const reviewedCandidate = existingManifest.candidates.find(
+        (item) => item.candidateId === parsed.candidateId,
       );
-      const unknownCorrection = parsed.corrections.find(
-        (item) => !transitionIds.has(item.transitionId),
-      );
-      if (unknownCorrection) {
+      if (!reviewedCandidate) {
+        return res
+          .status(400)
+          .json({ error: "Reviewed candidate is not registered" });
+      }
+      if (
+        reviewedCandidate.candidateVersion !== parsed.candidateVersion ||
+        reviewedCandidate.arrangementVersion !== parsed.arrangementVersion
+      ) {
         return res.status(400).json({
-          error: `Unknown correction transition: ${unknownCorrection.transitionId}`,
+          error: "Review version does not match the registered candidate",
         });
       }
-    }
-    const manifest = applyCandidateReview(workDir, sessionId, parsed);
-    sessions[sessionId].qualityReview = parsed;
-    sessions[sessionId].workflowStage = parsed.approved
-      ? "final_render"
-      : "correction";
-    res.json({ success: true, review: parsed, manifest });
+      if (parsed.approved && parsed.blockingIssues.length) {
+        return res
+          .status(400)
+          .json({ error: "An approved review cannot contain blocking issues" });
+      }
+      const plan = ArrangementPlanSchema.safeParse(
+        sessions[sessionId]?.designPlan,
+      );
+      if (plan.success) {
+        const transitionIds = new Set(
+          plan.data.transitions.map((item) => item.transitionId),
+        );
+        const unknownCorrection = parsed.corrections.find(
+          (item) => !transitionIds.has(item.transitionId),
+        );
+        if (unknownCorrection) {
+          return res.status(400).json({
+            error: `Unknown correction transition: ${unknownCorrection.transitionId}`,
+          });
+        }
+      }
+      const manifest = applyCandidateReview(workDir, sessionId, parsed);
+      sessions[sessionId].qualityReview = parsed;
+      sessions[sessionId].workflowStage = parsed.approved
+        ? "final_render"
+        : "correction";
+      return res.json({ success: true, review: parsed, manifest });
+    });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
@@ -4002,7 +4010,7 @@ app.post("/api/finalize-medley", async (req, res) => {
   }
   try {
     validateSessionId(sessionId);
-    const execute = async () => withSessionLock(sessionId, async () => {
+    const performFinalization = async () => {
       const transaction = finalizeRegisteredCandidate(
         sessionId,
         candidateId,
@@ -4017,16 +4025,27 @@ app.post("/api/finalize-medley", async (req, res) => {
         idempotent: transaction.idempotent,
         cleanupWarning: null,
       };
-    });
-    const replay = idempotencyKey
-      ? await replayIdempotent({
+    };
+    const execute = () => withSessionLock(sessionId, performFinalization);
+    const automaticState = readAutomaticSessionState(workDir, sessionId);
+    const replay = idempotencyKey && automaticState
+      ? await replayAutomaticSessionIdempotent({
+          workDir,
           sessionId,
           operation: "finalization",
           key: idempotencyKey,
           request: { candidateId, summary },
-          execute,
+          execute: performFinalization,
         })
-      : { replayed: false, result: await execute() };
+      : idempotencyKey
+        ? await replayIdempotent({
+            sessionId,
+            operation: "finalization",
+            key: idempotencyKey,
+            request: { candidateId, summary },
+            execute,
+          })
+        : { replayed: false, result: await execute() };
     return res.json({ ...replay.result, idempotent: replay.replayed || replay.result.idempotent });
   } catch (error: any) {
     return res.status(400).json({ success: false, error: error.message });

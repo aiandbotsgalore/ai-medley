@@ -36,6 +36,7 @@ let historyWrites = 0;
 let wisdomWrites = 0;
 let checkpointDeletes = 0;
 let failWisdomOnce = true;
+const commitOrder: string[] = [];
 
 const input = {
   workDir: root,
@@ -43,6 +44,15 @@ const input = {
   candidateId: "candidate-001",
   summary: "Transaction fixture",
   promote: () => {
+    const intent = readFinalizationJournal(root, sessionId)!;
+    assert.equal(intent.status, "in_progress");
+    assert.deepEqual(intent.steps, {
+      candidatePromoted: false,
+      historyWritten: false,
+      wisdomWritten: false,
+      checkpointDeleted: false,
+    });
+    commitOrder.push("candidate_promoted");
     promoteCalls++;
     return {
       finalPath,
@@ -52,11 +62,15 @@ const input = {
   },
   readHistory: () => structuredClone(history),
   writeHistory: (next: any[]) => {
+    assert.equal(readFinalizationJournal(root, sessionId)?.steps.candidatePromoted, true);
+    commitOrder.push("history_written");
     historyWrites++;
     history.splice(0, history.length, ...structuredClone(next));
   },
   readWisdom: () => structuredClone(wisdom),
   writeWisdom: (next: any[]) => {
+    assert.equal(readFinalizationJournal(root, sessionId)?.steps.historyWritten, true);
+    commitOrder.push("wisdom_written");
     wisdomWrites++;
     if (failWisdomOnce) {
       failWisdomOnce = false;
@@ -76,6 +90,8 @@ const input = {
     candidateId: "candidate-001",
   }),
   deleteCheckpoint: () => {
+    assert.equal(readFinalizationJournal(root, sessionId)?.steps.wisdomWritten, true);
+    commitOrder.push("checkpoint_deleted");
     checkpointDeletes++;
   },
 };
@@ -97,6 +113,13 @@ try {
   assert.equal(historyWrites, 1);
   assert.equal(wisdomWrites, 2);
   assert.equal(checkpointDeletes, 1);
+  assert.deepEqual(commitOrder, [
+    "candidate_promoted",
+    "history_written",
+    "wisdom_written",
+    "wisdom_written",
+    "checkpoint_deleted",
+  ]);
 
   const repeated = executeFinalizationTransaction(input);
   assert.equal(repeated.idempotent, true);

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { AUTOMATIC_WORKFLOW_VERSION } from "../types/automaticWorkflowV4";
-import { assertLegalSessionTransition, readAutomaticSessionState, withAutomaticSessionTransaction, writeAutomaticSessionState } from "./automaticSessionState";
+import { assertLegalSessionTransition, readAutomaticSessionState, replayAutomaticSessionIdempotent, withAutomaticSessionTransaction, writeAutomaticSessionState } from "./automaticSessionState";
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "ai-medley-v4-state-"));
 const now = "2026-07-13T00:00:00.000Z";
@@ -18,5 +18,26 @@ try {
   const order: number[] = [];
   await Promise.all([withAutomaticSessionTransaction("session-1", async () => { order.push(1); }), withAutomaticSessionTransaction("session-1", async () => { order.push(2); })]);
   assert.deepEqual(order, [1, 2]);
+  let simultaneous = 0;
+  await Promise.all([
+    withAutomaticSessionTransaction("session-1", async () => { simultaneous += 1; await new Promise((resolve) => setTimeout(resolve, 5)); simultaneous -= 1; }),
+    withAutomaticSessionTransaction("session-2", async () => { simultaneous += 1; assert.equal(simultaneous, 2); simultaneous -= 1; }),
+  ]);
+  let calls = 0;
+  const replayFirst = await replayAutomaticSessionIdempotent({
+    workDir: root, sessionId: "session-1", operation: "candidate_rendering", key: "render-1", request: { candidate: 1 }, execute: async () => ({ rendered: ++calls }),
+  });
+  const replaySecond = await replayAutomaticSessionIdempotent({
+    workDir: root, sessionId: "session-1", operation: "candidate_rendering", key: "render-1", request: { candidate: 1 }, execute: async () => ({ rendered: ++calls }),
+  });
+  assert.equal(replayFirst.replayed, false);
+  assert.equal(replaySecond.replayed, true);
+  assert.deepEqual(replaySecond.result, { rendered: 1 });
+  assert.equal(calls, 1);
+  assert.equal(readAutomaticSessionState(root, "session-1")?.idempotencyRecords.length, 1);
+  await assert.rejects(
+    () => replayAutomaticSessionIdempotent({ workDir: root, sessionId: "session-1", operation: "candidate_rendering", key: "render-1", request: { candidate: 2 }, execute: async () => ({}) }),
+    /different request/,
+  );
 } finally { fs.rmSync(root, { recursive: true, force: true }); }
 console.log("automaticSessionState tests passed");

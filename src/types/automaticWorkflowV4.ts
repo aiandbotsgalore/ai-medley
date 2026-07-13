@@ -45,6 +45,10 @@ export const IdempotencyRecordV1Schema = z.strictObject({
   key: Id,
   requestHash: Hash,
   responseHash: Hash,
+  // A v4 request may be retried after the server restarts. Keep the sanitized
+  // JSON response with its hash so the original result can be returned without
+  // repeating rendering, registration, review, or finalization work.
+  response: z.unknown(),
   completedAt: IsoDate,
 });
 
