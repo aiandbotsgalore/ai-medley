@@ -608,6 +608,7 @@ async function requestStructuredArtifact<T>(
           {
             stage: options.stage,
             role,
+            requiredToolName: toolName,
             onRequestAudit: options.onRequestAudit,
           },
         );

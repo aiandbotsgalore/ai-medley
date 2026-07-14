@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type } from "@google/genai";
+import { FunctionCallingConfigMode, GoogleGenAI, Type } from "@google/genai";
 import type { MedleyConfig } from "../components/ConfigPanel";
 import {
   MAX_PROVIDER_REQUEST_BYTES,
@@ -53,6 +53,8 @@ type ProviderSession = {
 type ProviderAuditContext = {
   stage: string;
   role: string;
+  /** Force the single schema-bearing tool required by an Automatic stage. */
+  requiredToolName?: string;
   onRequestAudit?: (audit: ProviderRequestAudit) => void;
 };
 
@@ -361,6 +363,18 @@ export function createProviderSession(
               config: {
                 systemInstruction: { parts: [{ text: systemInstruction }] },
                 tools: [{ functionDeclarations: toGeminiFunctionDeclarations(tools) }],
+                // Gemini supports forcing a named function. Automatic stages
+                // cannot safely proceed with prose or an unrelated tool call.
+                ...(auditContext?.requiredToolName
+                  ? {
+                      toolConfig: {
+                        functionCallingConfig: {
+                          mode: FunctionCallingConfigMode.ANY,
+                          allowedFunctionNames: [auditContext.requiredToolName],
+                        },
+                      },
+                    }
+                  : {}),
                 temperature,
               },
             };
@@ -470,6 +484,7 @@ export function createProviderSession(
         temperature,
         messages: [...messages, ...pending],
         tools,
+        requiredToolName: auditContext?.requiredToolName,
       });
       const requestId =
         options?.requestId ??

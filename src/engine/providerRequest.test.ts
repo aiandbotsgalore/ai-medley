@@ -18,6 +18,19 @@ const openRouter = buildOpenRouterRequest({
 assert.equal(openRouter.utf8Bytes, new TextEncoder().encode(openRouter.serializedBody).byteLength);
 assert.doesNotThrow(() => assertProviderRequestWithinBudget(openRouter));
 
+const forcedOpenRouter = buildOpenRouterRequest({
+  model: "test/model",
+  temperature: 0.1,
+  messages: [],
+  tools: [],
+  requiredToolName: "set_design_plan",
+});
+assert.deepEqual(forcedOpenRouter.requestBody.tool_choice, {
+  type: "function",
+  function: { name: "set_design_plan" },
+});
+assert.equal(forcedOpenRouter.requestBody.parallel_tool_calls, false);
+
 const gemini = buildGeminiRequest({
   model: "gemini-test",
   temperature: 0.1,

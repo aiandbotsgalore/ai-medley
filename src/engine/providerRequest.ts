@@ -136,13 +136,24 @@ export function buildOpenRouterRequest(input: {
   temperature: number;
   messages: CategorizedProviderMessage[];
   tools: unknown[];
+  /** Automatic stages require one named structured result, not free text. */
+  requiredToolName?: string;
 }): BuiltProviderRequest {
+  const toolChoice = input.requiredToolName
+    ? {
+        type: "function" as const,
+        function: { name: input.requiredToolName },
+      }
+    : "auto";
   const requestBody = {
     model: input.model,
     temperature: input.temperature,
     messages: input.messages.map((item) => item.message),
     tools: input.tools,
-    tool_choice: "auto",
+    tool_choice: toolChoice,
+    // A structured automatic stage has exactly one durable artifact. Multiple
+    // simultaneous tool calls would be ambiguous and cannot be committed.
+    ...(input.requiredToolName ? { parallel_tool_calls: false } : {}),
   };
   const serializedBody = JSON.stringify(requestBody);
   const total = measureSerialized(serializedBody);
@@ -160,7 +171,8 @@ export function buildOpenRouterRequest(input: {
     requestEnvelope: measureValue({
       model: input.model,
       temperature: input.temperature,
-      tool_choice: "auto",
+      tool_choice: toolChoice,
+      ...(input.requiredToolName ? { parallel_tool_calls: false } : {}),
     }),
   };
 

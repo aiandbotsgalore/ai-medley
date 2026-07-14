@@ -221,6 +221,44 @@ assert.deepEqual(geminiProxyBody.config.tools[0].functionDeclarations, [
   nativeGeminiTool,
 ]);
 
+const forcedGemini = createProviderSession(
+  {
+    ...config,
+    provider: "gemini",
+    model: "gemini-test",
+    geminiApiKey: SERVER_MANAGED_API_KEY,
+  },
+  "system",
+  [automaticTool],
+  0.1,
+  [],
+  { stage: "arrangement", role: "arrangement", requiredToolName: "set_design_plan" },
+);
+await forcedGemini.send("produce the arrangement");
+const forcedGeminiBody = JSON.parse(String(proxyRequest!.init.body));
+assert.deepEqual(forcedGeminiBody.config.toolConfig, {
+  functionCallingConfig: {
+    mode: "ANY",
+    allowedFunctionNames: ["set_design_plan"],
+  },
+});
+
+const forcedOpenRouter = createProviderSession(
+  { ...config, openrouterApiKey: SERVER_MANAGED_API_KEY },
+  "system",
+  [automaticTool],
+  0.1,
+  [],
+  { stage: "arrangement", role: "arrangement", requiredToolName: "set_design_plan" },
+);
+await forcedOpenRouter.send("produce the arrangement");
+const forcedOpenRouterBody = JSON.parse(String(proxyRequest!.init.body));
+assert.deepEqual(forcedOpenRouterBody.tool_choice, {
+  type: "function",
+  function: { name: "set_design_plan" },
+});
+assert.equal(forcedOpenRouterBody.parallel_tool_calls, false);
+
 globalAny.fetch = async () =>
   response(400, { error: "Invalid tool schema: api_key=secret-value" });
 const rejectedGemini = createProviderSession(

@@ -1034,6 +1034,13 @@ globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
   }
   if (target === "/api/provider/gemini") {
     fullWorkflowGeminiRequests++;
+    const body = JSON.parse(String(init?.body ?? ""));
+    assert.deepEqual(body.config.toolConfig, {
+      functionCallingConfig: {
+        mode: "ANY",
+        allowedFunctionNames: ["set_design_plan"],
+      },
+    });
     // This is a valid Gemini proxy envelope with the actual failure mode:
     // a response was returned, but it did not contain the required tool call.
     return new Response(JSON.stringify({ functionCalls: [] }), {
@@ -1043,6 +1050,12 @@ globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
   }
   if (target === "/api/provider/openrouter") {
     fullWorkflowOpenRouterRequests++;
+    const body = JSON.parse(String(init?.body ?? ""));
+    assert.deepEqual(body.tool_choice, {
+      type: "function",
+      function: { name: "set_design_plan" },
+    });
+    assert.equal(body.parallel_tool_calls, false);
     return openRouterToolCall(
       "openrouter-arrangement",
       "set_design_plan",
