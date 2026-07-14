@@ -14,6 +14,7 @@ import {
 } from "./specialistOrchestrator";
 import { SERVER_MANAGED_API_KEY } from "../constants/provider";
 import {
+  ArrangementPlanSchema,
   createTransitionCandidateAuthority,
   type ArrangementPlan,
   type ProjectBrief,
@@ -943,6 +944,235 @@ assert.equal(
   "",
   "a failed unchanged render must not generate a production correction request",
 );
+
+// This is the complete Automatic-mode contract test. It models the provider
+// failure the app has seen in practice (Gemini returns no required tool call),
+// exercises the configured OpenRouter fallback, and then carries the exact
+// browser workflow through transition execution, candidate registration,
+// Gemini audio approval, manifest selection, and final promotion. Any request
+// not listed below fails the test, so it cannot accidentally contact a real
+// provider while this test runs.
+const fullWorkflowSessionId = "automatic-full-workflow";
+const fullWorkflowDesign: MedleyDesignPayload = {
+  ...design,
+  userConstraints: { targetDurationMinutes: 1.75 },
+};
+const fullWorkflowPlan = ArrangementPlanSchema.parse({
+  ...arrangementPlan,
+  projectId: fullWorkflowSessionId,
+  strategy: "Mocked fallback plan",
+});
+const fullWorkflowCandidate = {
+  candidateId: "candidate-full-workflow",
+  candidateVersion: 1,
+  parentCandidateId: null,
+  arrangementVersion: fullWorkflowPlan.arrangementVersion,
+  executionVersion: 1,
+  resolvedTransitions: fullWorkflowPlan.transitions.map((transition) => ({
+    ...transition,
+    actualFromExitSec: transition.fromExitSec,
+    actualToEntrySec: transition.toEntrySec,
+    durationUsed: transition.duration,
+    outputPath: "workdir/automatic-full-workflow/transition-t1.mp3",
+    executionVersion: 1,
+  })),
+  outputPath: "workdir/automatic-full-workflow/candidate-1.mp3",
+  debugPaths: [],
+  previewPaths: ["workdir/automatic-full-workflow/transition-t1.mp3"],
+  sizeBytes: 12_345,
+  sha256: "a".repeat(64),
+  durationSec: 105,
+  technicallyValid: true,
+  metrics: {
+    emotionalArc: 88,
+    transitionSmoothness: 91,
+    performerIdentity: 87,
+    overallScore: 89,
+  },
+  reviewStatus: "pending" as const,
+  warnings: [],
+  createdAt: new Date(0).toISOString(),
+};
+const fullWorkflowReview = {
+  schemaVersion: 1,
+  reviewSource: "gemini_audio" as const,
+  reviewModel: "gemini-3.1-pro-preview",
+  candidateId: fullWorkflowCandidate.candidateId,
+  candidateVersion: fullWorkflowCandidate.candidateVersion,
+  arrangementVersion: fullWorkflowCandidate.arrangementVersion,
+  approved: true,
+  emotionalArc: 88,
+  transitionSmoothness: 91,
+  performerIdentity: 87,
+  overallScore: 89,
+  blockingIssues: [],
+  corrections: [],
+  warnings: [],
+  reviewedAt: new Date(0).toISOString(),
+};
+const fullWorkflowStages: string[] = [];
+const fullWorkflowCheckpoints: AutomaticWorkflowCheckpoint[] = [];
+const fullWorkflowRequests: string[] = [];
+let fullWorkflowGeminiRequests = 0;
+let fullWorkflowOpenRouterRequests = 0;
+let fullWorkflowTransitionRequests = 0;
+let fullWorkflowRenderRequests = 0;
+let fullWorkflowAudioReviewRequests = 0;
+
+globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+  const target = String(url);
+  fullWorkflowRequests.push(target);
+  if (target === "/api/session/project-brief") {
+    const body = JSON.parse(String(init?.body ?? ""));
+    assert.equal(body.sessionId, fullWorkflowSessionId);
+    assert.deepEqual(
+      body.brief.trackSummaries.map((track: ProjectBrief["trackSummaries"][number]) => track.trackId),
+      ["a", "b"],
+      "the automatic plan must contain only the selected tracks",
+    );
+    return new Response(JSON.stringify({ success: true }), { status: 200 });
+  }
+  if (target === "/api/provider/gemini") {
+    fullWorkflowGeminiRequests++;
+    // This is a valid Gemini proxy envelope with the actual failure mode:
+    // a response was returned, but it did not contain the required tool call.
+    return new Response(JSON.stringify({ functionCalls: [] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+  if (target === "/api/provider/openrouter") {
+    fullWorkflowOpenRouterRequests++;
+    return openRouterToolCall(
+      "openrouter-arrangement",
+      "set_design_plan",
+      fullWorkflowPlan,
+    );
+  }
+  if (target === "/api/session/design-plan") {
+    const body = JSON.parse(String(init?.body ?? ""));
+    const parsedPlan = ArrangementPlanSchema.parse(body.plan);
+    assert.equal(body.sessionId, fullWorkflowSessionId);
+    assert.deepEqual(parsedPlan.orderedTrackIds, ["a", "b"]);
+    assert.equal(
+      parsedPlan.transitions[0].transitionCandidateId,
+      createTransitionCandidateAuthority(design.transitionMatrixSummary[0]),
+      "the fallback plan must be tied to a locally measured transition candidate",
+    );
+    return new Response(JSON.stringify({ success: true }), { status: 200 });
+  }
+  if (target === "/api/apply-transition") {
+    fullWorkflowTransitionRequests++;
+    const body = JSON.parse(String(init?.body ?? ""));
+    assert.equal(body.sessionId, fullWorkflowSessionId);
+    assert.equal(body.transitionId, "t1");
+    assert.equal(init?.headers && new Headers(init.headers).get("Idempotency-Key"),
+      `${fullWorkflowSessionId}:transition:1:t1`);
+    return new Response(JSON.stringify({
+      success: true,
+      outputPath: fullWorkflowCandidate.previewPaths[0],
+      actualFromExitSec: 80,
+      actualToEntrySec: 10,
+      durationUsed: 5,
+    }), { status: 200 });
+  }
+  if (target === "/api/session/execution-report") {
+    const body = JSON.parse(String(init?.body ?? ""));
+    assert.equal(body.report.attemptedTransitions.length, 1);
+    assert.equal(body.report.attemptedTransitions[0].success, true);
+    return new Response(JSON.stringify({ success: true }), { status: 200 });
+  }
+  if (target === "/api/render-review-candidate") {
+    fullWorkflowRenderRequests++;
+    const body = JSON.parse(String(init?.body ?? ""));
+    assert.equal(body.sessionId, fullWorkflowSessionId);
+    assert.equal(body.executionVersion, 1);
+    if (fullWorkflowRenderRequests === 1) {
+      return new Response(JSON.stringify({
+        success: false,
+        registrationPending: true,
+        error: "Candidate MP3 was rendered but manifest registration is temporarily unavailable",
+      }), { status: 503 });
+    }
+    return new Response(JSON.stringify({
+      success: true,
+      candidate: fullWorkflowCandidate,
+      quality: { note: "Mock technical quality pass" },
+      resolvedTransitions: fullWorkflowCandidate.resolvedTransitions,
+    }), { status: 200 });
+  }
+  if (target === "/api/session/audio-review") {
+    fullWorkflowAudioReviewRequests++;
+    const body = JSON.parse(String(init?.body ?? ""));
+    assert.equal(body.sessionId, fullWorkflowSessionId);
+    assert.equal(body.candidateId, fullWorkflowCandidate.candidateId);
+    assert.equal(body.mode, "whole_mix");
+    return new Response(JSON.stringify({
+      success: true,
+      model: "gemini-3.1-pro-preview",
+      review: fullWorkflowReview,
+    }), { status: 200 });
+  }
+  if (target === "/api/session/quality-review") {
+    const body = JSON.parse(String(init?.body ?? ""));
+    assert.deepEqual(body.review, fullWorkflowReview);
+    return new Response(JSON.stringify({ success: true }), { status: 200 });
+  }
+  if (target === `/api/session/${fullWorkflowSessionId}/candidates`) {
+    return new Response(JSON.stringify({
+      success: true,
+      manifest: {
+        candidates: [{ ...fullWorkflowCandidate, reviewStatus: "approved" }],
+        selectedCandidateId: fullWorkflowCandidate.candidateId,
+      },
+    }), { status: 200 });
+  }
+  if (target === "/api/finalize-medley") {
+    const body = JSON.parse(String(init?.body ?? ""));
+    assert.equal(body.sessionId, fullWorkflowSessionId);
+    assert.equal(body.candidateId, fullWorkflowCandidate.candidateId);
+    return new Response(JSON.stringify({
+      success: true,
+      outputPath: "library/finals/automatic-full-workflow.mp3",
+    }), { status: 200 });
+  }
+  throw new Error(`Unexpected full workflow fetch: ${target}`);
+}) as typeof fetch;
+
+const fullWorkflowResult = await runAutomaticSpecialistWorkflow({
+  sessionId: fullWorkflowSessionId,
+  config: {
+    ...DEFAULT_CONFIG,
+    geminiApiKey: SERVER_MANAGED_API_KEY,
+    openrouterApiKey: SERVER_MANAGED_API_KEY,
+    automaticOpenRouterFallbackModel: "test/openrouter-fallback",
+  },
+  library: [
+    { id: "a", originalName: "a.mp3", filename: "a.mp3", path: "library/audio/a.mp3", size: 1, mimeType: "audio/mpeg" },
+    { id: "b", originalName: "b.mp3", filename: "b.mp3", path: "library/audio/b.mp3", size: 1, mimeType: "audio/mpeg" },
+  ],
+  design: fullWorkflowDesign,
+  signal: new AbortController().signal,
+  requestSequence: 99,
+  onLog: () => {},
+  onStage: (stage) => fullWorkflowStages.push(stage),
+  onCheckpoint: async (checkpoint) => {
+    fullWorkflowCheckpoints.push(structuredClone(checkpoint));
+  },
+  onMetrics: () => {},
+});
+
+assert.equal(fullWorkflowResult.manualReviewRequired, false);
+assert.equal(fullWorkflowResult.candidateId, fullWorkflowCandidate.candidateId);
+assert.equal(fullWorkflowResult.outputPath, "library/finals/automatic-full-workflow.mp3");
+assert.equal(fullWorkflowGeminiRequests, 1, "a missing Gemini tool call must move directly to the configured fallback");
+assert.equal(fullWorkflowOpenRouterRequests, 1, "the configured OpenRouter fallback must provide the arrangement");
+assert.equal(fullWorkflowTransitionRequests, 1);
+assert.equal(fullWorkflowRenderRequests, 2, "a pending manifest registration must be retried once without rerendering");
+assert.equal(fullWorkflowAudioReviewRequests, 1, "an approved whole-mix review must not make a clip follow-up request");
+assert.equal(fullWorkflowRequests.includes("/api/provider/openrouter"), true);
+assert.equal(fullWorkflowStages.at(-1), "completed");
+assert.equal(fullWorkflowCheckpoints.at(-1)?.stage, "final_render");
 
 globalThis.fetch = originalFetch;
 (globalThis as any).window = originalWindow;
