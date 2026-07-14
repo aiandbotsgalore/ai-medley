@@ -315,6 +315,79 @@ const renderableFallback = buildDeterministicArrangementFallback(
 assert.equal(renderableFallback?.transitions[0].toEntrySec, 56);
 assert.equal(renderableFallback?.transitions[1].fromExitSec, 60);
 
+const longExitCandidates = Array.from({ length: 13 }, (_, index) => ({
+  ...design.transitionMatrixSummary[0],
+  fromTrackId: "a",
+  fromSectionId: "a-long",
+  toTrackId: "b",
+  toSectionId: "b-long",
+  fromExitSec: 157 - index,
+  toEntrySec: 0,
+  score: 1 - index / 100,
+}));
+const shortBalancedCandidate = {
+  ...longExitCandidates[0],
+  fromExitSec: 120,
+  score: 0.1,
+};
+const balancedExitCandidate = {
+  ...design.transitionMatrixSummary[0],
+  fromTrackId: "b",
+  fromSectionId: "b-long",
+  toTrackId: "c",
+  toSectionId: "c-long",
+  fromExitSec: 100,
+  toEntrySec: 0,
+  score: 0.9,
+};
+const balanceFallbackDesign: MedleyDesignPayload = {
+  ...design,
+  tracks: [
+    { ...design.tracks[0], trackId: "a", durationSec: 200 },
+    { ...design.tracks[1], trackId: "b", durationSec: 140 },
+    { ...design.tracks[1], trackId: "c", durationSec: 60 },
+  ],
+  sections: [
+    { ...design.sections[0], sectionId: "a-long", trackId: "a", startSec: 0, endSec: 200 },
+    { ...design.sections[1], sectionId: "b-long", trackId: "b", startSec: 0, endSec: 140 },
+    { ...design.sections[1], sectionId: "c-long", trackId: "c", startSec: 0, endSec: 60 },
+  ],
+  transitionMatrixSummary: [
+    ...longExitCandidates,
+    shortBalancedCandidate,
+    balancedExitCandidate,
+  ],
+};
+const balanceFallback = buildDeterministicArrangementFallback(
+  balanceFallbackDesign,
+  {
+    ...projectBrief,
+    targetDurationSec: 240,
+    recommendedOrderIds: ["a", "b", "c"],
+  },
+  {
+    trackIds: new Set(["a", "b", "c"]),
+    sectionsById: new Map([
+      ["a-long", { trackId: "a", startSec: 0, endSec: 200 }],
+      ["b-long", { trackId: "b", startSec: 0, endSec: 140 }],
+      ["c-long", { trackId: "c", startSec: 0, endSec: 60 }],
+    ]),
+    durationsByTrackId: new Map([["a", 200], ["b", 140], ["c", 60]]),
+    targetDurationSec: 240,
+    transitionCandidatesById: new Map(
+      balanceFallbackDesign.transitionMatrixSummary.map((candidate) => [
+        createTransitionCandidateAuthority(candidate),
+        candidate,
+      ] as const),
+    ),
+  },
+);
+assert.equal(
+  balanceFallback?.transitions[0].fromExitSec,
+  120,
+  "fallback must consider the shorter valid candidate even when it ranks below the top 12",
+);
+
 function resumeCheckpoint(): AutomaticWorkflowCheckpoint {
   return {
     schemaVersion: 3,

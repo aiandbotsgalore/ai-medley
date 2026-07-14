@@ -427,7 +427,18 @@ export function bindLegacyArrangementAuthority(
   return {
     ...plan,
     transitions: plan.transitions.map((transition) => {
-      if (transition.transitionCandidateId) return transition;
+      // A current candidate ID is the model's only authority over timing. The
+      // locally measured candidate owns every identity and timestamp field so
+      // an otherwise good choice cannot be rejected just because the model
+      // echoed one number imprecisely or mutated an internally locked field.
+      if (transition.transitionCandidateId) {
+        const candidate = context.transitionCandidatesById.get(
+          transition.transitionCandidateId,
+        );
+        return candidate
+          ? { ...transition, ...candidate, transitionCandidateId: transition.transitionCandidateId }
+          : transition;
+      }
       const matches = [...context.transitionCandidatesById.entries()].filter(
         ([, candidate]) =>
           candidate.fromTrackId === transition.fromTrackId &&
@@ -438,7 +449,7 @@ export function bindLegacyArrangementAuthority(
           Math.abs(candidate.toEntrySec - transition.toEntrySec) <= 0.001,
       );
       return matches.length === 1
-        ? { ...transition, transitionCandidateId: matches[0][0] }
+        ? { ...transition, ...matches[0][1], transitionCandidateId: matches[0][0] }
         : transition;
     }),
   };

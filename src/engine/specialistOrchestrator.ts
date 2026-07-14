@@ -24,6 +24,7 @@ import {
   SPECIALIST_MODELS,
   TransitionExecutionRequestSchema,
   createTransitionCandidateAuthority,
+  bindLegacyArrangementAuthority,
   createTrackFactAuthority,
   estimateArrangementDurationSec,
   formatValidationIssues,
@@ -82,6 +83,7 @@ type StructuredRequestOptions<T> = {
   tools: unknown[];
   prompt: string;
   contextualValidate?: (value: T) => string[];
+  canonicalize?: (value: T) => T;
   onLog: (message: string) => void;
   onModel: (model: string) => void;
   onRepair?: () => void;
@@ -434,13 +436,29 @@ export function buildDeterministicArrangementFallback(
   for (let index = 0; index < orderedTrackIds.length - 1; index++) {
     const fromTrackId = orderedTrackIds[index];
     const toTrackId = orderedTrackIds[index + 1];
-    const options = design.transitionMatrixSummary
+    const pairCandidates = design.transitionMatrixSummary
       .filter(
         (item) =>
           item.fromTrackId === fromTrackId && item.toTrackId === toTrackId,
-      )
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 8);
+      );
+    // Preserve both the best-sounding and earliest-exit choices. Retaining
+    // only the highest-scoring candidates can make every local fallback too
+    // long or give a single track most of the medley.
+    const options = [
+      ...pairCandidates.slice().sort((a, b) => b.score - a.score).slice(0, 12),
+      ...pairCandidates.slice().sort((a, b) => a.fromExitSec - b.fromExitSec).slice(0, 12),
+    ].filter(
+      (candidate, candidateIndex, allCandidates) =>
+        allCandidates.findIndex(
+          (other) =>
+            other.fromTrackId === candidate.fromTrackId &&
+            other.fromSectionId === candidate.fromSectionId &&
+            other.toTrackId === candidate.toTrackId &&
+            other.toSectionId === candidate.toSectionId &&
+            other.fromExitSec === candidate.fromExitSec &&
+            other.toEntrySec === candidate.toEntrySec,
+        ) === candidateIndex,
+    );
     if (!options.length) return null;
     variants = variants.flatMap((variant) =>
       options.map((transition) => ({
@@ -550,10 +568,13 @@ async function requestStructuredArtifact<T>(
           );
         }
         const parsed = schema.safeParse(call.args);
+        const canonical = parsed.success
+          ? (options.canonicalize?.(parsed.data) ?? parsed.data)
+          : null;
         const issues = parsed.success
-          ? (contextualValidate?.(parsed.data) ?? [])
+          ? (contextualValidate?.(canonical as T) ?? [])
           : formatValidationIssues(parsed.error);
-        if (parsed.success && issues.length === 0) return parsed.data;
+        if (parsed.success && issues.length === 0) return canonical as T;
         if (repairAttempt === 0) {
           repairAttempt++;
           message = JSON.stringify({
@@ -877,6 +898,8 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
           projectBrief,
           options.sessionId,
         ),
+      canonicalize: (plan) =>
+        bindLegacyArrangementAuthority(plan, arrangementContext),
       onLog: options.onLog,
       onModel: (model) => {
         options.onStage("arrangement", "arrangement", model);

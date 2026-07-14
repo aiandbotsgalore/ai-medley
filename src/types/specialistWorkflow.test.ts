@@ -301,6 +301,36 @@ assert.equal(
   }).transitions[0].transitionCandidateId,
   plan.transitions[0].transitionCandidateId,
 );
+const mutatedAuthoritativePlan = bindLegacyArrangementAuthority(
+  {
+    ...plan,
+    transitions: [{
+      ...plan.transitions[0],
+      fromTrackId: "b",
+      fromSectionId: "b-1",
+      toTrackId: "a",
+      toSectionId: "a-1",
+      fromExitSec: 1,
+      toEntrySec: 2,
+    }],
+  },
+  {
+    trackIds: new Set(["a", "b"]),
+    sectionsById: new Map(),
+    durationsByTrackId: new Map(),
+    transitionCandidatesById: new Map([
+      [plan.transitions[0].transitionCandidateId!, {
+        fromTrackId: "a", fromSectionId: "a-1", toTrackId: "b", toSectionId: "b-1",
+        fromExitSec: 80, toEntrySec: 10,
+      }],
+    ]),
+  },
+);
+assert.deepEqual(
+  mutatedAuthoritativePlan.transitions[0],
+  plan.transitions[0],
+  "a valid candidate ID must restore its measured transition fields",
+);
 assert.match(
   validateArrangementContext(
     { ...plan, transitions: [{ ...plan.transitions[0], transitionCandidateId: "invented" }] },
