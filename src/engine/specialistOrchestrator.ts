@@ -88,6 +88,35 @@ type StructuredRequestOptions<T> = {
   onRequestAudit?: (audit: ProviderRequestAudit) => void;
 };
 
+type AutomaticProviderAttempt = {
+  provider: "gemini" | "openrouter";
+  model: string;
+};
+
+/**
+ * Automatic v4 keeps Gemini as its musical-decision default. A configured
+ * OpenRouter model is a separate, immediate arrangement fallback—not a hidden
+ * replacement for Gemini and never a fallback for full-audio review.
+ */
+export function getAutomaticProviderAttempts(
+  role: SpecialistRole,
+  config: MedleyConfig,
+): AutomaticProviderAttempt[] {
+  const primary = SPECIALIST_FALLBACKS[role].map((model) => ({
+    provider: "gemini" as const,
+    model,
+  }));
+  if (role !== "arrangement" || !config.openrouterApiKey.trim()) return primary;
+  return [
+    ...primary,
+    {
+      provider: "openrouter",
+      model:
+        config.automaticOpenRouterFallbackModel ?? "google/gemini-2.5-pro",
+    },
+  ];
+}
+
 function assertActive(signal: AbortSignal) {
   if (signal.aborted)
     throw signal.reason ?? new DOMException("Aborted", "AbortError");
@@ -482,18 +511,19 @@ async function requestStructuredArtifact<T>(
     onModel,
   } = options;
   let lastError: unknown = null;
-  for (const model of SPECIALIST_FALLBACKS[role]) {
+  for (const attempt of getAutomaticProviderAttempts(role, config)) {
+    const { provider, model } = attempt;
     assertActive(signal);
     onModel(model);
-    onLog(`Specialist ${role}: ${model}`);
+    onLog(`Specialist ${role}: ${provider}/${model}`);
     let repairAttempt = 0;
     let message = prompt;
     while (repairAttempt <= 1) {
       try {
         const session = createProviderSession(
-          // Automatic v4 is direct Gemini. The browser carries only the
-          // server-managed sentinel; the real key stays in the local server.
-          { ...config, provider: "gemini", model },
+          // The browser carries only server-managed sentinels when configured;
+          // each provider route resolves its real credential locally.
+          { ...config, provider, model },
           systemInstruction,
           tools,
           0.1,
@@ -541,7 +571,11 @@ async function requestStructuredArtifact<T>(
       } catch (error: any) {
         lastError = error;
         if (signal.aborted) throw error;
-        onLog(`Specialist fallback from ${model}: ${error?.message || error}`);
+        onLog(
+          `Specialist fallback from ${provider}/${model}: ${error?.message || error}`,
+        );
+        // A provider rejection cannot be repaired by repeating the same
+        // request. Move straight to the next configured provider.
         break;
       }
     }

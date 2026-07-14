@@ -19,6 +19,9 @@ export interface MedleyConfig {
   model: string;
   geminiApiKey: string;
   openrouterApiKey: string;
+  // Automatic v4 always starts with direct Gemini. This is the model used for
+  // the first OpenRouter attempt if Gemini cannot accept the request.
+  automaticOpenRouterFallbackModel?: string;
   audioAnalysisMode: AudioAnalysisMode;
   style: "dj-set" | "smooth-transitions" | "mashup" | "acoustic" | "custom";
   temperature: number;
@@ -35,6 +38,7 @@ export const DEFAULT_CONFIG: MedleyConfig = {
   model: "gemini-3.1-pro-preview",
   geminiApiKey: "",
   openrouterApiKey: "",
+  automaticOpenRouterFallbackModel: "google/gemini-2.5-pro",
   audioAnalysisMode: "local",
   style: "smooth-transitions",
   temperature: 0.1,
@@ -372,6 +376,40 @@ export default function ConfigPanel({
           </div>
         )}
 
+        {local.modelMode === "manual" && (
+          <div className="mb-5 border border-[#222] bg-[#0A0A0A] rounded-lg p-3">
+            <div className="text-[10px] uppercase tracking-widest text-[#777] font-semibold mb-2">
+              Model provider
+            </div>
+            <div className="grid grid-cols-2 gap-2" role="group" aria-label="Model provider">
+              {(["gemini", "openrouter"] as const).map((provider) => (
+                <button
+                  key={provider}
+                  type="button"
+                  aria-pressed={local.provider === provider}
+                  onClick={() => update({ provider, model: getDefaultModelForProvider(provider) })}
+                  className={`min-h-11 rounded-lg border px-3 text-left text-[11px] font-semibold transition-colors ${local.provider === provider ? "border-[#00F0FF] bg-[#00F0FF]/5 text-[#8BEAF2]" : "border-[#333] text-[#AAA] hover:border-[#555]"}`}
+                >
+                  {provider === "gemini" ? "Google Gemini" : "OpenRouter"}
+                </button>
+              ))}
+            </div>
+            <label htmlFor="config-model" className="block mt-3 text-[10px] text-[#AAA] mb-1">
+              Model
+            </label>
+            <select
+              id="config-model"
+              value={local.model}
+              onChange={(event) => update({ model: event.target.value })}
+              className="w-full min-h-11 bg-[#0A0A0A] border border-[#444] rounded-lg px-3 text-[11px] text-[#CCC] focus:border-[#00F0FF]/50 focus:outline-none"
+            >
+              {(local.provider === "gemini" ? GEMINI_MODELS : OPENROUTER_MODELS).map((model) => (
+                <option key={model.id} value={model.id}>{model.label}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
         <div className="mb-5">
           <label htmlFor="config-api-key" className="block text-[11px] uppercase tracking-widest text-[#999] mb-2 font-semibold">
             {local.modelMode === "automatic" || local.provider === "gemini"
@@ -457,6 +495,80 @@ export default function ConfigPanel({
             </>
           )}
         </div>
+
+        {local.modelMode === "automatic" && (
+          <div className="mb-5 border border-[#222] bg-[#0A0A0A] rounded-lg p-3">
+            <div className="text-[10px] uppercase tracking-widest text-[#8BEAF2] font-semibold">
+              Automatic fallback: OpenRouter
+            </div>
+            <p className="mt-1 text-[10px] text-[#AAA]">
+              Primary decisions use Gemini 3.1 Pro; Gemini 3.5 Flash handles targeted review. If Gemini rejects the arrangement request, this model is tried immediately.
+            </p>
+            <label htmlFor="automatic-openrouter-fallback-model" className="block mt-3 text-[10px] text-[#AAA] mb-1">
+              Fallback model
+            </label>
+            <select
+              id="automatic-openrouter-fallback-model"
+              value={local.automaticOpenRouterFallbackModel ?? getDefaultModelForProvider("openrouter")}
+              onChange={(event) => update({ automaticOpenRouterFallbackModel: event.target.value })}
+              className="w-full min-h-11 bg-[#0A0A0A] border border-[#444] rounded-lg px-3 text-[11px] text-[#CCC] focus:border-[#00F0FF]/50 focus:outline-none"
+            >
+              {OPENROUTER_MODELS.map((model) => (
+                <option key={model.id} value={model.id}>{model.label}</option>
+              ))}
+            </select>
+            <label htmlFor="automatic-openrouter-api-key" className="block mt-3 text-[10px] text-[#AAA] mb-1">
+              OpenRouter API Key
+            </label>
+            <input
+              id="automatic-openrouter-api-key"
+              type="password"
+              value={local.openrouterApiKey === SERVER_MANAGED_API_KEY ? "" : local.openrouterApiKey}
+              onChange={(event) => update({ openrouterApiKey: event.target.value })}
+              placeholder="sk-or-v1-..."
+              className="w-full min-h-11 bg-[#0A0A0A] border border-[#444] rounded-lg px-3 py-2.5 text-[11px] text-[#CCC] placeholder:text-[#888] focus:border-[#00F0FF]/50 focus:outline-none"
+            />
+            <p className="mt-1 text-[9px] text-[#555]">
+              {local.openrouterApiKey === SERVER_MANAGED_API_KEY
+                ? "A server-managed OpenRouter credential is available for the fallback."
+                : "Add or save an OpenRouter key to enable the automatic fallback."}
+            </p>
+            <div className="mt-2 flex items-center gap-3">
+              <button
+                type="button"
+                onClick={saveOpenRouterKey}
+                disabled={
+                  keySaveState === "saving" ||
+                  !local.openrouterApiKey ||
+                  local.openrouterApiKey === SERVER_MANAGED_API_KEY
+                }
+                className="min-h-11 px-3 rounded-lg border border-[#00F0FF]/35 bg-[#00F0FF]/5 text-[10px] font-mono font-bold uppercase tracking-wider text-[#8BEAF2] hover:text-white hover:border-[#00F0FF]/70 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                {keySaveState === "saving" ? "Saving…" : "Save on this computer"}
+              </button>
+              <button
+                type="button"
+                onClick={testOpenRouterConnection}
+                disabled={
+                  preflightState === "checking" ||
+                  local.openrouterApiKey !== SERVER_MANAGED_API_KEY
+                }
+                className="min-h-11 px-3 rounded-lg border border-[#8BEAF2]/35 bg-[#8BEAF2]/5 text-[10px] font-mono font-bold uppercase tracking-wider text-[#8BEAF2] hover:text-white hover:border-[#8BEAF2]/70 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                {preflightState === "checking" ? "Checking…" : "Test connection"}
+              </button>
+              <span
+                role="status"
+                aria-live="polite"
+                className={`text-[10px] ${keySaveState === "error" || preflightState === "error" ? "text-red-300" : "text-emerald-300"}`}
+              >
+                {keySaveState === "saved"
+                  ? "Saved server-side for future sessions."
+                  : keySaveError || preflightMessage}
+              </span>
+            </div>
+          </div>
+        )}
 
         <div className="mb-5 border border-[#222] bg-[#0A0A0A] rounded-lg p-3">
           <div className="text-[10px] uppercase tracking-widest text-[#777] font-semibold">

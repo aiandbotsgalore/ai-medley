@@ -43,7 +43,19 @@ const automaticUpgrade = migrateMedleyConfigWithNotices({
 } as any);
 assert.equal(automaticUpgrade.config.provider, "gemini");
 assert.equal(automaticUpgrade.config.model, "gemini-3.1-pro-preview");
+assert.equal(
+  automaticUpgrade.config.automaticOpenRouterFallbackModel,
+  "google/gemini-2.5-pro",
+);
 assert.match(automaticUpgrade.notices.join(" "), /direct Gemini/i);
+
+const openRouterOnlyAutomatic = migrateMedleyConfig({
+  ...DEFAULT_CONFIG,
+  modelMode: "automatic",
+  geminiApiKey: "",
+  openrouterApiKey: "openrouter-key",
+});
+assert.equal(getStartConfigurationError(openRouterOnlyAutomatic), null);
 
 const incompatible = migrateMedleyConfigWithNotices({
   ...DEFAULT_CONFIG,

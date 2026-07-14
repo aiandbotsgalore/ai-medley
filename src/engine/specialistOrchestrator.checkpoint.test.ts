@@ -7,6 +7,7 @@ import type { MedleyDesignPayload } from "./medleyIntelligence";
 import {
   buildDeterministicArrangementFallback,
   buildDeterministicProjectBrief,
+  getAutomaticProviderAttempts,
   normalizeRenderFailureFeedback,
   runAutomaticSpecialistWorkflow,
   type AutomaticWorkflowCheckpoint,
@@ -212,6 +213,22 @@ const localFallback = buildDeterministicArrangementFallback(
 );
 assert.equal(localFallback?.transitions[0].fromSectionId, "a-1");
 assert.equal(localFallback?.transitions[0].toSectionId, "b-1");
+assert.deepEqual(
+  getAutomaticProviderAttempts("arrangement", {
+    ...DEFAULT_CONFIG,
+    geminiApiKey: SERVER_MANAGED_API_KEY,
+    openrouterApiKey: SERVER_MANAGED_API_KEY,
+    automaticOpenRouterFallbackModel: "test/openrouter-fallback",
+  }),
+  [
+    { provider: "gemini", model: "gemini-3.1-pro-preview" },
+    { provider: "openrouter", model: "test/openrouter-fallback" },
+  ],
+);
+assert.deepEqual(
+  getAutomaticProviderAttempts("arrangement", DEFAULT_CONFIG),
+  [{ provider: "gemini", model: "gemini-3.1-pro-preview" }],
+);
 
 const fallbackTransitionBase = design.transitionMatrixSummary[0];
 const invalidEntryCandidate = {
@@ -541,6 +558,84 @@ const fallbackPlan = JSON.parse(fallbackPlanBody).plan as ArrangementPlan;
 assert.equal(fallbackPlan.strategy, "Local target-matched fallback");
 assert.equal(fallbackPlan.transitions[0].fromSectionId, "a-1");
 assert.equal(fallbackPlan.transitions[0].toSectionId, "b-1");
+
+let directGeminiAttempts = 0;
+let openRouterFallbackAttempts = 0;
+let openRouterFallbackPlanBody = "";
+globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
+  const target = String(url);
+  if (target === "/api/session/project-brief")
+    return new Response(JSON.stringify({ success: true }), { status: 200 });
+  if (target === "/api/provider/gemini") {
+    directGeminiAttempts++;
+    return new Response(JSON.stringify({ error: "Gemini rejected this request" }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+  if (target === "/api/provider/openrouter") {
+    openRouterFallbackAttempts++;
+    return new Response(
+      JSON.stringify({
+        choices: [{
+          message: {
+            role: "assistant",
+            content: "",
+            tool_calls: [{
+              id: "openrouter-arrangement",
+              type: "function",
+              function: {
+                name: "set_design_plan",
+                arguments: JSON.stringify(localFallback),
+              },
+            }],
+          },
+        }],
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  }
+  if (target === "/api/session/design-plan") {
+    openRouterFallbackPlanBody = String(init?.body ?? "");
+    return new Response(JSON.stringify({ success: true }), { status: 200 });
+  }
+  throw new Error(`Unexpected OpenRouter fallback fetch: ${target}`);
+}) as typeof fetch;
+
+await assert.rejects(
+  runAutomaticSpecialistWorkflow({
+    sessionId,
+    config: {
+      ...DEFAULT_CONFIG,
+      geminiApiKey: SERVER_MANAGED_API_KEY,
+      openrouterApiKey: SERVER_MANAGED_API_KEY,
+      automaticOpenRouterFallbackModel: "test/openrouter-fallback",
+    },
+    library: [],
+    design,
+    signal: new AbortController().signal,
+    requestSequence: 131,
+    resume: fallbackCheckpoint,
+    onLog: () => {},
+    onStage: () => {},
+    onCheckpoint: async (checkpoint) => {
+      if (checkpoint.stage === "production")
+        throw new DOMException("Test complete", "AbortError");
+    },
+    onMetrics: () => {},
+  }),
+  (error: any) => error?.name === "AbortError",
+);
+assert.equal(directGeminiAttempts, 1, "Gemini must be attempted once before fallback");
+assert.equal(
+  openRouterFallbackAttempts,
+  1,
+  "a Gemini rejection must move immediately to the configured OpenRouter fallback",
+);
+assert.equal(
+  (JSON.parse(openRouterFallbackPlanBody).plan as ArrangementPlan).strategy,
+  "Local target-matched fallback",
+);
 
 const invalidResumedCheckpoint: AutomaticWorkflowCheckpoint = {
   ...resumeCheckpoint(),
