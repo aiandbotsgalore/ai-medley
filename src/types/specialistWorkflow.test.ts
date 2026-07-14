@@ -124,6 +124,12 @@ assert.deepEqual(
       [plan.transitions[0].transitionCandidateId!, {
         fromTrackId: "a", fromSectionId: "a-1", toTrackId: "b", toSectionId: "b-1",
         fromExitSec: 80, toEntrySec: 10,
+        transitionType: "smooth_blend",
+        score: 0.9,
+        confidence: 0.8,
+        scores: { smoothBlend: 0.9 },
+        reason: "Local analysis",
+        warnings: ["diagnostic only"],
       }],
     ]),
   }),
@@ -330,6 +336,11 @@ assert.deepEqual(
   mutatedAuthoritativePlan.transitions[0],
   plan.transitions[0],
   "a valid candidate ID must restore its measured transition fields",
+);
+assert.equal(
+  ArrangementPlanSchema.safeParse(mutatedAuthoritativePlan).success,
+  true,
+  "binding an analysis candidate must not copy analysis-only keys into the strict plan",
 );
 assert.match(
   validateArrangementContext(

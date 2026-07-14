@@ -419,6 +419,24 @@ export function bindLegacyProjectBriefAuthority(
   };
 }
 
+function authoritativeTransitionFields(candidate: {
+  fromTrackId: string;
+  fromSectionId: string;
+  toTrackId: string;
+  toSectionId: string;
+  fromExitSec: number;
+  toEntrySec: number;
+}) {
+  return {
+    fromTrackId: candidate.fromTrackId,
+    fromSectionId: candidate.fromSectionId,
+    toTrackId: candidate.toTrackId,
+    toSectionId: candidate.toSectionId,
+    fromExitSec: candidate.fromExitSec,
+    toEntrySec: candidate.toEntrySec,
+  };
+}
+
 export function bindLegacyArrangementAuthority(
   plan: ArrangementPlan,
   context: SpecialistContext,
@@ -436,7 +454,11 @@ export function bindLegacyArrangementAuthority(
           transition.transitionCandidateId,
         );
         return candidate
-          ? { ...transition, ...candidate, transitionCandidateId: transition.transitionCandidateId }
+          ? {
+              ...transition,
+              ...authoritativeTransitionFields(candidate),
+              transitionCandidateId: transition.transitionCandidateId,
+            }
           : transition;
       }
       const matches = [...context.transitionCandidatesById.entries()].filter(
@@ -449,7 +471,11 @@ export function bindLegacyArrangementAuthority(
           Math.abs(candidate.toEntrySec - transition.toEntrySec) <= 0.001,
       );
       return matches.length === 1
-        ? { ...transition, ...matches[0][1], transitionCandidateId: matches[0][0] }
+        ? {
+            ...transition,
+            ...authoritativeTransitionFields(matches[0][1]),
+            transitionCandidateId: matches[0][0],
+          }
         : transition;
     }),
   };
