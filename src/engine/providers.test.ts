@@ -26,30 +26,57 @@ const response = (status: number, body: unknown, headers?: Record<string, string
   });
 
 const bodies: string[] = [];
+const requestHeaders: Headers[] = [];
+const successfulAudits: any[] = [];
 let attempts = 0;
 globalAny.fetch = async (_url: string, init: RequestInit) => {
   bodies.push(String(init.body));
+  requestHeaders.push(new Headers(init.headers));
   attempts++;
   if (attempts === 1)
     return response(429, { error: { message: "slow down" } }, { "Retry-After": "0" });
   return response(200, {
     choices: [{ message: { role: "assistant", content: "ok" } }],
     usage: { prompt_tokens: 12 },
+    openrouter_metadata: {
+      strategy: "fallback",
+      summary: "available=2, selected=Provider B",
+      attempt: 2,
+      attempts: [{ provider: "Provider A", model: "test/model", status: 529 }],
+    },
   });
 };
 
-const session = createProviderSession(config, "system", [], 0.1);
+const session = createProviderSession(config, "system", [], 0.1, [], {
+  stage: "arrangement",
+  role: "arrangement",
+  onRequestAudit: (audit) => successfulAudits.push(audit),
+});
 const result = await session.send("hello");
 assert.equal(result.text, "ok");
 assert.equal(attempts, 2);
 assert.equal(bodies[0], bodies[1], "transport retry must reuse the exact body");
+assert.equal(requestHeaders[0].get("X-OpenRouter-Metadata"), "enabled");
+assert.deepEqual(successfulAudits.at(-1)?.routing, {
+  strategy: "fallback",
+  summary: "available=2, selected=Provider B",
+  attempt: 2,
+  fallbackAttempts: [{ provider: "Provider A", model: "test/model", status: 529 }],
+});
 assert.deepEqual(
   session.getHistory().map((message: any) => message.role),
   ["user", "assistant"],
 );
 
 globalAny.fetch = async () =>
-  response(401, { error: { message: "bad key", apiKey: "secret-value" } });
+  response(401, {
+    error: {
+      message: "bad key",
+      apiKey: "secret-value",
+      metadata: { error_type: "authentication", provider_code: "invalid_key" },
+    },
+    openrouter_metadata: { strategy: "direct", attempt: 1 },
+  });
 const audits: any[] = [];
 const failed = createProviderSession(config, "system", [], 0.1, [], {
   stage: "manual",
@@ -66,6 +93,9 @@ await assert.rejects(
 assert.deepEqual(failed.getHistory(), []);
 assert.equal(audits.at(-1)?.status, "failed");
 assert.equal(audits.at(-1)?.errorCategory, "authentication");
+assert.equal(audits.at(-1)?.providerErrorType, "authentication");
+assert.equal(audits.at(-1)?.providerCode, "invalid_key");
+assert.equal(audits.at(-1)?.routing?.attempt, 1);
 
 for (const [status, category] of [
   [402, "quota"],

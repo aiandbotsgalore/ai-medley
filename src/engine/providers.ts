@@ -11,7 +11,10 @@ import {
   buildOpenRouterRequest,
   classifyProviderFailure,
   ProviderRequestError,
+  OPENROUTER_ROUTING_METADATA_HEADER,
+  OPENROUTER_ROUTING_METADATA_VALUE,
   sanitizeProviderAssistantMessage,
+  extractOpenRouterRoutingAudit,
   type CategorizedProviderMessage,
   type ProviderMessageCategory,
   type ProviderRequestAudit,
@@ -177,6 +180,7 @@ async function fetchOpenRouter(
             : {
                 "HTTP-Referer": window.location.origin,
                 "X-Title": "AI Medley Architect",
+                [OPENROUTER_ROUTING_METADATA_HEADER]: OPENROUTER_ROUTING_METADATA_VALUE,
               }),
         },
         body: request.serializedBody,
@@ -513,6 +517,9 @@ export function createProviderSession(
         auditContext?.onRequestAudit?.({
           ...auditBase,
           errorCategory: classified.category,
+          providerErrorType: classified.providerErrorType,
+          providerCode: classified.providerCode,
+          routing: classified.routing,
           status: "failed",
         });
         if (request.signal.aborted && request.signal.reason)
@@ -565,6 +572,7 @@ export function createProviderSession(
       auditContext?.onRequestAudit?.({
         ...auditBase,
         actualPromptTokens: usage?.prompt_tokens,
+        routing: extractOpenRouterRoutingAudit(data),
         status: "completed",
       });
 

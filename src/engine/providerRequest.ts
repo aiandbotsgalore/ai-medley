@@ -49,6 +49,20 @@ export type ProviderErrorCategory =
   | "aborted"
   | "unknown";
 
+/** OpenRouter's documented opt-in header for safe routing diagnostics. */
+export const OPENROUTER_ROUTING_METADATA_HEADER = "X-OpenRouter-Metadata";
+export const OPENROUTER_ROUTING_METADATA_VALUE = "enabled";
+
+export type OpenRouterRoutingAudit = {
+  requestedModel?: string;
+  strategy?: string;
+  summary?: string;
+  attempt?: number;
+  endpoints?: Array<{ provider: string; model: string; selected: boolean }>;
+  fallbackAttempts?: Array<{ provider: string; model: string; status: number }>;
+  pipelineStages?: Array<{ type: string; name: string }>;
+};
+
 export type ManualProviderAction =
   | "retry_same"
   | "switch_model"
@@ -61,6 +75,9 @@ export class ProviderRequestError extends Error {
   readonly status?: number;
   readonly retryAfterMs: number | null;
   readonly payloadMetrics?: BuiltProviderRequest;
+  readonly providerErrorType?: string;
+  readonly providerCode?: string;
+  readonly routing?: OpenRouterRoutingAudit;
 
   constructor(options: {
     message: string;
@@ -68,6 +85,9 @@ export class ProviderRequestError extends Error {
     status?: number;
     retryAfterMs?: number | null;
     payloadMetrics?: BuiltProviderRequest;
+    providerErrorType?: string;
+    providerCode?: string;
+    routing?: OpenRouterRoutingAudit;
     cause?: unknown;
   }) {
     super(options.message, { cause: options.cause });
@@ -76,6 +96,9 @@ export class ProviderRequestError extends Error {
     this.status = options.status;
     this.retryAfterMs = options.retryAfterMs ?? null;
     this.payloadMetrics = options.payloadMetrics;
+    this.providerErrorType = options.providerErrorType;
+    this.providerCode = options.providerCode;
+    this.routing = options.routing;
   }
 }
 
@@ -102,6 +125,9 @@ export type ProviderRequestAudit = {
   breakdown: ProviderRequestBreakdown;
   actualPromptTokens?: number;
   errorCategory?: ProviderErrorCategory;
+  providerErrorType?: string;
+  providerCode?: string;
+  routing?: OpenRouterRoutingAudit;
   status: "measured" | "completed" | "failed";
 };
 
@@ -288,6 +314,93 @@ function safeProviderMessage(body: unknown): string | null {
     .slice(0, 500);
 }
 
+function parseProviderBody(body: unknown): Record<string, any> | null {
+  try {
+    const value = typeof body === "string" ? JSON.parse(body) : body;
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? value as Record<string, any>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function safeRoutingText(value: unknown, maxLength = 200): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = safeProviderMessage({ message: value });
+  return text ? text.slice(0, maxLength) : undefined;
+}
+
+function safeRoutingNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, Math.floor(value))
+    : undefined;
+}
+
+/**
+ * Keep only documented routing fields. Never retain raw provider responses,
+ * prompts, plugin data, authorization values, or arbitrary metadata.
+ */
+export function extractOpenRouterRoutingAudit(
+  body: unknown,
+): OpenRouterRoutingAudit | undefined {
+  const metadata = parseProviderBody(body)?.openrouter_metadata;
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata))
+    return undefined;
+  const value = metadata as Record<string, any>;
+  const endpoints = Array.isArray(value.endpoints?.available)
+    ? value.endpoints.available.slice(0, 12).flatMap((endpoint: any) => {
+        const provider = safeRoutingText(endpoint?.provider, 120);
+        const model = safeRoutingText(endpoint?.model, 300);
+        return provider && model
+          ? [{ provider, model, selected: endpoint?.selected === true }]
+          : [];
+      })
+    : [];
+  const fallbackAttempts = Array.isArray(value.attempts)
+    ? value.attempts.slice(0, 12).flatMap((item: any) => {
+        const provider = safeRoutingText(item?.provider, 120);
+        const model = safeRoutingText(item?.model, 300);
+        const status = safeRoutingNumber(item?.status);
+        return provider && model && status !== undefined
+          ? [{ provider, model, status }]
+          : [];
+      })
+    : [];
+  const pipelineStages = Array.isArray(value.pipeline)
+    ? value.pipeline.slice(0, 12).flatMap((item: any) => {
+        const type = safeRoutingText(item?.type, 80);
+        const name = safeRoutingText(item?.name, 120);
+        return type && name ? [{ type, name }] : [];
+      })
+    : [];
+  const requestedModel = safeRoutingText(value.requested, 300);
+  const strategy = safeRoutingText(value.strategy, 80);
+  const summary = safeRoutingText(value.summary, 240);
+  const attempt = safeRoutingNumber(value.attempt);
+  const audit: OpenRouterRoutingAudit = {
+    ...(requestedModel ? { requestedModel } : {}),
+    ...(strategy ? { strategy } : {}),
+    ...(summary ? { summary } : {}),
+    ...(attempt !== undefined ? { attempt } : {}),
+    ...(endpoints.length ? { endpoints } : {}),
+    ...(fallbackAttempts.length ? { fallbackAttempts } : {}),
+    ...(pipelineStages.length ? { pipelineStages } : {}),
+  };
+  return Object.values(audit).some((item) => item !== undefined)
+    ? audit
+    : undefined;
+}
+
+function extractProviderErrorDetails(body: unknown) {
+  const metadata = parseProviderBody(body)?.error?.metadata;
+  return {
+    providerErrorType: safeRoutingText(metadata?.error_type, 120),
+    providerCode: safeRoutingText(metadata?.provider_code, 120),
+    routing: extractOpenRouterRoutingAudit(body),
+  };
+}
+
 export function classifyProviderFailure(input: {
   status?: number;
   body?: unknown;
@@ -310,11 +423,13 @@ export function classifyProviderFailure(input: {
   else if (typeof status === "number" && status >= 500) category = "server";
   else if (cause instanceof TypeError) category = "network";
   const detail = safeProviderMessage(input.body);
+  const providerDetails = extractProviderErrorDetails(input.body);
   return new ProviderRequestError({
     category,
     status,
     retryAfterMs: parseRetryAfterMs(input.retryAfter),
     cause: input.cause,
+    ...providerDetails,
     message: `Provider request failed${status ? ` (${status})` : ""}${detail ? `: ${detail}` : ""}`,
   });
 }

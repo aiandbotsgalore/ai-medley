@@ -1872,9 +1872,21 @@ export default function App() {
                 `${audit.utf8Bytes.toLocaleString()} bytes, ${audit.estimatedTokens.toLocaleString()} estimated tokens`,
             );
           } else if (audit.status === "failed") {
+            const routing = audit.routing;
+            const routeNote = routing
+              ? ` route=${routing.summary ?? routing.strategy ?? "reported"}`
+              : "";
+            const providerNote = audit.providerErrorType
+              ? ` provider=${audit.providerErrorType}`
+              : "";
             addLog(
               `Provider attempt failed during ${audit.stage}: ` +
-                `${audit.errorCategory ?? "unknown"} (${audit.model}, request ${audit.requestNumber})`,
+                `${audit.errorCategory ?? "unknown"}${providerNote} (${audit.model}, request ${audit.requestNumber})${routeNote}`,
+            );
+          } else if (audit.routing?.attempt && audit.routing.attempt > 1) {
+            addLog(
+              `OpenRouter recovered ${audit.stage} through routing attempt ${audit.routing.attempt}: ` +
+                `${audit.routing.summary ?? audit.model}`,
             );
           }
         },

@@ -5,6 +5,7 @@ import {
   buildOpenRouterRequest,
   classifyProviderFailure,
   getManualProviderFailureDecision,
+  extractOpenRouterRoutingAudit,
   parseRetryAfterMs,
 } from "./providerRequest";
 
@@ -96,6 +97,41 @@ for (const trackCount of [2, 4, 10, 25, 100]) {
 assert.equal(parseRetryAfterMs("2", 0), 2_000);
 assert.equal(parseRetryAfterMs("invalid", 0), null);
 
+const routingAudit = extractOpenRouterRoutingAudit({
+  openrouter_metadata: {
+    requested: "test/model",
+    strategy: "fallback",
+    summary: "available=2, selected=Provider B",
+    attempt: 2,
+    endpoints: {
+      available: [
+        { provider: "Provider A", model: "test/model", selected: false },
+        { provider: "Provider B", model: "test/model", selected: true },
+      ],
+    },
+    attempts: [
+      { provider: "Provider A", model: "test/model", status: 529 },
+      { provider: "Provider B", model: "test/model", status: 200 },
+    ],
+    pipeline: [{ type: "response_healing", name: "response-healing", data: { ignored: true } }],
+  },
+});
+assert.deepEqual(routingAudit, {
+  requestedModel: "test/model",
+  strategy: "fallback",
+  summary: "available=2, selected=Provider B",
+  attempt: 2,
+  endpoints: [
+    { provider: "Provider A", model: "test/model", selected: false },
+    { provider: "Provider B", model: "test/model", selected: true },
+  ],
+  fallbackAttempts: [
+    { provider: "Provider A", model: "test/model", status: 529 },
+    { provider: "Provider B", model: "test/model", status: 200 },
+  ],
+  pipelineStages: [{ type: "response_healing", name: "response-healing" }],
+});
+
 const cases = [
   [401, "authentication", "reconfigure"],
   [402, "quota", "switch_model"],
@@ -115,5 +151,19 @@ for (const [status, category, action] of cases) {
   assert.equal(getManualProviderFailureDecision(error).action, action);
   assert.doesNotMatch(error.message, /secret/);
 }
+
+const openRouterFailure = classifyProviderFailure({
+  status: 429,
+  body: {
+    error: {
+      message: "retry later",
+      metadata: { error_type: "rate_limit_exceeded", provider_code: "upstream_429" },
+    },
+    openrouter_metadata: { strategy: "fallback", attempt: 2 },
+  },
+});
+assert.equal(openRouterFailure.providerErrorType, "rate_limit_exceeded");
+assert.equal(openRouterFailure.providerCode, "upstream_429");
+assert.equal(openRouterFailure.routing?.attempt, 2);
 
 console.log("providerRequest tests passed");

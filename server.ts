@@ -1362,6 +1362,7 @@ app.post(
           "Content-Type": "application/json",
           "HTTP-Referer": `http://${HOST}:${PORT}`,
           "X-Title": "AI Medley Architect",
+          "X-OpenRouter-Metadata": "enabled",
         },
         body: String(req.body || ""),
         signal: AbortSignal.timeout(120_000),
