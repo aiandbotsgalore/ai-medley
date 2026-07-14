@@ -258,8 +258,11 @@ function safeProviderMessage(body: unknown): string | null {
   let candidate = "";
   try {
     const parsed = typeof body === "string" ? JSON.parse(body) : body;
+    const providerError = (parsed as any)?.error;
     candidate = String(
-      (parsed as any)?.error?.message ?? (parsed as any)?.message ?? "",
+      (typeof providerError === "string" ? providerError : providerError?.message) ??
+        (parsed as any)?.message ??
+        "",
     );
   } catch {
     candidate = typeof body === "string" ? body : "";

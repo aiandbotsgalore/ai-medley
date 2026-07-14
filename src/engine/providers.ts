@@ -1,4 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 import type { MedleyConfig } from "../components/ConfigPanel";
 import {
   MAX_PROVIDER_REQUEST_BYTES,
@@ -66,6 +66,60 @@ type AnalyzeAudioOptions = {
 };
 
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
+
+/**
+ * The automatic specialists share their tool definitions with OpenRouter. The
+ * two providers use different envelopes, though: OpenRouter wraps each
+ * declaration in `{ type: "function", function: ... }`, while Gemini accepts
+ * the declaration itself. Sending the OpenRouter wrapper to Gemini makes the
+ * API reject the request before the model can make an arrangement decision.
+ */
+function toGeminiSchema(value: any): any {
+  if (!value || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map(toGeminiSchema);
+
+  const output: Record<string, unknown> = {};
+  if (value.type === "object" || value.type === Type.OBJECT)
+    output.type = Type.OBJECT;
+  else if (value.type === "array" || value.type === Type.ARRAY)
+    output.type = Type.ARRAY;
+  else if (
+    value.type === "number" ||
+    value.type === "integer" ||
+    value.type === Type.NUMBER
+  )
+    output.type = Type.NUMBER;
+  else if (value.type === "boolean" || value.type === Type.BOOLEAN)
+    output.type = Type.BOOLEAN;
+  else if (value.type === "string" || value.type === Type.STRING)
+    output.type = Type.STRING;
+
+  for (const key of ["description", "enum", "minimum", "maximum"] as const) {
+    if (value[key] !== undefined) output[key] = value[key];
+  }
+  if (value.required) output.required = value.required;
+  if (value.items) output.items = toGeminiSchema(value.items);
+  if (value.properties) {
+    output.properties = Object.fromEntries(
+      Object.entries(value.properties).map(([key, child]) => [
+        key,
+        toGeminiSchema(child),
+      ]),
+    );
+  }
+  return output;
+}
+
+function toGeminiFunctionDeclarations(tools: unknown[]) {
+  return tools.map((tool: any) => {
+    const declaration = tool?.type === "function" ? tool.function : tool;
+    return {
+      name: String(declaration?.name ?? ""),
+      description: String(declaration?.description ?? ""),
+      parameters: toGeminiSchema(declaration?.parameters ?? { type: "object" }),
+    };
+  });
+}
 
 function getActiveApiKey(config: MedleyConfig) {
   return config.provider === "gemini"
@@ -306,7 +360,7 @@ export function createProviderSession(
               contents: candidateMessages.map((item) => item.message) as any,
               config: {
                 systemInstruction: { parts: [{ text: systemInstruction }] },
-                tools: [{ functionDeclarations: tools as never[] }],
+                tools: [{ functionDeclarations: toGeminiFunctionDeclarations(tools) }],
                 temperature,
               },
             };

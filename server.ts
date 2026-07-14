@@ -1393,8 +1393,17 @@ app.post("/api/provider/gemini", async (req, res) => {
       candidateContent: (result as any)?.candidates?.[0]?.content ?? null,
     });
   } catch (error: any) {
+    // Keep the exact provider reason available to this local UI. It is vital
+    // for distinguishing a malformed tool schema from a quota/model-account
+    // issue, but redact and bound it so provider errors cannot disclose keys.
+    const providerDetail = String(redactSensitive(String(error?.message ?? "")))
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 500);
     res.status(Number(error?.status) || 502).json({
-      error: "Server Gemini provider request failed",
+      error: providerDetail
+        ? `Gemini provider request failed: ${providerDetail}`
+        : "Gemini provider request failed",
     });
   }
 });
