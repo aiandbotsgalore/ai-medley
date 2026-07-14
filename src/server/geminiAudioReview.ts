@@ -12,6 +12,12 @@ export const AUTOMATIC_GEMINI_MODELS = {
   targetedReview: "gemini-3.5-flash",
 } as const;
 
+export const AUTOMATIC_OPENROUTER_MODELS = {
+  arrangement: "google/gemini-3.1-pro-preview",
+  wholeMixReview: "google/gemini-3.1-pro-preview",
+  targetedReview: "google/gemini-3.5-flash",
+} as const;
+
 const ReviewIssue = z.string().trim().min(1).max(1_000);
 
 export const GeminiAudioReviewDecisionSchema = z.strictObject({
@@ -79,6 +85,13 @@ export class GeminiAudioReviewError extends Error {
   }
 }
 
+export class OpenRouterAudioReviewError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "OpenRouterAudioReviewError";
+  }
+}
+
 function parseJsonResponse(value: string | null | undefined) {
   const text = String(value ?? "").trim()
     .replace(/^```(?:json)?\s*/i, "")
@@ -94,7 +107,7 @@ function parseJsonResponse(value: string | null | undefined) {
   }
 }
 
-function validateDecision(
+export function validateAudioReviewDecision(
   decision: GeminiAudioReviewDecision,
   transitionIds: Set<string>,
 ) {
@@ -142,7 +155,7 @@ async function waitForActiveFile(
   return current;
 }
 
-function reviewPrompt(input: GeminiAudioReviewInput) {
+export function buildAudioReviewPrompt(input: Pick<GeminiAudioReviewInput, "mode" | "candidate" | "transitions">) {
   const allowed = input.transitions.map((transition) => ({
     transitionId: transition.transitionId,
     fromTrackId: transition.fromTrackId,
@@ -245,7 +258,7 @@ export async function reviewCandidateAudioWithGemini(
       contents: [{
         role: "user",
         parts: [
-          { text: reviewPrompt(input) },
+          { text: buildAudioReviewPrompt(input) },
           ...(activeCandidate
             ? [{ fileData: { fileUri: activeCandidate.uri, mimeType: activeCandidate.mimeType ?? "audio/mpeg" } }]
             : []),
@@ -257,7 +270,7 @@ export async function reviewCandidateAudioWithGemini(
       }],
       config: { responseMimeType: "application/json", temperature: 0.1 },
     });
-    return validateDecision(
+    return validateAudioReviewDecision(
       parseJsonResponse(result.text),
       new Set(input.transitions.map((transition) => transition.transitionId)),
     );
@@ -276,14 +289,84 @@ export async function reviewCandidateAudioWithGemini(
   }
 }
 
+export type OpenRouterAudioReviewInput = Omit<
+  GeminiAudioReviewInput,
+  "client" | "delay" | "maxProcessingPolls"
+> & {
+  readAudio: (filePath: string) => Promise<Uint8Array>;
+  request: (body: Record<string, unknown>) => Promise<unknown>;
+};
+
+function toOpenRouterAudioPart(bytes: Uint8Array) {
+  return {
+    type: "input_audio",
+    input_audio: { data: Buffer.from(bytes).toString("base64"), format: "mp3" },
+  };
+}
+
+/**
+ * Sends only registered rendered artifacts through OpenRouter's audio-input
+ * contract. There is no temporary remote file to clean up and no source track
+ * is read by this path.
+ */
+export async function reviewCandidateAudioWithOpenRouter(
+  input: OpenRouterAudioReviewInput,
+): Promise<GeminiAudioReviewDecision> {
+  try {
+    if (input.mode === "whole_mix" && !input.candidateFilePath) {
+      throw new OpenRouterAudioReviewError("Whole-mix review requires the registered candidate audio.");
+    }
+    const content: Array<Record<string, unknown>> = [
+      { type: "text", text: buildAudioReviewPrompt(input) },
+    ];
+    if (input.candidateFilePath) {
+      content.push(toOpenRouterAudioPart(await input.readAudio(input.candidateFilePath)));
+    }
+    for (const clip of input.transitionClips ?? []) {
+      content.push({ type: "text", text: `Transition clip for ${clip.transitionId}:` });
+      content.push(toOpenRouterAudioPart(await input.readAudio(clip.filePath)));
+    }
+    const response: any = await input.request({
+      model: input.model,
+      temperature: 0.1,
+      messages: [{ role: "user", content }],
+      tools: [{
+        type: "function",
+        function: {
+          name: "submit_audio_review",
+          description: "Submit the bounded structured evaluation of the supplied medley audio.",
+          parameters: z.toJSONSchema(GeminiAudioReviewDecisionSchema),
+        },
+      }],
+      tool_choice: { type: "function", function: { name: "submit_audio_review" } },
+      parallel_tool_calls: false,
+      max_tokens: 2_000,
+    });
+    const call = response?.choices?.[0]?.message?.tool_calls?.find(
+      (item: any) => item?.function?.name === "submit_audio_review",
+    );
+    if (!call) throw new OpenRouterAudioReviewError("OpenRouter audio review returned no matching tool call.");
+    const raw = call.function?.arguments;
+    const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+    return validateAudioReviewDecision(
+      GeminiAudioReviewDecisionSchema.parse(parsed),
+      new Set(input.transitions.map((transition) => transition.transitionId)),
+    );
+  } catch (error) {
+    if (error instanceof OpenRouterAudioReviewError) throw error;
+    throw new OpenRouterAudioReviewError("OpenRouter audio review returned an invalid structured result.", { cause: error });
+  }
+}
+
 export function toQualityReviewFromAudioDecision(input: {
   candidate: Pick<RenderCandidate, "candidateId" | "candidateVersion" | "arrangementVersion">;
   decision: GeminiAudioReviewDecision;
   model: string;
+  reviewSource?: "gemini_audio" | "openrouter_audio";
 }): QualityReview {
   return QualityReviewSchema.parse({
     schemaVersion: 1,
-    reviewSource: "gemini_audio",
+    reviewSource: input.reviewSource ?? "gemini_audio",
     reviewModel: input.model,
     candidateId: input.candidate.candidateId,
     candidateVersion: input.candidate.candidateVersion,

@@ -32,8 +32,8 @@ The server reads variables from the process environment and loads git-ignored `.
 
 | Variable | Behavior |
 |---|---|
-| `OPENROUTER_API_KEY` | Optional server-managed OpenRouter credential for Manual Model mode. |
-| `GEMINI_API_KEY` | Required server-managed credential for Automatic v4; also available to Manual Model mode. Automatic audio review uses this key only on the local server. |
+| `OPENROUTER_API_KEY` | Required server-managed credential for Automatic v4; also available to Manual Model mode. |
+| `GEMINI_API_KEY` | Optional server-managed credential for the explicit Manual Gemini mode only. |
 | `PORT` | Optional integer from 1–65535; defaults to `3000`. Invalid values fail startup. |
 | `AI_MEDLEY_DATA_ROOT` | Optional isolated persistence root. Defaults to the repository working directory. Its `library/` and `workdir/` children hold persistent state and session artifacts. |
 | `NODE_ENV` | `production` serves the built SPA and suppresses development stack details; other values use Vite middleware. |
@@ -47,7 +47,7 @@ pinned when the session is created: a v4 session never silently becomes v3,
 and a v3 checkpoint is preserved rather than resumed as v4.
 
 - Mode: **Automatic Specialist Team**.
-- Provider: direct Gemini API through the local server.
+- Provider: OpenRouter through the local server.
 - Local audio analysis.
 - Style: smooth transitions.
 - Target: 10 minutes; crossfade: 5 seconds.
@@ -67,12 +67,12 @@ The remaining constrained provider decisions use the fixed roster:
 
 | Role | Primary model |
 |---|---|
-| Arrangement and whole-mix audio review | `gemini-3.1-pro-preview` |
-| Targeted transition-clip review after a rejection | `gemini-3.5-flash` |
+| Arrangement and whole-mix audio review | `google/gemini-3.1-pro-preview` via OpenRouter |
+| Targeted transition-clip review after a rejection | `google/gemini-3.5-flash` via OpenRouter |
 
 The whole-mix approval has no silent model fallback. Provider text requests are rejected before network access above 100 KiB or 24,000 estimated tokens, with a 16,000-token regression target. One bounded 429 retry may honor at most 30 seconds of `Retry-After`.
 
-After local technical checks pass, Automatic v4 sends the rendered candidate MP3—not original library audio—to Gemini for a whole-mix review. A rejected candidate may send at most three registered transition previews to Gemini 3.5 Flash for a focused correction choice. Every temporary Gemini Files API artifact created by this path is deleted after the request; if deletion cannot be confirmed, the candidate is not approved automatically. The original library tracks and all local candidate artifacts remain local and are never removed by this review step.
+After local technical checks pass, Automatic v4 sends the rendered candidate MP3—not original library audio—to OpenRouter for a whole-mix review. A rejected candidate may send at most three registered transition previews through OpenRouter to Gemini 3.5 Flash for a focused correction choice. Audio is sent as base64 through OpenRouter's audio-input contract; no temporary Google Files API artifact is created. The original library tracks and all local candidate artifacts remain local and are never removed by this review step.
 
 Manual Model mode supports the Gemini and OpenRouter models listed in `src/components/ConfigPanel.tsx`, plus a custom OpenRouter model ID. Saved provider/model pairs are validated and visibly migrated to a compatible default when necessary.
 

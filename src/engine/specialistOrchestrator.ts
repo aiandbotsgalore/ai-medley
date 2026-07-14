@@ -91,32 +91,24 @@ type StructuredRequestOptions<T> = {
 };
 
 type AutomaticProviderAttempt = {
-  provider: "gemini" | "openrouter";
+  provider: "openrouter";
   model: string;
 };
 
 /**
- * Automatic v4 keeps Gemini as its musical-decision default. A configured
- * OpenRouter model is a separate, immediate arrangement fallback—not a hidden
- * replacement for Gemini and never a fallback for full-audio review.
+ * Automatic v4 routes its musical decisions through OpenRouter only. Local
+ * audio analysis remains local; no Automatic request reaches Gemini Direct.
  */
 export function getAutomaticProviderAttempts(
   role: SpecialistRole,
   config: MedleyConfig,
 ): AutomaticProviderAttempt[] {
-  const primary = SPECIALIST_FALLBACKS[role].map((model) => ({
-    provider: "gemini" as const,
-    model,
-  }));
-  if (role !== "arrangement" || !config.openrouterApiKey.trim()) return primary;
-  return [
-    ...primary,
-    {
-      provider: "openrouter",
-      model:
-        config.automaticOpenRouterFallbackModel ?? "google/gemini-2.5-pro",
-    },
-  ];
+  void role;
+  return [{
+    provider: "openrouter",
+    model:
+      config.automaticOpenRouterFallbackModel ?? "google/gemini-3.1-pro-preview",
+  }];
 }
 
 function assertActive(signal: AbortSignal) {
@@ -930,12 +922,12 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
     options.onStage(
       "arrangement",
       "arrangement",
-      SPECIALIST_MODELS.arrangement,
+      options.config.automaticOpenRouterFallbackModel ?? "google/gemini-3.1-pro-preview",
     );
     saveProgress({
       stage: "arrangement",
       activeRole: "arrangement",
-      activeModel: SPECIALIST_MODELS.arrangement,
+      activeModel: options.config.automaticOpenRouterFallbackModel ?? "google/gemini-3.1-pro-preview",
     });
     try {
       arrangementPlan = await requestStructuredArtifact({
@@ -1159,17 +1151,17 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
     if (
       !qualityReview ||
       qualityReview.candidateId !== currentCandidate.candidateId ||
-      qualityReview.reviewSource !== "gemini_audio"
+      qualityReview.reviewSource !== "openrouter_audio"
     ) {
       options.onStage(
         "quality_review",
         "arrangement",
-        SPECIALIST_MODELS.arrangement,
+        options.config.automaticOpenRouterFallbackModel ?? "google/gemini-3.1-pro-preview",
       );
       saveProgress({
         stage: "quality_review",
         activeRole: "arrangement",
-        activeModel: SPECIALIST_MODELS.arrangement,
+        activeModel: options.config.automaticOpenRouterFallbackModel ?? "google/gemini-3.1-pro-preview",
       });
       try {
         const wholeMixResponse = await readJsonResponse(
@@ -1186,7 +1178,7 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
         );
         qualityReview = QualityReviewSchema.parse(wholeMixResponse.review);
         options.onLog(
-          `Gemini listened to the complete candidate using ${wholeMixResponse.model}.`,
+          `OpenRouter listened to the complete candidate using ${wholeMixResponse.model}.`,
         );
         // A rejected full-mix review gets one small, targeted follow-up. It
         // uploads only the affected registered transition previews, never the
@@ -1231,7 +1223,7 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
       } catch (error: any) {
         if (isAbortLike(error) || options.signal.aborted) throw error;
         const summary =
-          "Gemini could not complete the audio review. The technically valid candidate was preserved for manual review; it was not approved automatically.";
+          "OpenRouter could not complete the audio review. The technically valid candidate was preserved for manual review; it was not approved automatically.";
         options.onLog(`${summary} ${error?.message || ""}`.trim());
         await requireAutomaticManualReview(options, summary);
         options.onStage("manual_review_required", null, null);

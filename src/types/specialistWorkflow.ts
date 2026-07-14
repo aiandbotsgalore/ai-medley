@@ -178,8 +178,8 @@ export const ExecutionReportSchema = z.strictObject({
 export const QualityReviewSchema = z.strictObject({
   schemaVersion: z.literal(1),
   // Historical text/metric-only reviews remain readable. Automatic v4 only
-  // treats a Gemini-audio review as eligible to approve a new candidate.
-  reviewSource: z.enum(["legacy_metadata", "gemini_audio"]).optional(),
+  // treats an actual audio review as eligible to approve a new candidate.
+  reviewSource: z.enum(["legacy_metadata", "gemini_audio", "openrouter_audio"]).optional(),
   reviewModel: z.string().trim().min(1).max(300).optional(),
   candidateId: Id,
   candidateVersion: z.number().int().positive(),

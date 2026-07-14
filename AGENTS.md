@@ -33,17 +33,17 @@ Node support is `>=20 <27`. Production is bundled ESM at `dist/server.js`; the s
 ## Safety constraints
 
 - Do not run cleanup over `library/` or `workdir/`; inventory is preserve-only.
-- Do not use real provider calls in tests. Provider tests use mocked responses.
+- Unit and end-to-end tests use mocked provider responses. `npm run test:full` adds one explicit live OpenRouter contract request to a currently listed `:free` model only; it uses synthetic text and an isolated data root.
 - Preserve source audio, history, wisdom, checkpoints, candidates, manifests, finals, environment files, and the documented `provider-payload-audit.json` incident.
 - `contained` is the default manual capability. `expert` intentionally grants arbitrary shell access and must remain explicit.
 - If a build changes `dist`, restore the pre-existing `dist` exactly unless the user explicitly requests generated artifacts.
 
 Automatic Specialist Team v4 pins its workflow version per session. It makes
-no context-brief or production/tool-execution provider request. It uses direct
-Gemini 3.1 Pro for arrangement and whole-mix candidate review, and Gemini 3.5
-Flash only for targeted registered transition-preview review after rejection.
-The server uploads no source tracks through this review path and deletes its
-temporary Gemini review files; cleanup failure blocks automatic approval.
+no context-brief or production/tool-execution provider request. It routes all
+AI requests through OpenRouter: Gemini 3.1 Pro for arrangement and whole-mix
+candidate review, and Gemini 3.5 Flash only for targeted registered
+transition-preview review after rejection. The server uploads no source tracks;
+it sends only registered rendered artifacts through OpenRouter audio input.
 Manual Model mode supports Gemini and OpenRouter, including custom OpenRouter
 model IDs. Server-managed credentials come from `OPENROUTER_API_KEY` and
 `GEMINI_API_KEY`; browser-entered keys are memory-only.

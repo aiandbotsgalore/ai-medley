@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   GeminiAudioReviewError,
+  reviewCandidateAudioWithOpenRouter,
   reviewCandidateAudioWithGemini,
   toQualityReviewFromAudioDecision,
   type GeminiAudioClient,
@@ -112,5 +113,40 @@ await assert.rejects(
   }),
   GeminiAudioReviewError,
 );
+
+let openRouterRequest: any = null;
+const openRouterDecision = await reviewCandidateAudioWithOpenRouter({
+  model: "google/gemini-3.1-pro-preview",
+  candidate,
+  candidateFilePath: "C:\\isolated\\candidate-001.mp3",
+  transitions,
+  mode: "whole_mix",
+  readAudio: async () => new Uint8Array([1, 2, 3]),
+  request: async (body) => {
+    openRouterRequest = body;
+    return {
+      choices: [{ message: { tool_calls: [{
+        function: {
+          name: "submit_audio_review",
+          arguments: JSON.stringify({
+            approved: true,
+            emotionalArc: 80,
+            transitionSmoothness: 82,
+            performerIdentity: 78,
+            overallScore: 81,
+            blockingIssues: [],
+            warnings: [],
+            corrections: [],
+          }),
+        },
+      }] } }],
+    };
+  },
+});
+assert.equal(openRouterDecision.approved, true);
+assert.equal(openRouterRequest.model, "google/gemini-3.1-pro-preview");
+assert.equal(openRouterRequest.messages[0].content[1].type, "input_audio");
+assert.equal(openRouterRequest.messages[0].content[1].input_audio.format, "mp3");
+assert.equal(openRouterRequest.tool_choice.function.name, "submit_audio_review");
 
 console.log("geminiAudioReview tests passed");

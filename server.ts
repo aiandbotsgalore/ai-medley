@@ -111,9 +111,9 @@ import {
   writeCandidateManifestAtomic,
 } from "./src/server/candidateStore";
 import {
-  AUTOMATIC_GEMINI_MODELS,
-  GeminiAudioReviewError,
-  reviewCandidateAudioWithGemini,
+  AUTOMATIC_OPENROUTER_MODELS,
+  OpenRouterAudioReviewError,
+  reviewCandidateAudioWithOpenRouter,
   toQualityReviewFromAudioDecision,
 } from "./src/server/geminiAudioReview";
 import {
@@ -1412,16 +1412,16 @@ app.post("/api/provider/gemini", async (req, res) => {
 /**
  * Automatic v4 audio review. This endpoint is deliberately server-only: it
  * accepts a registered candidate identity, not an arbitrary browser path, and
- * uploads only that candidate (or its registered transition previews) using
- * the server-managed Gemini credential.
+ * sends only that candidate (or its registered transition previews) through
+ * the server-managed OpenRouter credential.
  */
 app.post("/api/session/audio-review", async (req, res) => {
   const { sessionId, candidateId, mode, transitionIds } = req.body || {};
   try {
     validateSessionId(sessionId);
-    if (!geminiApiKey) {
+    if (!openrouterApiKey) {
       return res.status(503).json({
-        error: "Automatic audio review needs a server Gemini credential. The candidate was preserved for manual review.",
+        error: "Automatic audio review needs a server OpenRouter credential. The candidate was preserved for manual review.",
       });
     }
     if (mode !== "whole_mix" && mode !== "targeted") {
@@ -1482,24 +1482,59 @@ app.post("/api/session/audio-review", async (req, res) => {
         };
       });
       const model = mode === "whole_mix"
-        ? AUTOMATIC_GEMINI_MODELS.wholeMixReview
-        : AUTOMATIC_GEMINI_MODELS.targetedReview;
-      const decision = await reviewCandidateAudioWithGemini({
-        client: new GoogleGenAI({ apiKey: geminiApiKey }) as any,
+        ? AUTOMATIC_OPENROUTER_MODELS.wholeMixReview
+        : AUTOMATIC_OPENROUTER_MODELS.targetedReview;
+      const decision = await reviewCandidateAudioWithOpenRouter({
         model,
         candidate,
         candidateFilePath: mode === "whole_mix" ? candidatePath : undefined,
         transitions: knownTransitions,
         mode,
         transitionClips: clips,
+        readAudio: (filePath) => fs.promises.readFile(filePath),
+        request: async (body) => {
+          const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${openrouterApiKey}`,
+              "Content-Type": "application/json",
+              "HTTP-Referer": `http://${HOST}:${PORT}`,
+              "X-Title": "AI Medley Architect",
+              "X-OpenRouter-Metadata": "enabled",
+            },
+            body: JSON.stringify(body),
+            signal: AbortSignal.timeout(120_000),
+          });
+          const text = await upstream.text();
+          if (!upstream.ok) {
+            let detail = "Provider returned error";
+            try {
+              const parsed = JSON.parse(text);
+              detail = String(parsed?.error?.message || detail);
+            } catch {}
+            throw new OpenRouterAudioReviewError(
+              `OpenRouter audio review failed (${upstream.status}): ${String(redactSensitive(detail)).slice(0, 500)}`,
+            );
+          }
+          try {
+            return JSON.parse(text);
+          } catch {
+            throw new OpenRouterAudioReviewError("OpenRouter audio review returned malformed JSON.");
+          }
+        },
       });
       return res.json({
-        review: toQualityReviewFromAudioDecision({ candidate, decision, model }),
+        review: toQualityReviewFromAudioDecision({
+          candidate,
+          decision,
+          model,
+          reviewSource: "openrouter_audio",
+        }),
         model,
       });
     });
   } catch (error: any) {
-    const message = error instanceof GeminiAudioReviewError
+    const message = error instanceof OpenRouterAudioReviewError
       ? error.message
       : String(error?.message || "Automatic audio review failed");
     res.status(400).json({ error: message });
@@ -2845,7 +2880,11 @@ app.post("/api/session/manual-review-required", async (req, res) => {
         if (state.state === "manual_review_required") {
           return { success: true, state, alreadyRequired: true };
         }
-        if (state.state !== "correcting") {
+        if (![
+          "technical_review",
+          "musical_review",
+          "correcting",
+        ].includes(state.state)) {
           throw new Error(`Manual review cannot be entered while session state is ${state.state}`);
         }
         const next = transitionAutomaticSessionState({

@@ -19,8 +19,8 @@ export interface MedleyConfig {
   model: string;
   geminiApiKey: string;
   openrouterApiKey: string;
-  // Automatic v4 always starts with direct Gemini. This is the model used for
-  // the first OpenRouter attempt if Gemini cannot accept the request.
+  // Automatic v4 routes every AI request through OpenRouter. This is its
+  // arrangement model; server-side audio reviews use pinned OpenRouter models.
   automaticOpenRouterFallbackModel?: string;
   audioAnalysisMode: AudioAnalysisMode;
   style: "dj-set" | "smooth-transitions" | "mashup" | "acoustic" | "custom";
@@ -34,11 +34,11 @@ export interface MedleyConfig {
 export const DEFAULT_CONFIG: MedleyConfig = {
   configVersion: 4,
   modelMode: "automatic",
-  provider: "gemini",
-  model: "gemini-3.1-pro-preview",
+  provider: "openrouter",
+  model: "google/gemini-3.1-pro-preview",
   geminiApiKey: "",
   openrouterApiKey: "",
-  automaticOpenRouterFallbackModel: "google/gemini-2.5-pro",
+  automaticOpenRouterFallbackModel: "google/gemini-3.1-pro-preview",
   audioAnalysisMode: "local",
   style: "smooth-transitions",
   temperature: 0.1,
@@ -100,6 +100,16 @@ export const GEMINI_MODELS = [
 ];
 
 export const OPENROUTER_MODELS = [
+  {
+    id: "google/gemini-3.1-pro-preview",
+    label: "Gemini 3.1 Pro (via OpenRouter)",
+    desc: "Automatic arrangement and whole-mix listening",
+  },
+  {
+    id: "google/gemini-3.5-flash",
+    label: "Gemini 3.5 Flash (via OpenRouter)",
+    desc: "Fast targeted audio-review follow-ups",
+  },
   // Recommended paid defaults
   {
     id: "google/gemini-2.5-pro",
@@ -172,7 +182,7 @@ export const OPENROUTER_MODELS = [
 export function getDefaultModelForProvider(provider: ProviderId) {
   return provider === "gemini"
     ? GEMINI_MODELS[0].id
-    : "google/gemini-2.5-pro";
+    : "google/gemini-3.1-pro-preview";
 }
 
 const ANALYSIS_MODES = [
@@ -344,15 +354,15 @@ export default function ConfigPanel({
               Manual configuration is active
             </div>
             <p className="mt-1 text-[10px] text-[#BBB]">
-              Switch to the streamlined automatic mix to use the server-managed Gemini models.
+              Switch to the streamlined automatic mix to use the server-managed OpenRouter route.
             </p>
             <button
               type="button"
               onClick={() =>
                 update({
                   modelMode: "automatic",
-                  provider: "gemini",
-                  model: "gemini-3.1-pro-preview",
+                  provider: "openrouter",
+                  model: "google/gemini-3.1-pro-preview",
                   audioAnalysisMode: "local",
                   manualCapabilityMode: "contained",
                 })
@@ -412,42 +422,42 @@ export default function ConfigPanel({
 
         <div className="mb-5">
           <label htmlFor="config-api-key" className="block text-[11px] uppercase tracking-widest text-[#999] mb-2 font-semibold">
-            {local.modelMode === "automatic" || local.provider === "gemini"
-              ? "Gemini API Key"
-              : "OpenRouter API Key"}
+            {local.modelMode === "automatic" || local.provider === "openrouter"
+              ? "OpenRouter API Key"
+              : "Gemini API Key"}
           </label>
           <input
             id="config-api-key"
             type="password"
             value={
-              local.modelMode === "automatic" || local.provider === "gemini"
-                ? local.geminiApiKey === SERVER_MANAGED_API_KEY
-                  ? ""
-                  : local.geminiApiKey
-                : local.openrouterApiKey === SERVER_MANAGED_API_KEY
+              local.modelMode === "automatic" || local.provider === "openrouter"
+                ? local.openrouterApiKey === SERVER_MANAGED_API_KEY
                   ? ""
                   : local.openrouterApiKey
+                : local.geminiApiKey === SERVER_MANAGED_API_KEY
+                  ? ""
+                  : local.geminiApiKey
             }
             onChange={(e) =>
               update(
                 local.modelMode === "automatic" ||
-                  local.provider === "gemini"
-                  ? { geminiApiKey: e.target.value }
-                  : { openrouterApiKey: e.target.value },
+                  local.provider === "openrouter"
+                  ? { openrouterApiKey: e.target.value }
+                  : { geminiApiKey: e.target.value },
               )
             }
             placeholder={
-              local.modelMode === "automatic" || local.provider === "gemini"
-                ? "AIza..."
-                : "sk-or-v1-..."
+              local.modelMode === "automatic" || local.provider === "openrouter"
+                ? "sk-or-v1-..."
+                : "AIza..."
             }
             className="w-full min-h-11 bg-[#0A0A0A] border border-[#444] rounded-lg px-3 py-2.5 text-[11px] text-[#CCC] placeholder:text-[#888] focus:border-[#00F0FF]/50 focus:outline-none"
           />
           <div className="mt-1 text-[9px] text-[#555]">
             API keys are kept in memory for this run and are not saved to browser storage.
-            {(local.modelMode === "automatic" || local.provider === "gemini"
-              ? local.geminiApiKey
-              : local.openrouterApiKey) === SERVER_MANAGED_API_KEY
+            {(local.modelMode === "automatic" || local.provider === "openrouter"
+              ? local.openrouterApiKey
+              : local.geminiApiKey) === SERVER_MANAGED_API_KEY
               ? " A server-managed credential is available."
               : ""}
           </div>
@@ -499,13 +509,13 @@ export default function ConfigPanel({
         {local.modelMode === "automatic" && (
           <div className="mb-5 border border-[#222] bg-[#0A0A0A] rounded-lg p-3">
             <div className="text-[10px] uppercase tracking-widest text-[#8BEAF2] font-semibold">
-              Automatic fallback: OpenRouter
+              Automatic route: OpenRouter
             </div>
             <p className="mt-1 text-[10px] text-[#AAA]">
-              Primary decisions use Gemini 3.1 Pro; Gemini 3.5 Flash handles targeted review. If Gemini rejects the arrangement request, this model is tried immediately.
+              Every Automatic AI request uses OpenRouter. Gemini 3.1 Pro handles arrangement and the whole-mix review; Gemini 3.5 Flash handles targeted review.
             </p>
             <label htmlFor="automatic-openrouter-fallback-model" className="block mt-3 text-[10px] text-[#AAA] mb-1">
-              Fallback model
+              Arrangement model
             </label>
             <select
               id="automatic-openrouter-fallback-model"

@@ -221,14 +221,11 @@ assert.deepEqual(
     openrouterApiKey: SERVER_MANAGED_API_KEY,
     automaticOpenRouterFallbackModel: "test/openrouter-fallback",
   }),
-  [
-    { provider: "gemini", model: "gemini-3.1-pro-preview" },
-    { provider: "openrouter", model: "test/openrouter-fallback" },
-  ],
+  [{ provider: "openrouter", model: "test/openrouter-fallback" }],
 );
 assert.deepEqual(
   getAutomaticProviderAttempts("arrangement", DEFAULT_CONFIG),
-  [{ provider: "gemini", model: "gemini-3.1-pro-preview" }],
+  [{ provider: "openrouter", model: "google/gemini-3.1-pro-preview" }],
 );
 
 const fallbackTransitionBase = design.transitionMatrixSummary[0];
@@ -560,7 +557,7 @@ let contextBriefBody = "";
 let contextProviderCalls = 0;
 globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
   const target = String(url);
-  if (target === "/api/provider/gemini") {
+  if (target === "/api/provider/openrouter") {
     contextProviderCalls++;
     return new Response(
       JSON.stringify({ choices: [{ message: { role: "assistant", content: "plain text" } }] }),
@@ -612,7 +609,7 @@ globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
   const target = String(url);
   if (target === "/api/session/project-brief")
     return new Response(JSON.stringify({ success: true }), { status: 200 });
-  if (target === "/api/provider/gemini") {
+  if (target === "/api/provider/openrouter") {
     fallbackProviderCalls++;
     return new Response(JSON.stringify({ error: "gateway timed out" }), {
       status: 504,
@@ -631,7 +628,7 @@ await assert.rejects(
     sessionId,
     config: {
       ...DEFAULT_CONFIG,
-      geminiApiKey: SERVER_MANAGED_API_KEY,
+      openrouterApiKey: SERVER_MANAGED_API_KEY,
     },
     library: [],
     design,
@@ -661,13 +658,6 @@ globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
   const target = String(url);
   if (target === "/api/session/project-brief")
     return new Response(JSON.stringify({ success: true }), { status: 200 });
-  if (target === "/api/provider/gemini") {
-    directGeminiAttempts++;
-    return new Response(JSON.stringify({ error: "Gemini rejected this request" }), {
-      status: 400,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
   if (target === "/api/provider/openrouter") {
     openRouterFallbackAttempts++;
     return new Response(
@@ -702,7 +692,6 @@ await assert.rejects(
     sessionId,
     config: {
       ...DEFAULT_CONFIG,
-      geminiApiKey: SERVER_MANAGED_API_KEY,
       openrouterApiKey: SERVER_MANAGED_API_KEY,
       automaticOpenRouterFallbackModel: "test/openrouter-fallback",
     },
@@ -721,11 +710,11 @@ await assert.rejects(
   }),
   (error: any) => error?.name === "AbortError",
 );
-assert.equal(directGeminiAttempts, 1, "Gemini must be attempted once before fallback");
+assert.equal(directGeminiAttempts, 0, "Automatic mode must never call Gemini Direct");
 assert.equal(
   openRouterFallbackAttempts,
   1,
-  "a Gemini rejection must move immediately to the configured OpenRouter fallback",
+  "Automatic mode must use the configured OpenRouter model directly",
 );
 assert.equal(
   (JSON.parse(openRouterFallbackPlanBody).plan as ArrangementPlan).strategy,
@@ -775,7 +764,7 @@ globalThis.fetch = (async (url: RequestInfo | URL) => {
   const target = String(url);
   if (target === "/api/session/project-brief")
     return new Response(JSON.stringify({ success: true }), { status: 200 });
-  if (target === "/api/provider/gemini") {
+  if (target === "/api/provider/openrouter") {
     abortedArrangementController.abort(new DOMException("Canceled", "AbortError"));
     throw abortedArrangementController.signal.reason;
   }
@@ -788,7 +777,7 @@ await assert.rejects(
     sessionId,
     config: {
       ...DEFAULT_CONFIG,
-      geminiApiKey: SERVER_MANAGED_API_KEY,
+      openrouterApiKey: SERVER_MANAGED_API_KEY,
     },
     library: [],
     design,
@@ -995,8 +984,8 @@ const fullWorkflowCandidate = {
 };
 const fullWorkflowReview = {
   schemaVersion: 1,
-  reviewSource: "gemini_audio" as const,
-  reviewModel: "gemini-3.1-pro-preview",
+  reviewSource: "openrouter_audio" as const,
+  reviewModel: "google/gemini-3.1-pro-preview",
   candidateId: fullWorkflowCandidate.candidateId,
   candidateVersion: fullWorkflowCandidate.candidateVersion,
   arrangementVersion: fullWorkflowCandidate.arrangementVersion,
@@ -1122,7 +1111,7 @@ globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
     assert.equal(body.mode, "whole_mix");
     return new Response(JSON.stringify({
       success: true,
-      model: "gemini-3.1-pro-preview",
+      model: "google/gemini-3.1-pro-preview",
       review: fullWorkflowReview,
     }), { status: 200 });
   }
@@ -1178,8 +1167,8 @@ const fullWorkflowResult = await runAutomaticSpecialistWorkflow({
 assert.equal(fullWorkflowResult.manualReviewRequired, false);
 assert.equal(fullWorkflowResult.candidateId, fullWorkflowCandidate.candidateId);
 assert.equal(fullWorkflowResult.outputPath, "library/finals/automatic-full-workflow.mp3");
-assert.equal(fullWorkflowGeminiRequests, 1, "a missing Gemini tool call must move directly to the configured fallback");
-assert.equal(fullWorkflowOpenRouterRequests, 1, "the configured OpenRouter fallback must provide the arrangement");
+assert.equal(fullWorkflowGeminiRequests, 0, "Automatic mode must never call Gemini Direct");
+assert.equal(fullWorkflowOpenRouterRequests, 1, "the configured OpenRouter model must provide the arrangement");
 assert.equal(fullWorkflowTransitionRequests, 1);
 assert.equal(fullWorkflowRenderRequests, 2, "a pending manifest registration must be retried once without rerendering");
 assert.equal(fullWorkflowAudioReviewRequests, 1, "an approved whole-mix review must not make a clip follow-up request");
