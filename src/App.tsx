@@ -2425,6 +2425,10 @@ export default function App() {
   const isInputStage = isIdle || isUploading;
   const selectedLibrary = library.filter((file) => selectedTrackIds.includes(file.id));
   const canStart = selectedLibrary.length >= 2 && hasProviderKey && configLoaded;
+  const isCandidateReviewView =
+    activeTab === "workshop" &&
+    (status === "manual_review_required" || status === "completed") &&
+    Boolean(manualReviewData?.review);
 
   return (
     <div className="min-h-[100dvh] md:h-[100dvh] bg-[#060606] text-[#E0E0E0] font-sans flex flex-col overflow-y-auto overflow-x-hidden md:overflow-hidden selection:bg-[#00F0FF]/30">
@@ -2453,30 +2457,32 @@ export default function App() {
       )}
 
       <main className="flex-1 min-h-0 flex flex-col md:flex-row overflow-visible md:overflow-hidden">
-        <LibrarySidebar
-          library={library}
-          selectedTrackIds={selectedTrackIds}
-          status={status}
-          provider={
-            config.modelMode === "automatic" ? "openrouter" : config.provider
-          }
-          apiReady={hasProviderKey}
-          onRemove={removeFile}
-          onReorder={reorderLibrary}
-          onToggleSelected={(id) =>
-            commitSelectedTrackIds(
-              toggleSelectedTrackId(selectedTrackIdsRef.current, id),
-            )
-          }
-          onSelectAll={() =>
-            commitSelectedTrackIds(
-              selectedTrackIdsRef.current.length === library.length
-                ? []
-                : library.map((file) => file.id),
-            )
-          }
-          onRecover={recoverSavedTracks}
-        />
+        {!isCandidateReviewView && (
+          <LibrarySidebar
+            library={library}
+            selectedTrackIds={selectedTrackIds}
+            status={status}
+            provider={
+              config.modelMode === "automatic" ? "openrouter" : config.provider
+            }
+            apiReady={hasProviderKey}
+            onRemove={removeFile}
+            onReorder={reorderLibrary}
+            onToggleSelected={(id) =>
+              commitSelectedTrackIds(
+                toggleSelectedTrackId(selectedTrackIdsRef.current, id),
+              )
+            }
+            onSelectAll={() =>
+              commitSelectedTrackIds(
+                selectedTrackIdsRef.current.length === library.length
+                  ? []
+                  : library.map((file) => file.id),
+              )
+            }
+            onRecover={recoverSavedTracks}
+          />
+        )}
 
         <section className="flex-1 min-w-0 min-h-[70vh] md:min-h-0 flex flex-col bg-[#030303] overflow-hidden shadow-[inset_1px_0_0_rgba(255,255,255,0.03)]">
           {/* Tab bar */}
@@ -2821,23 +2827,25 @@ export default function App() {
           </div>
         </section>
 
-        {sessionManager.design &&
-        activeTab === "workshop" &&
-        status !== "completed" &&
-        status !== "running" ? (
-          <MedleyMatchPanel design={sessionManager.design} />
-        ) : (
-          <MetricsSidebar
-            metrics={metricsManager.metrics}
-            summary={summary}
-            status={status}
-            sessionId={sessionId}
-          />
+        {!isCandidateReviewView && (
+          sessionManager.design &&
+          activeTab === "workshop" &&
+          status !== "completed" &&
+          status !== "running" ? (
+            <MedleyMatchPanel design={sessionManager.design} />
+          ) : (
+            <MetricsSidebar
+              metrics={metricsManager.metrics}
+              summary={summary}
+              status={status}
+              sessionId={sessionId}
+            />
+          )
         )}
       </main>
 
       {/* Footer Audio Player */}
-      <footer className="min-h-16 border-t border-[#1A1A1A] bg-[#0A0A0A]/95 backdrop-blur flex items-center px-3 md:px-6 gap-3 md:gap-6 shrink-0">
+      {!isCandidateReviewView && <footer className="min-h-16 border-t border-[#1A1A1A] bg-[#0A0A0A]/95 backdrop-blur flex items-center px-3 md:px-6 gap-3 md:gap-6 shrink-0">
         {status === "completed" && sessionId && (
           manualReviewData?.review.final?.integrityVerified ||
           legacyHistoryFinalSessionId === sessionId
@@ -2873,7 +2881,7 @@ export default function App() {
             </div>
           </>
         )}
-      </footer>
+      </footer>}
 
       <style
         dangerouslySetInnerHTML={{

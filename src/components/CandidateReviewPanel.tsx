@@ -1,9 +1,25 @@
-import { useEffect, useMemo, useState } from "react";
-import { AlertCircle, Check, Clipboard, RefreshCw, ShieldCheck, Volume2 } from "lucide-react";
+import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
+import {
+  AlertCircle,
+  Check,
+  ChevronDown,
+  Clipboard,
+  Download,
+  Headphones,
+  RefreshCw,
+  ShieldCheck,
+  Sparkles,
+  Star,
+} from "lucide-react";
 import type {
   CandidateReviewItem,
   CandidateReviewProjection,
 } from "../server/candidateReviewProjection";
+
+const SIGNAL_BARS = [
+  18, 34, 26, 48, 30, 58, 42, 72, 36, 62, 45, 82, 56, 68, 40, 74, 52, 88,
+  60, 76, 44, 66, 38, 78, 54, 84, 48, 70, 34, 64, 42, 58, 30, 50, 24, 40,
+];
 
 function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
@@ -15,24 +31,66 @@ function formatDuration(seconds: number) {
   return `${Math.floor(rounded / 60)}:${String(rounded % 60).padStart(2, "0")}`;
 }
 
-function CandidateCard({
+function CandidateTab({
   candidate,
   active,
-  busy,
-  onListen,
-  onApprove,
+  onSelect,
+  onKeyDown,
 }: {
   key?: string;
   candidate: CandidateReviewItem;
   active: boolean;
-  busy: boolean;
-  onListen: () => void;
-  onApprove: () => void;
+  onSelect: () => void;
+  onKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => void;
 }) {
+  return (
+    <button
+      id={`candidate-tab-${candidate.candidateId}`}
+      type="button"
+      role="tab"
+      aria-selected={active}
+      aria-controls="candidate-listening-panel"
+      tabIndex={active ? 0 : -1}
+      onClick={onSelect}
+      onKeyDown={onKeyDown}
+      className={`group relative min-h-[72px] flex-1 overflow-hidden border px-4 py-3 text-left transition-all duration-200 focus-visible:z-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#52E7F2] focus-visible:ring-offset-2 focus-visible:ring-offset-[#06090B] sm:min-w-[190px] sm:px-5 ${
+        active
+          ? "border-[#52E7F2]/70 bg-[#0C2025] text-white"
+          : "border-white/10 bg-[#0A0E11] text-[#9DA8AC] hover:border-white/25 hover:bg-[#10161A]"
+      }`}
+    >
+      {active && <span className="absolute inset-x-0 top-0 h-0.5 bg-[#52E7F2]" />}
+      <span className="flex items-center justify-between gap-3">
+        <span>
+          <span className="block text-base font-semibold tracking-tight">
+            Draft {candidate.draftNumber}
+          </span>
+          <span className="mt-1 block text-xs text-[#7F8A8E]">
+            {formatDuration(candidate.durationSec)}
+          </span>
+        </span>
+        {candidate.finalized ? (
+          <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300/30 bg-emerald-300/10 px-2.5 py-1 text-[10px] font-semibold text-emerald-200">
+            <Check className="h-3 w-3" /> Final
+          </span>
+        ) : candidate.recommended ? (
+          <span className="inline-flex items-center gap-1 rounded-full border border-[#F7B955]/40 bg-[#F7B955]/10 px-2.5 py-1 text-[10px] font-semibold text-[#FFD182]">
+            <Star className="h-3 w-3 fill-current" /> Recommended
+          </span>
+        ) : null}
+      </span>
+      {!candidate.audioIntegrityVerified && (
+        <span className="mt-2 block text-xs text-red-300">Audio unavailable</span>
+      )}
+    </button>
+  );
+}
+
+function CopyPathButton({ path, label = "Copy path" }: { path: string; label?: string }) {
   const [copied, setCopied] = useState(false);
   const copyPath = async () => {
     try {
-      await navigator.clipboard.writeText(candidate.outputPath);
+      await navigator.clipboard.writeText(path);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1_500);
     } catch {
@@ -40,94 +98,60 @@ function CandidateCard({
     }
   };
   return (
-    <article
-      aria-label={`Draft ${candidate.draftNumber}`}
-      className={`rounded-xl border p-4 min-w-0 ${active ? "border-[#00F0FF]/70 bg-[#00F0FF]/[0.05]" : "border-white/10 bg-black/20"}`}
+    <button
+      type="button"
+      onClick={copyPath}
+      className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-white/15 px-3 text-xs font-medium text-[#B9C1C4] transition hover:border-white/30 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#52E7F2]"
     >
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-bold text-white">Draft {candidate.draftNumber}</h3>
-          <div className="mt-1 text-[10px] font-mono text-[#777]">
-            {formatDuration(candidate.durationSec)} · {formatBytes(candidate.sizeBytes)} · {new Date(candidate.createdAt).toLocaleString()}
+      {copied ? <Check className="h-4 w-4" /> : <Clipboard className="h-4 w-4" />}
+      {copied ? "Copied" : label}
+    </button>
+  );
+}
+
+function TechnicalDetails({ candidate }: { candidate: CandidateReviewItem }) {
+  const notices = [...candidate.technicalIssues, ...candidate.warnings];
+  return (
+    <details className="group border-t border-white/10">
+      <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between gap-3 text-sm font-medium text-[#AAB3B6] transition hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#52E7F2] [&::-webkit-details-marker]:hidden">
+        <span>Technical details</span>
+        <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
+      </summary>
+      <div className="space-y-4 pb-5 text-xs text-[#889397]">
+        <div className="grid gap-3 sm:grid-cols-3">
+          <div>
+            <div className="text-[#616D72]">File size</div>
+            <div className="mt-1 text-[#C8D0D2]">{formatBytes(candidate.sizeBytes)}</div>
+          </div>
+          <div>
+            <div className="text-[#616D72]">Created</div>
+            <div className="mt-1 text-[#C8D0D2]">{new Date(candidate.createdAt).toLocaleString()}</div>
+          </div>
+          <div>
+            <div className="text-[#616D72]">Review service</div>
+            <div className="mt-1 break-words text-[#C8D0D2]">
+              {candidate.reviewModel ? `OpenRouter · ${candidate.reviewModel}` : "Not reviewed"}
+            </div>
           </div>
         </div>
-        <div className="flex flex-wrap justify-end gap-1">
-          {candidate.recommended && (
-            <span className="rounded-full border border-[#00F0FF]/40 px-2 py-1 text-[9px] font-bold uppercase text-[#00F0FF]">Recommended</span>
-          )}
-          {candidate.finalized && (
-            <span className="rounded-full border border-emerald-400/40 px-2 py-1 text-[9px] font-bold uppercase text-emerald-300">Final MP3</span>
-          )}
-          <span className={`rounded-full border px-2 py-1 text-[9px] font-bold uppercase ${candidate.technicallyValid ? "border-emerald-400/40 text-emerald-300" : "border-red-400/40 text-red-300"}`}>
-            {candidate.technicallyValid ? "Technically valid" : "Cannot finalize"}
-          </span>
-          {!candidate.audioIntegrityVerified && (
-            <span className="rounded-full border border-red-400/40 px-2 py-1 text-[9px] font-bold uppercase text-red-300">Audio unavailable</span>
-          )}
-        </div>
-      </div>
-
-      <div className="mt-4 rounded-lg border border-white/10 bg-black/30 p-3">
-        <div className="text-[10px] font-bold uppercase tracking-wider text-[#AAA]">Audio review</div>
-        <p className="mt-1 text-xs leading-relaxed text-[#DDD]">{candidate.reviewSummary}</p>
-        {candidate.reviewModel && <div className="mt-2 text-[9px] font-mono text-[#666]">Reviewed through OpenRouter · {candidate.reviewModel}</div>}
-      </div>
-
-      <div className="mt-3">
-        <div className="text-[10px] font-bold uppercase tracking-wider text-[#AAA]">What changed</div>
-        <ul className="mt-1 space-y-1 text-[11px] text-[#BBB]">
-          {candidate.planChanges.map((change) => (
-            <li key={`${change.transitionId}-${change.summary}`}>• {change.transitionId === "initial" ? "" : `${change.transitionId}: `}{change.summary}</li>
-          ))}
-        </ul>
-      </div>
-
-      {candidate.transitionConcerns.length > 0 && (
-        <div className="mt-3">
-          <div className="text-[10px] font-bold uppercase tracking-wider text-amber-300">Transition concerns</div>
-          <ul className="mt-1 space-y-2 text-[11px] text-amber-100/80">
-            {candidate.transitionConcerns.map((concern) => (
-              <li key={concern.transitionId}>
-                <strong>{concern.transitionId}:</strong> {concern.issue} {concern.requestedChange && `— ${concern.requestedChange}`}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {(candidate.technicalIssues.length > 0 || candidate.warnings.length > 0) && (
-        <details className="mt-3 text-[10px] text-[#999]">
-          <summary className="cursor-pointer min-h-11 flex items-center">Technical details and warnings</summary>
-          <ul className="space-y-1 pb-2">
-            {[...candidate.technicalIssues, ...candidate.warnings].map((warning) => <li key={warning}>• {warning}</li>)}
-          </ul>
-        </details>
-      )}
-
-      {candidate.audioProblem && (
-        <div role="alert" className="mt-3 rounded border border-red-400/30 bg-red-400/10 p-3 text-[11px] text-red-200">
-          This draft is still recorded, but it cannot be played: {candidate.audioProblem}
-        </div>
-      )}
-
-      <div className="mt-3 rounded border border-white/10 bg-black/30 p-2">
-        <div className="truncate text-[9px] font-mono text-[#777]" title={candidate.outputPath}>{candidate.outputPath}</div>
-        <button type="button" onClick={copyPath} className="mt-2 min-h-11 inline-flex items-center gap-2 rounded border border-white/15 px-3 text-[10px] font-bold uppercase text-[#BBB] hover:border-white/30 hover:text-white">
-          {copied ? <Check className="h-3.5 w-3.5" /> : <Clipboard className="h-3.5 w-3.5" />}{copied ? "Copied" : "Copy path"}
-        </button>
-      </div>
-
-      <div className="mt-4 flex flex-wrap gap-2">
-        <button type="button" disabled={!candidate.audioIntegrityVerified} onClick={onListen} className="min-h-11 inline-flex items-center gap-2 rounded-lg border border-[#00F0FF]/40 px-4 text-[10px] font-bold uppercase text-[#00F0FF] hover:bg-[#00F0FF]/10 disabled:cursor-not-allowed disabled:opacity-40">
-          <Volume2 className="h-4 w-4" /> {active ? "Playing below" : "Listen to this draft"}
-        </button>
-        {(candidate.actions.includes("approve_candidate") || candidate.actions.includes("resume_finalization")) && (
-          <button type="button" disabled={busy || !candidate.technicallyValid} onClick={onApprove} className="min-h-11 inline-flex items-center gap-2 rounded-lg bg-emerald-400 px-4 text-[10px] font-bold uppercase text-black disabled:cursor-not-allowed disabled:opacity-50">
-            <ShieldCheck className="h-4 w-4" /> {candidate.actions.includes("resume_finalization") ? "Resume final creation" : "Make this the final MP3"}
-          </button>
+        {notices.length > 0 && (
+          <div>
+            <div className="text-[#616D72]">Notices</div>
+            <ul className="mt-2 space-y-1 text-[#C8D0D2]">
+              {notices.map((notice) => <li key={notice}>• {notice}</li>)}
+            </ul>
+          </div>
         )}
+        <div className="rounded-lg border border-white/10 bg-black/25 p-3">
+          <div className="break-all font-mono text-[11px] leading-relaxed text-[#727E82]">
+            {candidate.outputPath}
+          </div>
+          <div className="mt-3">
+            <CopyPathButton path={candidate.outputPath} />
+          </div>
+        </div>
       </div>
-    </article>
+    </details>
   );
 }
 
@@ -144,99 +168,297 @@ export default function CandidateReviewPanel({
   onRefresh: () => void;
   onApprove: (candidateId: string) => void;
 }) {
-  const [finalPathCopied, setFinalPathCopied] = useState(false);
-  const firstPlayableCandidateId = projection.candidates.find(
+  const finalizedCandidate = projection.candidates.find((candidate) => candidate.finalized);
+  const recommendedCandidate = projection.candidates.find(
+    (candidate) => candidate.recommended && candidate.audioIntegrityVerified,
+  );
+  const selectedCandidate = projection.candidates.find(
+    (candidate) => candidate.candidateId === projection.selectedCandidateId,
+  );
+  const firstPlayableCandidate = projection.candidates.find(
     (candidate) => candidate.audioIntegrityVerified,
+  );
+  const preferredCandidateId = (
+    finalizedCandidate ??
+    recommendedCandidate ??
+    (selectedCandidate?.audioIntegrityVerified ? selectedCandidate : null) ??
+    firstPlayableCandidate ??
+    projection.candidates[0]
   )?.candidateId ?? null;
   const [activeCandidateId, setActiveCandidateId] = useState<string | null>(
-    projection.candidates.find(
-      (candidate) => candidate.candidateId === projection.selectedCandidateId && candidate.audioIntegrityVerified,
-    )?.candidateId ?? firstPlayableCandidateId,
+    preferredCandidateId,
   );
+
   useEffect(() => {
-    if (!projection.candidates.some(
-      (item) => item.candidateId === activeCandidateId && item.audioIntegrityVerified,
-    )) {
-      setActiveCandidateId(
-        projection.candidates.find(
-          (candidate) => candidate.candidateId === projection.selectedCandidateId && candidate.audioIntegrityVerified,
-        )?.candidateId ?? firstPlayableCandidateId,
-      );
+    if (!projection.candidates.some((candidate) => candidate.candidateId === activeCandidateId)) {
+      setActiveCandidateId(preferredCandidateId);
     }
-  }, [activeCandidateId, firstPlayableCandidateId, projection.candidates, projection.selectedCandidateId]);
+  }, [activeCandidateId, preferredCandidateId, projection.candidates]);
+
   const activeCandidate = useMemo(
     () => projection.candidates.find((candidate) => candidate.candidateId === activeCandidateId) ?? null,
     [activeCandidateId, projection.candidates],
   );
+  const canApprove = Boolean(
+    activeCandidate?.actions.includes("approve_candidate") ||
+    activeCandidate?.actions.includes("resume_finalization"),
+  );
+  const isFinalized = Boolean(projection.final?.integrityVerified);
+  const heading = isFinalized ? "Your final medley is ready" : "Choose your favorite medley";
+  const subheading = isFinalized
+    ? "Your chosen version passed every check and is ready to play or download."
+    : projection.candidateCount > 1
+      ? "Listen, compare, then make one final."
+      : "Listen to your draft, then decide whether to keep it.";
+
   return (
-    <section aria-labelledby="candidate-review-title" className="h-full overflow-y-auto p-4 md:p-6 custom-scrollbar">
-      <div className="mx-auto max-w-6xl">
-        <div className="flex flex-col gap-3 rounded-xl border border-amber-300/25 bg-amber-300/[0.04] p-4 md:flex-row md:items-start md:justify-between">
-          <div>
-            <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-amber-300">Candidate Review</div>
-            <h2 id="candidate-review-title" className="mt-1 text-xl font-bold text-white">{projection.title}</h2>
-            <p className="mt-2 max-w-3xl text-sm leading-relaxed text-[#BBB]">{projection.message}</p>
-            <div className="mt-2 text-[10px] font-mono text-[#777]">{projection.candidateCount}/{projection.maximumCandidates} drafts created · Session {projection.sessionId}</div>
+    <section
+      aria-labelledby="candidate-review-title"
+      className="relative h-full overflow-y-auto bg-[#06090B] text-[#EEF3F4] custom-scrollbar"
+    >
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-0 top-0 h-[420px] opacity-70"
+        style={{
+          background:
+            "radial-gradient(circle at 50% -15%, rgba(30, 151, 166, 0.18), transparent 55%), linear-gradient(180deg, rgba(9, 19, 23, 0.75), transparent)",
+        }}
+      />
+
+      <div className="relative mx-auto w-full max-w-7xl px-4 pb-16 pt-8 sm:px-6 md:pt-12 lg:px-10">
+        <header className="mx-auto max-w-4xl text-center">
+          <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-[#52E7F2]/20 bg-[#52E7F2]/[0.06] px-3 py-1.5 text-xs font-medium text-[#8DEBF1]">
+            <Headphones className="h-3.5 w-3.5" />
+            {projection.candidateCount} of {projection.maximumCandidates} draft{projection.candidateCount === 1 ? "" : "s"} ready
           </div>
-          <button type="button" onClick={onRefresh} disabled={busy} className="min-h-11 shrink-0 inline-flex items-center justify-center gap-2 rounded-lg border border-white/15 px-4 text-[10px] font-bold uppercase text-[#CCC] hover:border-white/30 disabled:opacity-50">
-            <RefreshCw className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} /> Refresh status
+          <h2
+            id="candidate-review-title"
+            className="text-balance text-3xl font-semibold tracking-[-0.035em] text-white sm:text-4xl md:text-5xl"
+          >
+            {heading}
+          </h2>
+          <p className="mx-auto mt-4 max-w-2xl text-base leading-7 text-[#98A4A8] sm:text-lg">
+            {subheading}
+          </p>
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={busy}
+            className="mt-4 inline-flex min-h-11 items-center gap-2 rounded-lg px-3 text-xs font-medium text-[#7F8A8E] transition hover:bg-white/[0.04] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#52E7F2] disabled:opacity-50"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${busy ? "animate-spin" : ""}`} />
+            Refresh status
           </button>
-        </div>
+        </header>
 
-        {error && <div role="alert" className="mt-4 flex gap-2 rounded-lg border border-red-400/30 bg-red-400/10 p-3 text-sm text-red-200"><AlertCircle className="h-5 w-5 shrink-0" />{error}</div>}
+        {error && (
+          <div role="alert" className="mx-auto mt-6 flex max-w-4xl gap-3 rounded-xl border border-red-300/25 bg-red-300/[0.07] p-4 text-sm text-red-100">
+            <AlertCircle className="h-5 w-5 shrink-0 text-red-300" />
+            <span>{error}</span>
+          </div>
+        )}
 
-        {projection.final?.integrityVerified && (
-          <section aria-labelledby="verified-final-title" className="mt-4 rounded-xl border border-emerald-400/35 bg-emerald-400/[0.06] p-4">
-            <div className="flex items-center gap-2 text-emerald-300">
-              <ShieldCheck className="h-5 w-5" />
-              <h3 id="verified-final-title" className="text-sm font-bold">Verified final MP3</h3>
-            </div>
-            <p className="mt-2 text-xs text-[#BBB]">
-              Finalized {projection.final.finalizedAt ? new Date(projection.final.finalizedAt).toLocaleString() : "successfully"}. The promoted file matches the chosen draft byte for byte.
-            </p>
-            <audio controls preload="metadata" src={projection.final.audioUrl} className="mt-3 h-11 w-full" aria-label="Play verified final medley" />
-            <div className="mt-3 rounded border border-white/10 bg-black/30 p-2">
-              <div className="truncate text-[9px] font-mono text-[#777]" title={projection.final.outputPath}>{projection.final.outputPath}</div>
-              <div className="mt-2 flex flex-wrap gap-2">
-                <a href={projection.final.downloadUrl} className="min-h-11 inline-flex items-center rounded bg-emerald-400 px-4 text-[10px] font-bold uppercase text-black">Download final MP3</a>
-                <button type="button" onClick={() => {
-                  void navigator.clipboard.writeText(projection.final!.outputPath)
-                    .then(() => {
-                      setFinalPathCopied(true);
-                      window.setTimeout(() => setFinalPathCopied(false), 1_500);
-                    })
-                    .catch(() => setFinalPathCopied(false));
-                }} className="min-h-11 inline-flex items-center gap-2 rounded border border-white/15 px-3 text-[10px] font-bold uppercase text-[#BBB]">
-                  {finalPathCopied ? <Check className="h-3.5 w-3.5" /> : <Clipboard className="h-3.5 w-3.5" />}{finalPathCopied ? "Copied" : "Copy final path"}
-                </button>
+        {isFinalized && projection.final && (
+          <section aria-labelledby="verified-final-title" className="mx-auto mt-8 max-w-5xl overflow-hidden rounded-2xl border border-emerald-300/25 bg-[#0A1513] shadow-2xl shadow-black/30">
+            <div className="flex flex-col gap-5 p-5 sm:p-6 lg:flex-row lg:items-center">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-emerald-300 text-[#07120F]">
+                <Check className="h-6 w-6" strokeWidth={2.5} />
               </div>
+              <div className="min-w-0 flex-1">
+                <h3 id="verified-final-title" className="text-lg font-semibold text-white">Final MP3</h3>
+                <p className="mt-1 text-sm text-[#90A19D]">
+                  Finalized {projection.final.finalizedAt ? new Date(projection.final.finalizedAt).toLocaleString() : "successfully"}. The file matches your chosen draft exactly.
+                </p>
+                <audio controls preload="metadata" src={projection.final.audioUrl} className="mt-4 h-11 w-full [color-scheme:dark]" aria-label="Play verified final medley" />
+              </div>
+              <a
+                href={projection.final.downloadUrl}
+                className="inline-flex min-h-12 shrink-0 items-center justify-center gap-2 rounded-xl bg-emerald-300 px-5 text-sm font-semibold text-[#07120F] transition hover:bg-emerald-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-200 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0A1513]"
+              >
+                <Download className="h-4 w-4" /> Download final MP3
+              </a>
             </div>
+            <details className="group border-t border-white/10 px-5 sm:px-6">
+              <summary className="flex min-h-14 cursor-pointer list-none items-center justify-between text-sm text-[#83908D] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-300 [&::-webkit-details-marker]:hidden">
+                <span>Final file details</span>
+                <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
+              </summary>
+              <div className="pb-5">
+                <div className="break-all rounded-lg border border-white/10 bg-black/20 p-3 font-mono text-[11px] leading-relaxed text-[#778481]">
+                  {projection.final.outputPath}
+                </div>
+                <div className="mt-3"><CopyPathButton path={projection.final.outputPath} label="Copy final path" /></div>
+              </div>
+            </details>
           </section>
         )}
 
-        {activeCandidate?.audioIntegrityVerified && (
-          <div className="sticky top-0 z-10 mt-4 rounded-xl border border-[#00F0FF]/30 bg-[#080B0D]/95 p-3 shadow-xl backdrop-blur">
-            <div className="mb-2 text-[10px] font-bold uppercase tracking-wider text-[#00F0FF]">Listening to Draft {activeCandidate.draftNumber}</div>
-            <audio key={activeCandidate.audioUrl} controls preload="metadata" src={activeCandidate.audioUrl} className="h-11 w-full" aria-label={`Play Draft ${activeCandidate.draftNumber}`} />
-          </div>
-        )}
+        {projection.candidates.length > 0 ? (
+          <div className="mx-auto mt-8 max-w-6xl">
+            <div role="tablist" aria-label="Medley drafts" className="flex overflow-x-auto rounded-t-2xl [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+              {projection.candidates.map((candidate, index) => (
+                <CandidateTab
+                  key={candidate.candidateId}
+                  candidate={candidate}
+                  active={candidate.candidateId === activeCandidateId}
+                  onSelect={() => setActiveCandidateId(candidate.candidateId)}
+                  onKeyDown={(event) => {
+                    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                    event.preventDefault();
+                    const lastIndex = projection.candidates.length - 1;
+                    const nextIndex = event.key === "Home"
+                      ? 0
+                      : event.key === "End"
+                        ? lastIndex
+                        : event.key === "ArrowLeft"
+                          ? (index - 1 + projection.candidates.length) % projection.candidates.length
+                          : (index + 1) % projection.candidates.length;
+                    const nextCandidate = projection.candidates[nextIndex];
+                    setActiveCandidateId(nextCandidate.candidateId);
+                    requestAnimationFrame(() => {
+                      document.getElementById(`candidate-tab-${nextCandidate.candidateId}`)?.focus();
+                    });
+                  }}
+                />
+              ))}
+            </div>
 
-        {projection.candidates.length ? (
-          <div className={`mt-4 grid gap-4 ${projection.candidates.length > 1 ? "lg:grid-cols-2" : "grid-cols-1"}`}>
-            {projection.candidates.map((candidate) => (
-              <CandidateCard
-                key={candidate.candidateId}
-                candidate={candidate}
-                active={candidate.candidateId === activeCandidateId}
-                busy={busy}
-                onListen={() => setActiveCandidateId(candidate.candidateId)}
-                onApprove={() => onApprove(candidate.candidateId)}
-              />
-            ))}
+            {activeCandidate && (
+              <article
+                id="candidate-listening-panel"
+                role="tabpanel"
+                aria-labelledby={`candidate-tab-${activeCandidate.candidateId}`}
+                className="overflow-hidden rounded-b-2xl border border-t-0 border-white/10 bg-[#0A0F12] shadow-[0_30px_80px_rgba(0,0,0,0.35)]"
+              >
+                <div className="relative overflow-hidden px-5 py-7 sm:px-8 sm:py-9">
+                  <div aria-hidden="true" className="absolute inset-0 opacity-25" style={{ background: "linear-gradient(110deg, transparent 10%, rgba(82,231,242,0.13) 52%, rgba(247,185,85,0.08) 75%, transparent 100%)" }} />
+                  <div className="relative flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="text-2xl font-semibold tracking-tight text-white">Draft {activeCandidate.draftNumber}</h3>
+                        {activeCandidate.recommended && (
+                          <span className="inline-flex items-center gap-1 rounded-full border border-[#F7B955]/35 bg-[#F7B955]/10 px-2.5 py-1 text-xs font-medium text-[#FFD182]">
+                            <Star className="h-3.5 w-3.5 fill-current" /> Recommended
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-2 text-sm text-[#7F8A8E]">
+                        {formatDuration(activeCandidate.durationSec)} · {activeCandidate.technicallyValid ? "Ready to use" : "Needs attention"}
+                      </p>
+                    </div>
+                    {projection.candidateCount > 1 && (
+                      <div className="rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-xs text-[#7F8A8E]">
+                        Switch drafts above to compare from the same player.
+                      </div>
+                    )}
+                  </div>
+
+                  <div aria-hidden="true" className="relative mt-7 flex h-20 items-center gap-1 overflow-hidden rounded-xl border border-white/[0.06] bg-black/20 px-4">
+                    {SIGNAL_BARS.map((height, index) => (
+                      <span
+                        key={`${activeCandidate.candidateId}-${index}`}
+                        className={`min-w-[2px] flex-1 rounded-full ${index > 23 ? "bg-[#F7B955]/55" : "bg-[#52E7F2]/65"}`}
+                        style={{ height: `${height}%` }}
+                      />
+                    ))}
+                  </div>
+
+                  {activeCandidate.audioIntegrityVerified ? (
+                    <audio
+                      key={activeCandidate.audioUrl}
+                      controls
+                      preload="metadata"
+                      src={activeCandidate.audioUrl}
+                      className="relative mt-5 h-12 w-full [color-scheme:dark]"
+                      aria-label={`Play Draft ${activeCandidate.draftNumber}`}
+                    />
+                  ) : (
+                    <div role="alert" className="relative mt-5 flex gap-3 rounded-xl border border-red-300/25 bg-red-300/[0.07] p-4 text-sm text-red-100">
+                      <AlertCircle className="h-5 w-5 shrink-0 text-red-300" />
+                      <span>This draft is preserved, but it cannot be played: {activeCandidate.audioProblem}</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid border-t border-white/10 lg:grid-cols-[1.25fr_0.75fr]">
+                  <section className="border-b border-white/10 p-5 sm:p-7 lg:border-b-0 lg:border-r">
+                    <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-[#65DDE6]">
+                      {activeCandidate.recommended ? <Sparkles className="h-4 w-4" /> : <ShieldCheck className="h-4 w-4" />}
+                      {activeCandidate.recommended ? `Why Draft ${activeCandidate.draftNumber} is recommended` : "About this draft"}
+                    </div>
+                    <p className="mt-3 max-w-2xl text-base leading-7 text-[#D4DBDD]">{activeCandidate.reviewSummary}</p>
+                    <div className="mt-5">
+                      <div className="text-xs font-medium text-[#778287]">What changed</div>
+                      <ul className="mt-2 space-y-2 text-sm leading-6 text-[#AAB4B7]">
+                        {activeCandidate.planChanges.map((change) => (
+                          <li key={`${change.transitionId}-${change.summary}`} className="flex gap-2">
+                            <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[#52E7F2]" />
+                            <span>{change.transitionId === "initial" || change.transitionId === "none" ? "" : `${change.transitionId}: `}{change.summary}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </section>
+
+                  <aside className="p-5 sm:p-7">
+                    <div className="text-xs font-semibold uppercase tracking-[0.16em] text-[#F7B955]">Listen for</div>
+                    {activeCandidate.transitionConcerns.length > 0 ? (
+                      <ul className="mt-3 space-y-3">
+                        {activeCandidate.transitionConcerns.map((concern) => (
+                          <li key={concern.transitionId} className="rounded-xl border border-[#F7B955]/15 bg-[#F7B955]/[0.05] p-3 text-sm leading-6 text-[#D9C7A6]">
+                            {concern.issue}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <div className="mt-3 space-y-3 text-sm text-[#9BA6A9]">
+                        <div className="flex items-center gap-3"><Check className="h-4 w-4 text-emerald-300" /> Song balance</div>
+                        <div className="flex items-center gap-3"><Check className="h-4 w-4 text-emerald-300" /> Smooth handoffs</div>
+                        <div className="flex items-center gap-3"><Check className="h-4 w-4 text-emerald-300" /> Overall energy</div>
+                      </div>
+                    )}
+                  </aside>
+                </div>
+
+                <div className="border-t border-white/10 px-5 sm:px-7">
+                  <TechnicalDetails candidate={activeCandidate} />
+                </div>
+              </article>
+            )}
+
+            {activeCandidate && !isFinalized && (
+              <div className="mt-5 flex flex-col gap-3 rounded-2xl border border-white/10 bg-[#0A0F12] p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+                <div className="min-w-0">
+                  <div className="text-sm font-semibold text-white">Draft {activeCandidate.draftNumber} selected</div>
+                  <div className="mt-1 text-xs text-[#7F8A8E]">
+                    {canApprove
+                      ? "This creates the final MP3 from exactly this version."
+                      : activeCandidate.technicallyValid
+                        ? "This version is preserved, but it is not currently available to finalize."
+                        : "This version cannot be finalized because it did not pass the audio checks."}
+                  </div>
+                </div>
+                {canApprove && (
+                  <button
+                    type="button"
+                    disabled={busy || !activeCandidate.technicallyValid || !activeCandidate.audioIntegrityVerified}
+                    onClick={() => onApprove(activeCandidate.candidateId)}
+                    className="inline-flex min-h-14 shrink-0 items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#29C8D5] to-[#63EAF2] px-6 text-sm font-bold text-[#031012] shadow-[0_12px_32px_rgba(41,200,213,0.18)] transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8DF3F8] focus-visible:ring-offset-2 focus-visible:ring-offset-[#06090B] disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    <Star className="h-4 w-4 fill-current" />
+                    {activeCandidate.actions.includes("resume_finalization")
+                      ? "Resume Final Creation"
+                      : `Use Draft ${activeCandidate.draftNumber} as Final`}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         ) : (
-          <div role="status" className="mt-4 rounded-xl border border-white/10 bg-black/20 p-6 text-sm text-[#BBB]">
-            No rendered draft was found. Nothing can be approved or finalized from this session.
+          <div role="status" className="mx-auto mt-8 max-w-3xl rounded-2xl border border-white/10 bg-[#0A0F12] p-8 text-center">
+            <AlertCircle className="mx-auto h-7 w-7 text-[#F7B955]" />
+            <h3 className="mt-4 text-lg font-semibold text-white">No draft is ready yet</h3>
+            <p className="mt-2 text-sm leading-6 text-[#8D989C]">Nothing has been rendered, so there is currently nothing to play or finalize.</p>
           </div>
         )}
       </div>
