@@ -314,6 +314,27 @@ const renderableFallback = buildDeterministicArrangementFallback(
 );
 assert.equal(renderableFallback?.transitions[0].toEntrySec, 56);
 assert.equal(renderableFallback?.transitions[1].fromExitSec, 60);
+const reroutedFallback = buildDeterministicArrangementFallback(
+  threeTrackDesign,
+  { ...threeTrackBrief, recommendedOrderIds: ["b", "a", "c"] },
+  {
+    trackIds: new Set(["a", "b", "c"]),
+    sectionsById: new Map([
+      ["a-1", { trackId: "a", startSec: 0, endSec: 90 }],
+      ["b-in", { trackId: "b", startSec: 50, endSec: 70 }],
+      ["b-out", { trackId: "b", startSec: 50, endSec: 70 }],
+      ["c-1", { trackId: "c", startSec: 10, endSec: 60 }],
+    ]),
+    durationsByTrackId: new Map([["a", 120], ["b", 140], ["c", 100]]),
+    targetDurationSec: 100,
+    transitionCandidatesById: new Map(threeTrackCandidates),
+  },
+);
+assert.deepEqual(
+  reroutedFallback?.orderedTrackIds,
+  ["a", "b", "c"],
+  "fallback must find a connected order containing every selected track",
+);
 
 const longExitCandidates = Array.from({ length: 13 }, (_, index) => ({
   ...design.transitionMatrixSummary[0],

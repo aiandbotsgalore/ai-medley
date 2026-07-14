@@ -422,57 +422,114 @@ export function buildTargetedCorrectionPlan(
  * produce a valid target-length plan. It uses authoritative local candidates
  * verbatim and never invents section IDs or timestamps.
  */
+function fallbackTransitionOptions(
+  design: MedleyDesignPayload,
+  fromTrackId: string,
+  toTrackId: string,
+) {
+  const pairCandidates = design.transitionMatrixSummary.filter(
+    (item) => item.fromTrackId === fromTrackId && item.toTrackId === toTrackId,
+  );
+  // Preserve both the best-sounding and earliest-exit choices. Retaining only
+  // the highest-scoring candidates can make every local fallback too long or
+  // give a single track most of the medley.
+  return [
+    ...pairCandidates.slice().sort((a, b) => b.score - a.score).slice(0, 12),
+    ...pairCandidates.slice().sort((a, b) => a.fromExitSec - b.fromExitSec).slice(0, 12),
+  ].filter(
+    (candidate, candidateIndex, allCandidates) =>
+      allCandidates.findIndex(
+        (other) =>
+          other.fromTrackId === candidate.fromTrackId &&
+          other.fromSectionId === candidate.fromSectionId &&
+          other.toTrackId === candidate.toTrackId &&
+          other.toSectionId === candidate.toSectionId &&
+          other.fromExitSec === candidate.fromExitSec &&
+          other.toEntrySec === candidate.toEntrySec,
+      ) === candidateIndex,
+  );
+}
+
+function findConnectedFallbackOrders(
+  design: MedleyDesignPayload,
+  projectBrief: ProjectBrief,
+): string[][] {
+  const requiredTrackIds = [...new Set(projectBrief.recommendedOrderIds)];
+  if (requiredTrackIds.length < 2) return [];
+  const pairScore = new Map<string, number>();
+  for (const candidate of design.transitionMatrixSummary) {
+    const key = `${candidate.fromTrackId}\u0000${candidate.toTrackId}`;
+    pairScore.set(key, Math.max(pairScore.get(key) ?? -Infinity, candidate.score));
+  }
+  const scoreFor = (fromTrackId: string, toTrackId: string) =>
+    pairScore.get(`${fromTrackId}\u0000${toTrackId}`) ?? null;
+  const connected = (order: string[]) =>
+    order.length === requiredTrackIds.length &&
+    new Set(order).size === requiredTrackIds.length &&
+    order.every((trackId) => requiredTrackIds.includes(trackId)) &&
+    order.slice(1).every((trackId, index) => scoreFor(order[index], trackId) !== null);
+
+  // First retain the local intelligence's preferred order when it has a
+  // complete route. Then use a bounded graph search to find another route that
+  // still includes every selected track when the preferred order has a gap.
+  const preferred = connected(projectBrief.recommendedOrderIds)
+    ? [projectBrief.recommendedOrderIds]
+    : [];
+  let paths = requiredTrackIds.map((trackId) => ({ ids: [trackId], score: 0 }));
+  while (paths.length && paths[0].ids.length < requiredTrackIds.length) {
+    paths = paths
+      .flatMap((path) =>
+        requiredTrackIds
+          .filter((trackId) => !path.ids.includes(trackId))
+          .map((trackId) => ({ trackId, score: scoreFor(path.ids.at(-1)!, trackId) }))
+          .filter((edge): edge is { trackId: string; score: number } => edge.score !== null)
+          .map((edge) => ({
+            ids: [...path.ids, edge.trackId],
+            score: path.score + edge.score,
+          })),
+      )
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 512);
+  }
+  const alternatives = paths
+    .filter((path) => connected(path.ids))
+    .sort((a, b) => b.score - a.score)
+    .map((path) => path.ids);
+  return [...preferred, ...alternatives].filter(
+    (order, index, allOrders) =>
+      allOrders.findIndex((other) => other.join("\u0000") === order.join("\u0000")) === index,
+  );
+}
+
 export function buildDeterministicArrangementFallback(
   design: MedleyDesignPayload,
   projectBrief: ProjectBrief,
   context: SpecialistContext,
 ): ArrangementPlan | null {
-  const orderedTrackIds = projectBrief.recommendedOrderIds;
-  if (orderedTrackIds.length < 2) return null;
-  let variants: Array<{
-    transitions: MedleyDesignPayload["transitionMatrixSummary"];
-    score: number;
-  }> = [{ transitions: [], score: 0 }];
-  for (let index = 0; index < orderedTrackIds.length - 1; index++) {
-    const fromTrackId = orderedTrackIds[index];
-    const toTrackId = orderedTrackIds[index + 1];
-    const pairCandidates = design.transitionMatrixSummary
-      .filter(
-        (item) =>
-          item.fromTrackId === fromTrackId && item.toTrackId === toTrackId,
-      );
-    // Preserve both the best-sounding and earliest-exit choices. Retaining
-    // only the highest-scoring candidates can make every local fallback too
-    // long or give a single track most of the medley.
-    const options = [
-      ...pairCandidates.slice().sort((a, b) => b.score - a.score).slice(0, 12),
-      ...pairCandidates.slice().sort((a, b) => a.fromExitSec - b.fromExitSec).slice(0, 12),
-    ].filter(
-      (candidate, candidateIndex, allCandidates) =>
-        allCandidates.findIndex(
-          (other) =>
-            other.fromTrackId === candidate.fromTrackId &&
-            other.fromSectionId === candidate.fromSectionId &&
-            other.toTrackId === candidate.toTrackId &&
-            other.toSectionId === candidate.toSectionId &&
-            other.fromExitSec === candidate.fromExitSec &&
-            other.toEntrySec === candidate.toEntrySec,
-        ) === candidateIndex,
-    );
-    if (!options.length) return null;
-    variants = variants.flatMap((variant) =>
-      options.map((transition) => ({
-        transitions: [...variant.transitions, transition],
-        score: variant.score + transition.score,
-      })),
-    );
-    // Bound the fallback for large libraries while retaining the best local paths.
-    if (variants.length > 512)
-      variants = variants.sort((a, b) => b.score - a.score).slice(0, 512);
-  }
   const targetDurationSec = projectBrief.targetDurationSec;
-  const candidates = variants
-    .map((variant) => {
+  const candidates = findConnectedFallbackOrders(design, projectBrief).flatMap(
+    (orderedTrackIds) => {
+      let variants: Array<{
+        transitions: MedleyDesignPayload["transitionMatrixSummary"];
+        score: number;
+      }> = [{ transitions: [], score: 0 }];
+      for (let index = 0; index < orderedTrackIds.length - 1; index++) {
+        const options = fallbackTransitionOptions(
+          design,
+          orderedTrackIds[index],
+          orderedTrackIds[index + 1],
+        );
+        if (!options.length) return [];
+        variants = variants.flatMap((variant) =>
+          options.map((transition) => ({
+            transitions: [...variant.transitions, transition],
+            score: variant.score + transition.score,
+          })),
+        );
+        if (variants.length > 512)
+          variants = variants.sort((a, b) => b.score - a.score).slice(0, 512);
+      }
+      return variants.map((variant) => {
       const plan = ArrangementPlanSchema.parse({
         schemaVersion: 1,
         arrangementVersion: 1,
@@ -502,7 +559,9 @@ export function buildDeterministicArrangementFallback(
         durationSec: estimateArrangementDurationSec(plan, context),
         errors: validateArrangementContext(plan, context),
       };
-    })
+      });
+    },
+  )
     .filter((candidate) => candidate.errors.length === 0)
     .sort((a, b) => {
       const aDistance = Math.abs((a.durationSec ?? Infinity) - targetDurationSec);
