@@ -18,11 +18,7 @@ const review: QualityReview = {
   warnings: [], reviewedAt: "2026-07-13T00:00:00.000Z",
 };
 const corrected = buildTargetedCorrectionPlan(plan, review);
-assert.ok(corrected);
-assert.equal(corrected.arrangementVersion, 2);
-assert.equal(corrected.transitions[0].style, "beat_aligned");
-assert.equal(corrected.transitions[0].duration, 3);
-assert.deepEqual(corrected.transitions[1], plan.transitions[1]);
+assert.equal(corrected, null, "free-form correction text must never mutate a plan");
 assert.equal(buildTargetedCorrectionPlan(plan, { ...review, corrections: [{ ...review.corrections[0], requestedChange: "Make it nicer." }] }), null);
 const boundedPreset = buildTargetedCorrectionPlan(plan, {
   ...review,
@@ -34,4 +30,26 @@ const boundedPreset = buildTargetedCorrectionPlan(plan, {
   }],
 });
 assert.equal(boundedPreset?.transitions[0].duration, 2.5);
+assert.deepEqual(boundedPreset?.transitions[1], plan.transitions[1]);
+assert.equal(
+  buildTargetedCorrectionPlan(plan, {
+    ...review,
+    corrections: [
+      {
+        transitionId: "transition-a",
+        issue: "first",
+        requestedChange: "Apply bounded preset longer_crossfade.",
+        correctionPreset: "longer_crossfade",
+      },
+      {
+        transitionId: "transition-b",
+        issue: "second",
+        requestedChange: "Apply bounded preset shorter_crossfade.",
+        correctionPreset: "shorter_crossfade",
+      },
+    ],
+  }),
+  null,
+  "One correction cycle must never mutate multiple transitions",
+);
 console.log("targetedCorrection tests passed");

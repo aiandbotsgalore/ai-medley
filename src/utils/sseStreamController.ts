@@ -12,6 +12,7 @@ export type SSEStreamOptions = {
   onProgress?: (data: any) => void;
   onMetrics?: (data: any) => void;
   onCompleted?: (data: any) => void;
+  onManualReviewRequired?: (data: any) => void;
   heartbeatTimeoutMs?: number;
   maxReconnectAttempts?: number;
 };
@@ -94,6 +95,7 @@ export class SSEStreamController {
       onProgress,
       onMetrics,
       onCompleted,
+      onManualReviewRequired,
       heartbeatTimeoutMs = 45000,
       maxReconnectAttempts = 5,
     } = options;
@@ -210,6 +212,15 @@ export class SSEStreamController {
         source.close();
         this.setSource(null);
         this.setStatus("closed");
+      });
+
+      source.addEventListener("manual_review_required", (event: MessageEvent) => {
+        if (this.generation !== generation) return;
+        rememberEventId(event);
+        resetHeartbeat();
+        try {
+          onManualReviewRequired?.(JSON.parse(event.data));
+        } catch {}
       });
 
       source.onerror = () => {

@@ -15,6 +15,7 @@ import {
 } from "../types/specialistWorkflow";
 import { sanitizeResolvedTransitionsForManifest } from "./transitionResolution";
 import { withSessionTransaction } from "./sessionTransaction";
+import { stableHash } from "./sessionIdempotency";
 
 const SESSION_ID_PATTERN = /^[a-zA-Z0-9_-]{3,80}$/;
 export const MAX_SESSION_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024;
@@ -314,6 +315,28 @@ export function nextCandidateIdentity(manifest: CandidateManifest) {
   };
 }
 
+/** Hash only authoritative transition facts that can change rendered audio. */
+export function computeCandidatePlanHash(
+  transitions: RenderCandidate["resolvedTransitions"],
+) {
+  if (!transitions?.length) return null;
+  return stableHash(
+    transitions.map((transition) => ({
+      transitionId: transition.transitionId,
+      transitionCandidateId: transition.transitionCandidateId ?? null,
+      fromTrackId: transition.fromTrackId,
+      fromSectionId: transition.fromSectionId,
+      toTrackId: transition.toTrackId,
+      toSectionId: transition.toSectionId,
+      actualFromExitSec: transition.actualFromExitSec,
+      actualToEntrySec: transition.actualToEntrySec,
+      durationUsed: transition.durationUsed,
+      style: transition.style,
+      beatAlign: transition.beatAlign,
+    })),
+  );
+}
+
 export function registerCandidate(
   workDir: string,
   sessionId: string,
@@ -336,6 +359,18 @@ export function registerCandidate(
   }
   if (manifest.candidates.length >= MAX_COMPLETE_CANDIDATES) {
     throw new Error(`Candidate limit reached (${MAX_COMPLETE_CANDIDATES})`);
+  }
+  const planHash = candidate.planHash ?? computeCandidatePlanHash(candidate.resolvedTransitions);
+  if (
+    planHash &&
+    manifest.candidates.some(
+      (item) =>
+        (item.planHash ?? computeCandidatePlanHash(item.resolvedTransitions)) === planHash,
+    )
+  ) {
+    throw new Error(
+      "Duplicate candidate plan rejected; the existing rendered draft was preserved",
+    );
   }
   const next: CandidateManifest = {
     ...manifest,
@@ -707,29 +742,9 @@ export function promoteCandidate(
 }
 
 export function cleanupRejectedCandidates(workDir: string, sessionId: string) {
-  const manifest = readCandidateManifest(workDir, sessionId);
-  const selected = manifest.finalizedCandidateId;
-  for (const candidate of manifest.candidates) {
-    if (candidate.candidateId === selected) continue;
-    const registered = [
-      candidate.outputPath,
-      ...candidate.debugPaths,
-      ...candidate.previewPaths,
-    ];
-    for (const filePath of registered) {
-      try {
-        const safe = assertRegisteredSafeFile(
-          workDir,
-          sessionId,
-          filePath,
-          registered,
-        );
-        fs.rmSync(safe, { force: true });
-      } catch {
-        // Cleanup is best-effort and must not invalidate successful finalization.
-      }
-    }
-  }
+  // Historical API retained for compatibility. Candidate evidence is now
+  // append-only: rejected drafts remain playable and recoverable.
+  return readCandidateManifest(workDir, sessionId);
 }
 
 export function discardAutomaticSessionFiles(
@@ -739,13 +754,13 @@ export function discardAutomaticSessionFiles(
 ) {
   const sessionDir = getSessionDirectory(workDir, sessionId);
   const manifest = readCandidateManifest(workDir, sessionId);
+  if (manifest.candidates.length > 0) {
+    throw new Error(
+      "Session has rendered drafts and cannot be discarded; open Candidate Review instead",
+    );
+  }
   const historyProtected = manifest.finalOutputPath;
   const registered = [
-    ...manifest.candidates.flatMap((candidate) => [
-      candidate.outputPath,
-      ...candidate.debugPaths,
-      ...candidate.previewPaths,
-    ]),
     ...additionalRegisteredPaths,
   ];
   for (const filePath of registered) {

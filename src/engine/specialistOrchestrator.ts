@@ -313,19 +313,6 @@ function styleForTransitionType(
   }
 }
 
-const CORRECTION_STYLE_HINTS: Array<[
-  RegExp,
-  ArrangementPlan["transitions"][number]["style"],
-]> = [
-  [/beat/i, "beat_aligned"],
-  [/energy|ramp/i, "energy_ramp"],
-  [/harmon/i, "harmonic_blend"],
-  [/dramatic|hard\s*cut|cut/i, "dramatic_cut"],
-  [/reset/i, "reset_moment"],
-  [/mashup|layer/i, "mashup_layer"],
-  [/smooth|blend/i, "smooth_blend"],
-];
-
 /**
  * Apply only an explicitly permitted, review-requested transition change.
  * Natural-language criticism without a safe executable mutation is deliberately
@@ -338,7 +325,8 @@ export function buildTargetedCorrectionPlan(
   const corrections = new Map(
     review.corrections.map((item) => [item.transitionId, item]),
   );
-  if (!corrections.size) return null;
+  if (!corrections.size || corrections.size !== 1 || review.corrections.length !== 1)
+    return null;
   let changed = false;
   const transitions = plan.transitions.map((transition) => {
     const correction = corrections.get(transition.transitionId);
@@ -364,11 +352,7 @@ export function buildTargetedCorrectionPlan(
       }
       return next;
     }
-    const styleHint = CORRECTION_STYLE_HINTS.find(([pattern]) =>
-      requestedPreset === undefined && pattern.test(correction.requestedChange),
-    )?.[1];
-    const presetStyle = requestedPreset;
-    const requestedStyle = presetStyle ?? styleHint;
+    const requestedStyle = requestedPreset;
     if (
       requestedStyle &&
       permissions?.styleMutable === true &&
@@ -376,22 +360,6 @@ export function buildTargetedCorrectionPlan(
       requestedStyle !== transition.style
     ) {
       next = { ...next, style: requestedStyle };
-      changed = true;
-    }
-    // Legacy text-only reviews may still be resumed. New audio reviews always
-    // carry a correctionPreset and never provide a free-form duration.
-    const durationMatch = correction.requestedChange.match(/(\d+(?:\.\d+)?)\s*(?:s|sec(?:ond)?s?)/i);
-    const requestedDuration = durationMatch ? Number(durationMatch[1]) : null;
-    if (
-      requestedDuration !== null &&
-      Number.isFinite(requestedDuration) &&
-      permissions?.durationMutable === true &&
-      requestedDuration >= (permissions.minDuration ?? 0.1) &&
-      requestedDuration <= (permissions.maxDuration ?? 30) &&
-      requestedDuration > 0 &&
-      requestedDuration !== transition.duration
-    ) {
-      next = { ...next, duration: requestedDuration };
       changed = true;
     }
     return next;
@@ -892,7 +860,6 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
     targetDurationSec: projectBrief.targetDurationSec,
   };
   let arrangementPlan = checkpoint.arrangementPlan;
-  let replacedInvalidResumedArrangement = false;
   if (arrangementPlan) {
     const resumeErrors = validateArrangementForWorkflow(
       arrangementPlan,
@@ -901,21 +868,10 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
       options.sessionId,
     );
     if (resumeErrors.length) {
-      const fallback = buildDeterministicArrangementFallback(
-        options.design,
-        projectBrief,
-        arrangementContext,
+      throw new Error(
+        `The saved arrangement is no longer valid: ${resumeErrors.join("; ")}. ` +
+        "No draft was rendered. Retry the AI arrangement or change the OpenRouter model.",
       );
-      if (!fallback) {
-        throw new Error(
-          `Saved arrangement is no longer valid: ${resumeErrors.join("; ")}`,
-        );
-      }
-      options.onLog(
-        "Saved arrangement is no longer valid; using a locally validated target-length arrangement.",
-      );
-      arrangementPlan = fallback;
-      replacedInvalidResumedArrangement = true;
     }
   }
   if (!arrangementPlan) {
@@ -964,18 +920,13 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
       onRepair: () => saveProgress({ repairCount: checkpoint.repairCount + 1 }),
       onRequestAudit: options.onProviderRequestAudit,
       });
-    } catch (error) {
+    } catch (error: any) {
       if (options.signal.aborted || isAbortLike(error)) throw error;
-      const fallback = buildDeterministicArrangementFallback(
-        options.design,
-        projectBrief,
-        arrangementContext,
+      throw new Error(
+        "OpenRouter could not produce a valid arrangement. No draft was rendered and no local fallback was used. " +
+        `Retry the arrangement or change the OpenRouter model. ${error?.message || ""}`.trim(),
+        { cause: error },
       );
-      if (!fallback) throw error;
-      options.onLog(
-        "AI arrangement was unavailable or invalid; using a locally validated target-length arrangement.",
-      );
-      arrangementPlan = fallback;
     }
     await readJsonResponse(
       await fetch("/api/session/design-plan", {
@@ -1007,8 +958,6 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
         signal: options.signal,
       }),
     );
-    if (replacedInvalidResumedArrangement)
-      await saveRequired({ stage: "production", arrangementPlan });
   }
 
   let correctionCount = checkpoint.correctionCount;

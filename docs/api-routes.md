@@ -33,6 +33,8 @@ specialist or a production/tool-execution provider. `/api/exec`,
 - `GET /api/session/:id`
 - `GET /api/session/:id/stream`
 - `GET /api/session/:sessionId/candidates`
+- `GET /api/session/:sessionId/candidates/:candidateId/audio`
+- `GET /api/sessions/reviewable`
 - `GET /api/session/:sessionId/state`
 - `GET /api/storage/inventory`
 - `GET /api/waveform/:id`

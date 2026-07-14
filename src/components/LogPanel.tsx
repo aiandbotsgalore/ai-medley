@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState } from "react";
-import { Sparkles, FileCheck2, Loader2, Terminal, Clock } from "lucide-react";
+import { Sparkles, FileCheck2, Loader2, Terminal, Clock, AlertCircle } from "lucide-react";
 
 interface LogPanelProps {
   status: string;
@@ -186,10 +186,25 @@ export default function LogPanel({
                 </span>
               )}
             </>
-          ) : (
+          ) : status === "completed" ? (
             <>
               <FileCheck2 className="w-4 h-4 text-emerald-400" />{" "}
               <span className="text-emerald-400">Target Achieved</span>
+            </>
+          ) : status === "manual_review_required" ? (
+            <>
+              <AlertCircle className="w-4 h-4 text-amber-300" />{" "}
+              <span className="text-amber-300">Drafts Ready for Review</span>
+            </>
+          ) : status === "error" ? (
+            <>
+              <AlertCircle className="w-4 h-4 text-red-400" />{" "}
+              <span className="text-red-400">Action Needed</span>
+            </>
+          ) : (
+            <>
+              <Terminal className="w-4 h-4 text-[#777]" />{" "}
+              <span className="text-[#AAA]">Ready for a New Medley</span>
             </>
           )}
         </h2>

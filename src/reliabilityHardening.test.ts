@@ -38,6 +38,15 @@ assert.deepEqual(
 
 const appSource = fs.readFileSync(path.join(process.cwd(), "src/App.tsx"), "utf8");
 assert.match(appSource, /const MAX_LOOP_TURNS = 30;/);
+assert.doesNotMatch(
+  appSource,
+  /if \(snapshot\.status === "completed"\) setStatus\("completed"\)/,
+  "SSE must not report completion without refreshing authoritative final integrity",
+);
+assert.ok(
+  (appSource.match(/onManualReviewRequired:/g) ?? []).length >= 2,
+  "Both Manual and Automatic workflows must restore Candidate Review from SSE",
+);
 
 const serverSource = fs.readFileSync(path.join(process.cwd(), "server.ts"), "utf8");
 assert.match(serverSource, /maxBuffer:\s*10 \* 1024 \* 1024/);

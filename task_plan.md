@@ -1,49 +1,57 @@
-AUTHORITATIVE PLAN:
+AUTHORITATIVE ACTIVE PLAN:
+docs/plans/candidate-review-experience-plan.md
+
+COMPLETED FOUNDATION PLAN:
 docs/plans/ai-medley-workflow-upgrade-master-plan.md
 
 EXECUTION RULE:
-Complete all offline phases continuously without approval pauses.
-Mocked providers only. The live-provider gate is intentionally skipped.
+The user approved continuous implementation on 2026-07-14. Core provider tests
+are mocked. Explicit live acceptance uses current OpenRouter `:free` models and
+synthetic audio only.
 
 ## Repository state
 
-- Branch: `payload-optimization`; origin configured; working changes are Master Plan execution only.
-- Protected baseline: SHA-256 inventory stored outside the repository in OS temp; post-baseline comparison passed.
-- Historical release-readiness and hotfix ledger: superseded; retained in Git history and `docs/plans/archive/task-plan-history-through-2026-07-11.md`.
+- Branch: `payload-optimization`; origin configured.
+- Pre-existing unrelated change: user-authored `AGENTS.md`; preserve unstaged.
+- Pre-existing untracked `.planning/`; preserve untouched.
+- Phase 0 SHA-256 inventory remains outside the repository in OS temp; it
+  predates later real app activity and is not treated as a current clean baseline.
+- Protected paths remain outside implementation and test data roots.
 
 ## Current Master Plan phase
 
-Phase 11 — offline verification and documentation alignment complete; optional live-provider gate intentionally skipped.
+Candidate Review Experience Phases 1–6 — complete.
 
 ## Completed phases
 
-- Phase 0: baseline, protected fingerprints, mocked-test audit, disposable production smoke.
-- Phase 1: isolated v4 schemas and focused regression coverage.
-- Phases 2–10: transaction coordination, transactional upload/deletion,
-  deterministic v4 artifacts/compiler, quality limits, targeted correction,
-  manual review, cancellation/SSE/reconciliation, and compatibility adapters.
-- Phase 11: mocked acceptance, failure-injection coverage, documentation, and
-  disposable production verification.
+- Automatic v4 foundation Phases 0–11 are complete.
+- OpenRouter-only Automatic arrangement/audio review and live-free integration gate are complete.
+- Candidate Review Experience Phases 1–6 are complete.
 
 ## Active phase checklist
 
-- [x] Run complete mocked suite, full isolated v4 upload-to-final acceptance,
-  lint, route-document contract, and diff validation.
-- [x] Run disposable build and production-start smoke using an isolated data root.
-- [x] Confirm no live provider calls were made; the optional live gate is skipped.
+- [x] Authoritative candidate-review projection and integrity checks.
+- [x] Honest UI state, refresh/restart restoration, and sequenced SSE recovery.
+- [x] Manifest-only range playback and accessible multi-draft Candidate Review.
+- [x] Bounded one-transition correction presets and duplicate-plan prevention.
+- [x] Decode-verified, idempotent final promotion and exact final restoration.
+- [x] Mocked, failure-injection, FFmpeg, browser, live-free, build, and startup gates.
 
 ## Last verified safe checkpoint
 
-Commit `4c268b7`: v4 documentation alignment, after commits `c6b8aef`,
-`c2b1a19`, and `dc4a31b` completed durable cancellation/replay, test-gate,
-and strict automatic end-to-end fixes. All checks used temporary data roots.
+Disposable release copy: complete `npm run test:full`, build, production startup,
+browser finalization/restart, secret scan, lint, and whitespace gates passed.
+Real protected roots were excluded from all implementation tests.
 
 ## Unresolved blockers
 
-- No offline blocker. Optional live-provider verification is intentionally skipped.
+- No implementation blocker remains.
+- User-authored `AGENTS.md` and `.planning/` are unrelated and remain unstaged.
+- The July 12 Phase 0 fingerprint predates later real app activity and no longer
+  matches five history/wisdom/session files plus one normally removed checkpoint;
+  this task did not restore, rewrite, or use those artifacts.
 
 ## Exact next actions
 
-1. Hand off the completed offline implementation and verification evidence.
-2. If the user elects to do a live-provider acceptance run, obtain separate
-   cost authorization first; it is outside this offline plan.
+No unfinished implementation action. Publish the single scoped implementation
+commit and report the verified handoff.

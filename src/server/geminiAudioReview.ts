@@ -5,6 +5,7 @@ import {
   type QualityReview,
   type RenderCandidate,
 } from "../types/specialistWorkflow";
+import { CORRECTION_POLICY_VERSION } from "./correctionPolicy";
 
 export const AUTOMATIC_GEMINI_MODELS = {
   arrangement: "gemini-3.1-pro-preview",
@@ -62,6 +63,7 @@ export type AudioReviewTransition = {
   fromTrackId: string;
   toTrackId: string;
   style: string;
+  allowedCorrectionPresets: Array<z.infer<typeof CorrectionPresetSchema>>;
 };
 
 export type GeminiAudioReviewInput = {
@@ -109,14 +111,28 @@ function parseJsonResponse(value: string | null | undefined) {
 
 export function validateAudioReviewDecision(
   decision: GeminiAudioReviewDecision,
-  transitionIds: Set<string>,
+  transitions: AudioReviewTransition[],
 ) {
+  const allowedByTransition = new Map(
+    transitions.map((transition) => [
+      transition.transitionId,
+      new Set(transition.allowedCorrectionPresets),
+    ]),
+  );
   const unknown = decision.corrections.find(
-    (item) => !transitionIds.has(item.transitionId),
+    (item) => !allowedByTransition.has(item.transitionId),
   );
   if (unknown) {
     throw new GeminiAudioReviewError(
       "Gemini audio review referenced a transition outside the locked candidate.",
+    );
+  }
+  const forbidden = decision.corrections.find(
+    (item) => !allowedByTransition.get(item.transitionId)?.has(item.correctionPreset),
+  );
+  if (forbidden) {
+    throw new GeminiAudioReviewError(
+      "Gemini audio review requested a correction that was not offered for the locked transition.",
     );
   }
   if (decision.approved && (decision.blockingIssues.length || decision.corrections.length)) {
@@ -161,19 +177,10 @@ export function buildAudioReviewPrompt(input: Pick<GeminiAudioReviewInput, "mode
     fromTrackId: transition.fromTrackId,
     toTrackId: transition.toTrackId,
     style: transition.style,
-    allowedCorrectionPresets: [
-      "shorter_crossfade",
-      "longer_crossfade",
-      "smooth_blend",
-      "beat_aligned",
-      "energy_ramp",
-      "harmonic_blend",
-      "dramatic_cut",
-      "reset_moment",
-      "mashup_layer",
-    ],
+    allowedCorrectionPresets: transition.allowedCorrectionPresets,
   }));
   return JSON.stringify({
+    correctionPolicyVersion: CORRECTION_POLICY_VERSION,
     task: input.mode === "whole_mix"
       ? "Listen to the complete rendered medley. Judge overall pacing, fair time sharing, emotional flow, and transition quality."
       : "Listen to the supplied transition clips and refine only the identified transition corrections.",
@@ -272,7 +279,7 @@ export async function reviewCandidateAudioWithGemini(
     });
     return validateAudioReviewDecision(
       parseJsonResponse(result.text),
-      new Set(input.transitions.map((transition) => transition.transitionId)),
+      input.transitions,
     );
   } catch (error) {
     if (error instanceof GeminiAudioReviewError) throw error;
@@ -350,7 +357,7 @@ export async function reviewCandidateAudioWithOpenRouter(
     const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
     return validateAudioReviewDecision(
       GeminiAudioReviewDecisionSchema.parse(parsed),
-      new Set(input.transitions.map((transition) => transition.transitionId)),
+      input.transitions,
     );
   } catch (error) {
     if (error instanceof OpenRouterAudioReviewError) throw error;

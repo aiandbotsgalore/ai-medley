@@ -37,8 +37,8 @@ export const WORKFLOW_STAGES = [
 
 export type SpecialistStage = (typeof WORKFLOW_STAGES)[number];
 
-export const MAX_CORRECTION_RETRIES = 3;
-export const MAX_COMPLETE_CANDIDATES = 4;
+export const MAX_CORRECTION_RETRIES = 2;
+export const MAX_COMPLETE_CANDIDATES = 3;
 export const PROVIDER_REQUEST_TIMEOUT_MS = 120_000;
 export const MAX_PROVIDER_REQUEST_BYTES = 100 * 1024;
 export const MAX_PROVIDER_ESTIMATED_TOKENS = 24_000;
@@ -210,6 +210,9 @@ export const RenderCandidateSchema = z.strictObject({
   parentCandidateId: Id.nullable(),
   arrangementVersion: z.number().int().positive(),
   executionVersion: z.number().int().positive(),
+  // Optional only for backward-compatible reads of historical manifests.
+  // Newly rendered Automatic candidates always record this hash.
+  planHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   resolvedTransitions: z.array(ResolvedTransitionSchema).max(99).optional(),
   outputPath: z.string().trim().min(1).max(1_000),
   debugPaths: z.array(z.string().trim().min(1).max(1_000)).max(10),

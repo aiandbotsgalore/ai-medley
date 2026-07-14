@@ -18,6 +18,7 @@ export type FinalizationJournal = {
   sha256: string | null;
   steps: {
     candidatePromoted: boolean;
+    finalAudioVerified?: boolean;
     historyWritten: boolean;
     wisdomWritten: boolean;
     checkpointDeleted: boolean;
@@ -54,6 +55,7 @@ export type FinalizationTransactionInput = {
     manifestVersion: number | null;
     sha256: string | null;
   };
+  verifyFinalAudio: (finalPath: string) => void;
   readHistory: () => FinalizationEntry[];
   writeHistory: (entries: FinalizationEntry[]) => void;
   readWisdom: () => FinalizationEntry[];
@@ -81,6 +83,8 @@ function validateJournal(value: unknown, sessionId: string) {
     !["in_progress", "completed"].includes(journal.status) ||
     !journal.steps ||
     typeof journal.steps.candidatePromoted !== "boolean" ||
+    (journal.steps.finalAudioVerified !== undefined &&
+      typeof journal.steps.finalAudioVerified !== "boolean") ||
     typeof journal.steps.historyWritten !== "boolean" ||
     typeof journal.steps.wisdomWritten !== "boolean" ||
     typeof journal.steps.checkpointDeleted !== "boolean"
@@ -226,6 +230,7 @@ export function executeFinalizationTransaction(
       sha256: null,
       steps: {
         candidatePromoted: false,
+        finalAudioVerified: false,
         historyWritten: false,
         wisdomWritten: false,
         checkpointDeleted: false,
@@ -262,6 +267,12 @@ export function executeFinalizationTransaction(
   }
 
   const finalPath = journal.finalPath!;
+  if (!journal.steps.finalAudioVerified) {
+    input.verifyFinalAudio(finalPath);
+    journal = updateJournal(input.workDir, journal, {
+      steps: { ...journal.steps, finalAudioVerified: true },
+    });
+  }
   const history = input.readHistory();
   if (!history.some((entry) => entry.id === input.sessionId)) {
     input.writeHistory([input.createHistoryEntry(finalPath), ...history]);

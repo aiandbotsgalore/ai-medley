@@ -34,6 +34,7 @@ const timers: Array<() => void> = [];
 const statuses: string[] = [];
 const logs: string[] = [];
 const snapshots: unknown[] = [];
+const manualReviews: unknown[] = [];
 const controller = new SSEStreamController({
   createEventSource: (url) => {
     const source = new FakeEventSource();
@@ -66,6 +67,7 @@ assert.equal(timers.length, 1);
 controller.connect("run-b", {
   onLog: (message) => logs.push(message),
   onSnapshot: (snapshot) => snapshots.push(snapshot),
+  onManualReviewRequired: (data) => manualReviews.push(data),
 });
 assert.equal(sources.length, 2);
 const runB = sources[1].source;
@@ -81,11 +83,13 @@ runB.emit("connected", { sequence: 4, snapshot: { status: "running" } });
 assert.deepEqual(snapshots, [{ status: "running" }]);
 runB.emit("log", { message: "run b" }, "5");
 assert.deepEqual(logs, ["run b"]);
+runB.emit("manual_review_required", { reason: "choose a draft" }, "6");
+assert.deepEqual(manualReviews, [{ reason: "choose a draft" }]);
 runB.close();
 runB.onerror?.();
 const reconnect = timers.shift();
 reconnect?.();
-assert.equal(sources.at(-1)?.url, "/api/session/run-b/stream?lastEventId=5");
+assert.equal(sources.at(-1)?.url, "/api/session/run-b/stream?lastEventId=6");
 const runBReconnected = sources.at(-1)!.source;
 runBReconnected.emit("heartbeat", { sequence: 5 });
 assert.equal(timers.length, 1);

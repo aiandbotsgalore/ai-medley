@@ -61,8 +61,9 @@ production/tool-execution provider request**. Provider use is limited to a
 constrained arrangement decision and an audio-aware candidate review;
 corrections may only choose explicitly permitted local presets. Provider
 failures are recorded without exposing credentials. A Pro arrangement failure
-uses the deterministic local arrangement fallback rather than silently using a
-weaker model; an audio-review failure preserves the candidate for manual review.
+stops before rendering and offers Retry, Change Model, or Cancel rather than
+silently producing a local substitute. An audio-review failure preserves the
+rendered candidate and opens Candidate Review.
 
 The remaining constrained provider decisions use the fixed roster:
 
@@ -74,6 +75,38 @@ The remaining constrained provider decisions use the fixed roster:
 The whole-mix approval has no silent model fallback. Provider text requests are rejected before network access above 100 KiB or 24,000 estimated tokens, with a 16,000-token regression target. One bounded 429 retry may honor at most 30 seconds of `Retry-After`.
 
 After local technical checks pass, Automatic v4 sends the rendered candidate MP3—not original library audio—to OpenRouter for a whole-mix review. A rejected candidate may send at most three registered transition previews through OpenRouter to Gemini 3.5 Flash for a focused correction choice. Audio is sent as base64 through OpenRouter's audio-input contract; no temporary Google Files API artifact is created. The original library tracks and all local candidate artifacts remain local and are never removed by this review step.
+
+Automatic v4 renders one initial candidate and permits at most two targeted
+correction candidates. The server offers exact, versioned correction presets;
+the provider can select one offered preset for one named transition but cannot
+invent timestamps, change several transitions, or repeat an identical plan.
+Every earlier candidate remains registered and visible.
+
+## Candidate Review and completion truth
+
+Candidate Review is the user-facing destination whenever a rendered draft
+needs a decision, an automatic correction cannot proceed, or final promotion
+was interrupted. It is also restored automatically on startup. The screen:
+
+- shows every registered draft, its local path, size, duration, technical
+  status, OpenRouter review evidence, transition concerns, and deterministic
+  changes from its parent;
+- provides one shared range-capable audio player for A/B switching so drafts
+  cannot play over each other;
+- keeps invalid or tampered drafts visible while disabling playback or final
+  approval when integrity cannot be verified;
+- permits a technically valid draft to receive an append-only human approval;
+  and
+- resumes an interrupted finalization without rerendering or duplicating the
+  approval.
+
+The UI reports **Final MP3 created successfully** only when the finalization
+journal is complete, the promoted bytes match the selected registered
+candidate, FFmpeg can decode the final audio, history and wisdom were projected,
+and authoritative session state is `completed`. A verified final exposes
+playback, download, its local path, and finalization time. Refresh or server
+restart restores the same candidates and verified final. A rendered candidate
+alone is never reported as completion.
 
 Manual Model mode supports the Gemini and OpenRouter models listed in `src/components/ConfigPanel.tsx`, plus a custom OpenRouter model ID. Saved provider/model pairs are validated and visibly migrated to a compatible default when necessary.
 
@@ -97,8 +130,10 @@ Persistent source audio, library records, history, wisdom, checkpoints, candidat
 - Automatic checkpoints are source/design/config bound. Changed or legacy-unbound state requires an explicit user decision.
 - Candidate manifests retain append-only technical, musical, human, and
   correction evidence. Resource limits enter manual review without deleting
-  older candidates. Final promotion revalidates canonical path, size, and
-  SHA-256 and follows a recoverable finalization journal.
+  older candidates. Candidate playback requires a manifest registration plus
+  canonical path, size, and SHA-256 integrity. Final promotion revalidates the
+  same identity, verifies full-audio FFmpeg decoding, and follows a recoverable
+  finalization journal.
 - Automatic state is revisioned and idempotent. Cancellation is durable,
   session-wide, and leaves protected completed artifacts intact; startup
   reconciliation only classifies interrupted boundaries and never deletes data.
@@ -109,7 +144,14 @@ Current declared envelopes include 25 tracks per project, 24 hours aggregate sou
 
 ## Browser accessibility
 
-Core upload, configuration, history, reorder, progress, error, and recovery workflows expose semantic controls, keyboard operation, focus management, live states, reduced-motion behavior, and minimum 44px interaction targets. Phase 10 verification used mocked local APIs only and covered axe WCAG A/AA, Lighthouse, narrow/zoom-equivalent layouts, refresh, and two-tab isolation.
+Core upload, configuration, history, reorder, progress, error, recovery, and
+Candidate Review workflows expose semantic controls, keyboard operation, focus
+management, live states, reduced-motion behavior, and minimum 44px interaction
+targets. Candidate cards have accessible draft names and their playback and
+finalization actions are native buttons. Phase 10 verification used mocked
+local APIs only and covered axe WCAG A/AA, Lighthouse, narrow/zoom-equivalent
+layouts, refresh, and two-tab isolation; the Candidate Review release gate also
+uses an isolated two-draft browser fixture.
 
 ## API contract
 

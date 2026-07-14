@@ -643,13 +643,15 @@ await assert.rejects(
     },
     onMetrics: () => {},
   }),
-  (error: any) => error?.name === "AbortError",
+  (error: any) =>
+    /OpenRouter could not produce a valid arrangement/.test(error?.message || ""),
 );
 assert.ok(fallbackProviderCalls > 0);
-const fallbackPlan = JSON.parse(fallbackPlanBody).plan as ArrangementPlan;
-assert.equal(fallbackPlan.strategy, "Local target-matched fallback");
-assert.equal(fallbackPlan.transitions[0].fromSectionId, "a-1");
-assert.equal(fallbackPlan.transitions[0].toSectionId, "b-1");
+assert.equal(
+  fallbackPlanBody,
+  "",
+  "provider failure must stop before posting or rendering a local fallback arrangement",
+);
 
 let directGeminiAttempts = 0;
 let openRouterFallbackAttempts = 0;
@@ -730,7 +732,7 @@ const invalidResumedCheckpoint: AutomaticWorkflowCheckpoint = {
     ],
   },
 };
-const providerCallsBeforeResumeRecovery = fallbackProviderCalls;
+const providerCallsBeforeResumeRecovery = openRouterFallbackAttempts;
 await assert.rejects(
   runAutomaticSpecialistWorkflow({
     sessionId,
@@ -751,12 +753,13 @@ await assert.rejects(
     },
     onMetrics: () => {},
   }),
-  (error: any) => error?.name === "AbortError",
+  (error: any) => /saved arrangement is no longer valid/i.test(error?.message || ""),
 );
-assert.equal(fallbackProviderCalls, providerCallsBeforeResumeRecovery);
-const recoveredResumePlan = JSON.parse(fallbackPlanBody).plan as ArrangementPlan;
-assert.equal(recoveredResumePlan.strategy, "Local target-matched fallback");
-assert.equal(recoveredResumePlan.transitions[0].fromExitSec, 80);
+assert.equal(
+  openRouterFallbackAttempts,
+  providerCallsBeforeResumeRecovery,
+  "an invalid saved arrangement must stop before calling a provider or rendering",
+);
 
 const abortedArrangementController = new AbortController();
 let abortFallbackPlanPosted = false;

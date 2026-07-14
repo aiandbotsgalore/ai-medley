@@ -8,6 +8,7 @@ import {
   appendCandidateTechnicalEvaluation,
   assertSessionArtifactBudget,
   cleanupRejectedCandidates,
+  computeCandidatePlanHash,
   createEmptyManifest,
   discardAutomaticSessionFiles,
   nextCandidateIdentity,
@@ -26,8 +27,8 @@ import {
   type RenderCandidate,
 } from "../types/specialistWorkflow";
 
-assert.equal(MAX_CORRECTION_RETRIES, 3);
-assert.equal(MAX_COMPLETE_CANDIDATES, 4);
+assert.equal(MAX_CORRECTION_RETRIES, 2);
+assert.equal(MAX_COMPLETE_CANDIDATES, 3);
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "ai-medley-candidates-"));
 const sessionId = "session-test";
@@ -145,7 +146,11 @@ const promoted = promoteCandidate(root, sessionId, "candidate-002", {
 assert.equal(fs.readFileSync(promoted.finalPath, "utf8"), "approved candidate");
 assert.equal(sha256File(promoted.finalPath), manifest.candidates[1].sha256);
 cleanupRejectedCandidates(root, sessionId);
-assert.equal(fs.existsSync(manifest.candidates[0].outputPath), false);
+assert.equal(
+  fs.existsSync(manifest.candidates[0].outputPath),
+  true,
+  "Rejected candidates must remain available for comparison and recovery",
+);
 assert.equal(fs.existsSync(promoted.finalPath), true);
 assert.equal(
   promoteCandidate(root, sessionId, "candidate-002").idempotent,
@@ -322,6 +327,27 @@ assert.equal(
 assert.equal(
   "_resolvedToEntrySec" in (recovered?.candidate.resolvedTransitions?.[0] ?? {}),
   false,
+);
+assert.equal(readCandidateManifest(root, recoverySession).candidates.length, 1);
+const duplicatePlanPath = path.join(recoveryDir, "candidate-002.mp3");
+fs.writeFileSync(duplicatePlanPath, "different render bytes");
+const recoveredPlanHash = computeCandidatePlanHash(
+  recovered?.candidate.resolvedTransitions,
+);
+assert.ok(recoveredPlanHash);
+assert.throws(
+  () => registerCandidate(root, recoverySession, {
+    ...recovered!.candidate,
+    candidateId: "candidate-002",
+    candidateVersion: 2,
+    parentCandidateId: "candidate-001",
+    executionVersion: 4,
+    planHash: recoveredPlanHash!,
+    outputPath: duplicatePlanPath,
+    sizeBytes: fs.statSync(duplicatePlanPath).size,
+    sha256: sha256File(duplicatePlanPath),
+  }),
+  /Duplicate candidate plan rejected/,
 );
 assert.equal(readCandidateManifest(root, recoverySession).candidates.length, 1);
 

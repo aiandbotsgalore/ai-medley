@@ -1,5 +1,22 @@
 # Findings: Provider API Key Settings
 
+## 2026-07-14 — Candidate Review Experience approval and baseline
+
+- The user approved the Candidate Review Experience implementation.
+- Existing server foundations provide Automatic v4 state, candidate manifests,
+  append-only reviews, per-session locking, candidate integrity, and transactional finalization.
+- `LogPanel` currently renders `Target Achieved` for every state that is not
+  `running`, including idle, error, and `manual_review_required`.
+- `App.tsx` exposes only a bare approve-and-finalize button for technically valid
+  candidates; it has no candidate audio, review reason, comparison, file path,
+  or useful empty/recovery state.
+- Manual-review data is fetched only when the active orchestration call returns
+  `manualReviewRequired`; refresh/restart needs authoritative projection hydration.
+- `GET /api/session/:sessionId/state` already returns state plus manifest and is
+  the safest compatibility point for a typed UI projection.
+- User-authored `AGENTS.md` is a pre-existing unrelated change and remains unstaged.
+
+
 ## 2026-07-13 Master Plan completion findings
 
 - Confirmed and fixed a false-failure path: `replayAutomaticSessionIdempotent`
@@ -473,3 +490,45 @@ Sources:
   `workflowVersion: 4`, include monotonic `stateRevision`, idempotency records,
   design/arrangement records, append-only review evidence arrays, and manual
   review state.
+
+# 2026-07-14 — Candidate Review Experience final audit
+
+## Prioritized confirmed issues
+
+1. **Rendered drafts became a dead end.** The server had authoritative manifest
+   evidence, but React exposed no complete, recoverable review projection. A
+   rendered MP3 could therefore exist while the UI showed a generic error or
+   misleading completion. The new projection preserves every draft and derives
+   legal actions from state, append-only evidence, path/size/SHA integrity, and
+   finalization-journal truth.
+2. **Automatic correction could waste candidates.** Provider output was not
+   bound tightly enough to one exact server-offered correction. Automatic v4 now
+   accepts one named preset for one named transition, rejects duplicate plan
+   hashes, caps the session at one original plus two distinct corrections, and
+   never auto-deletes an earlier candidate.
+3. **Final success was insufficiently strict.** Promotion verified bytes but did
+   not prove the promoted MP3 could be fully decoded before committing history,
+   wisdom, and completion. Finalization now adds full FFmpeg decode verification
+   inside the resumable transaction and the UI reports success only from the
+   completed, integrity-verified journal.
+4. **Refresh could hide work.** Startup recovery depended on checkpoints and the
+   first static recovery route was shadowed by `/api/session/:id`. The route is
+   now `/api/sessions/reviewable`; unfinished drafts and verified finals restore
+   from authoritative state even after checkpoints are gone. Recovery is now a
+   startup-only effect, so a later checkpoint refresh cannot reopen an old final
+   after the user explicitly chooses New session.
+5. **Provider failure could silently lower musical quality.** Automatic
+   arrangement failure no longer renders a deterministic substitute. The user
+   gets Retry, Change Model, or Cancel before any candidate is rendered; a later
+   audio-review failure preserves the rendered draft in Candidate Review.
+
+## Safety evidence
+
+- All implementation tests used OS-temporary `AI_MEDLEY_DATA_ROOT` locations;
+  browser acceptance finalized only generated six-second fixture MP3s.
+- The old Phase 0 fingerprint was created before later real app activity. Its
+  current delta is limited to history/wisdom projections, session
+  `xok0d0ee/candidate-001-error.json`, and the removed `xok0d0ee` checkpoint.
+  Those protected artifacts were neither used nor modified by this task.
+- The configured OpenRouter key appears in neither the scoped diff nor the
+  isolated production build. `.env` and `.env.local` remain ignored/untracked.

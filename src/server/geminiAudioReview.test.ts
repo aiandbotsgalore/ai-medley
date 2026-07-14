@@ -60,6 +60,7 @@ const transitions = [{
   fromTrackId: "track-a",
   toTrackId: "track-b",
   style: "smooth_blend",
+  allowedCorrectionPresets: ["longer_crossfade" as const],
 }];
 
 const decision = await reviewCandidateAudioWithGemini({
@@ -148,5 +149,37 @@ assert.equal(openRouterRequest.model, "google/gemini-3.1-pro-preview");
 assert.equal(openRouterRequest.messages[0].content[1].type, "input_audio");
 assert.equal(openRouterRequest.messages[0].content[1].input_audio.format, "mp3");
 assert.equal(openRouterRequest.tool_choice.function.name, "submit_audio_review");
+
+await assert.rejects(
+  () => reviewCandidateAudioWithOpenRouter({
+    model: "openrouter/free-test:free",
+    candidate,
+    candidateFilePath: "C:\\isolated\\candidate-001.mp3",
+    transitions,
+    mode: "whole_mix",
+    readAudio: async () => new Uint8Array([1, 2, 3]),
+    request: async () => ({
+      choices: [{ message: { tool_calls: [{ function: {
+        name: "submit_audio_review",
+        arguments: JSON.stringify({
+          approved: false,
+          emotionalArc: 60,
+          transitionSmoothness: 40,
+          performerIdentity: 70,
+          overallScore: 50,
+          blockingIssues: ["Abrupt handoff"],
+          warnings: [],
+          corrections: [{
+            transitionId: "transition-1",
+            issue: "Abrupt handoff",
+            correctionPreset: "dramatic_cut",
+          }],
+        }),
+      } }] } }],
+    }),
+  }),
+  /invalid structured result/,
+  "The reviewer must not choose a correction preset the server did not offer",
+);
 
 console.log("geminiAudioReview tests passed");

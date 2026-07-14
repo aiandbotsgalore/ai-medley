@@ -339,6 +339,7 @@ try {
   });
   assert.equal(render.candidate.candidateId, "candidate-001");
   assert.equal(render.manifest.candidates.length, 1);
+  assert.match(render.candidate.planHash, /^[a-f0-9]{64}$/);
   assert.equal(fs.existsSync(render.candidate.outputPath), true);
   const repeatedRender = await jsonRequest("/api/render-review-candidate", {
     method: "POST",
@@ -347,6 +348,21 @@ try {
   });
   assert.equal(repeatedRender.idempotent, true);
   assert.equal(repeatedRender.candidate.candidateId, render.candidate.candidateId);
+
+  const candidateRange = await fetch(
+    `${baseUrl}/api/session/${sessionId}/candidates/${render.candidate.candidateId}/audio`,
+    { headers: { Range: "bytes=0-31" } },
+  );
+  assert.equal(candidateRange.status, 206);
+  assert.equal(candidateRange.headers.get("accept-ranges"), "bytes");
+  assert.match(candidateRange.headers.get("content-range") ?? "", /^bytes 0-31\//);
+  assert.equal((await candidateRange.arrayBuffer()).byteLength, 32);
+  const renderedView = await jsonRequest(`/api/session/${sessionId}/state`);
+  assert.equal(renderedView.review.candidateCount, 1);
+  assert.equal(renderedView.review.candidates[0].audioUrl.includes("candidate-001"), true);
+  const reviewableAfterFirstDraft = await jsonRequest("/api/sessions/reviewable");
+  assert.equal(reviewableAfterFirstDraft.sessions[0].sessionId, sessionId);
+  assert.equal(reviewableAfterFirstDraft.sessions[0].candidateCount, 1);
 
   // Send the MP3 FFmpeg just rendered to a real catalog-listed free OpenRouter
   // model. Approval is not asserted because synthetic tones are not music;
@@ -367,13 +383,106 @@ try {
   assert.equal(fs.existsSync(render.candidate.outputPath), true);
   console.log(`Live OpenRouter audio review passed using ${liveFreeAudioModel}`);
 
-  const reviewRequest = {
+  const rejectedReviewRequest = {
     sessionId,
     review: {
       schemaVersion: 1,
       candidateId: render.candidate.candidateId,
       candidateVersion: render.candidate.candidateVersion,
       arrangementVersion: render.candidate.arrangementVersion,
+      approved: false,
+      emotionalArc: 50,
+      transitionSmoothness: 50,
+      performerIdentity: 50,
+      overallScore: 50,
+      blockingIssues: ["The crossfade needs a little more room."],
+      corrections: [{
+        transitionId: transition.transitionId,
+        issue: "The handoff is abrupt.",
+        requestedChange: "Apply bounded preset longer_crossfade.",
+        correctionPreset: "longer_crossfade",
+      }],
+      warnings: [],
+      reviewedAt: "2026-07-13T00:00:00.000Z",
+    },
+  };
+  const rejectedReview = await jsonRequest("/api/session/quality-review", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "isolated-review-rejected" },
+    body: JSON.stringify(rejectedReviewRequest),
+  });
+  assert.equal(rejectedReview.idempotent, false);
+
+  const correctedTransition = { ...transition, duration: 2.5 };
+  const correctedPlan = {
+    ...plan,
+    arrangementVersion: 2,
+    transitions: [correctedTransition],
+  };
+  await jsonRequest("/api/session/design-plan", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "isolated-correction-plan" },
+    body: JSON.stringify({ sessionId, plan: correctedPlan }),
+  });
+  const correctedExecutionRequest = {
+    ...transitionExecutionRequest,
+    duration: 2.5,
+    executionVersion: 2,
+  };
+  const correctedExecution = await jsonRequest("/api/apply-transition", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": "isolated-correction-transition",
+    },
+    body: JSON.stringify(correctedExecutionRequest),
+  });
+  await jsonRequest("/api/session/execution-report", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "isolated-correction-execution-report" },
+    body: JSON.stringify({
+      sessionId,
+      report: {
+        schemaVersion: 1,
+        executionVersion: 2,
+        arrangementVersion: 2,
+        attemptedTransitions: [{
+          ...correctedTransition,
+          success: true,
+          actualFromExitSec: correctedExecution.actualFromExitSec,
+          actualToEntrySec: correctedExecution.actualToEntrySec,
+          previewPath: correctedExecution.outputPath,
+          error: null,
+        }],
+        technicalWarnings: [],
+        unresolvedFailures: [],
+        completedAt: "2026-07-13T00:01:00.000Z",
+      },
+    }),
+  });
+  const correctedRender = await jsonRequest("/api/render-review-candidate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "isolated-correction-render" },
+    body: JSON.stringify({
+      sessionId,
+      arrangementVersion: 2,
+      executionVersion: 2,
+      parentCandidateId: render.candidate.candidateId,
+    }),
+  });
+  assert.equal(correctedRender.candidate.candidateId, "candidate-002");
+  assert.notEqual(correctedRender.candidate.planHash, render.candidate.planHash);
+  assert.equal(correctedRender.manifest.candidates.length, 2);
+  assert.equal(fs.existsSync(render.candidate.outputPath), true);
+  assert.equal(fs.existsSync(correctedRender.candidate.outputPath), true);
+
+  const reviewRequest = {
+    sessionId,
+    review: {
+      schemaVersion: 1,
+      candidateId: correctedRender.candidate.candidateId,
+      candidateVersion: correctedRender.candidate.candidateVersion,
+      arrangementVersion: correctedRender.candidate.arrangementVersion,
       approved: true,
       emotionalArc: 50,
       transitionSmoothness: 50,
@@ -382,26 +491,19 @@ try {
       blockingIssues: [],
       corrections: [],
       warnings: [],
-      reviewedAt: "2026-07-13T00:00:00.000Z",
+      reviewedAt: "2026-07-13T00:02:00.000Z",
     },
   };
   const review = await jsonRequest("/api/session/quality-review", {
     method: "POST",
-    headers: { "Content-Type": "application/json", "Idempotency-Key": "isolated-review" },
+    headers: { "Content-Type": "application/json", "Idempotency-Key": "isolated-review-approved" },
     body: JSON.stringify(reviewRequest),
   });
   assert.equal(review.idempotent, false);
-  const repeatedReview = await jsonRequest("/api/session/quality-review", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "Idempotency-Key": "isolated-review" },
-    body: JSON.stringify(reviewRequest),
-  });
-  assert.equal(repeatedReview.idempotent, true);
-  assert.equal(repeatedReview.manifest.musicalReviews.length, 1);
 
   const finalizeBody = JSON.stringify({
     sessionId,
-    candidateId: render.candidate.candidateId,
+    candidateId: correctedRender.candidate.candidateId,
     summary: "Isolated end-to-end verification",
   });
   const finalized = await jsonRequest("/api/finalize-medley", {
@@ -410,7 +512,7 @@ try {
     body: finalizeBody,
   });
   assert.equal(finalized.idempotent, false);
-  assert.equal(sha256(render.candidate.outputPath), sha256(finalized.outputPath));
+  assert.equal(sha256(correctedRender.candidate.outputPath), sha256(finalized.outputPath));
 
   const repeated = await jsonRequest("/api/finalize-medley", {
     method: "POST",
@@ -418,6 +520,16 @@ try {
     body: finalizeBody,
   });
   assert.equal(repeated.idempotent, true);
+  const finalizedView = await jsonRequest(`/api/session/${sessionId}/state`);
+  assert.equal(finalizedView.review.status, "finalized");
+  assert.equal(finalizedView.review.final.integrityVerified, true);
+  assert.equal(finalizedView.review.candidateCount, 2);
+  assert.equal(finalizedView.review.candidates[0].audioUrl.includes("candidate-001"), true);
+  assert.equal(finalizedView.review.candidates[1].audioUrl.includes("candidate-002"), true);
+  const reviewableAfterRestart = await jsonRequest("/api/sessions/reviewable");
+  assert.equal(reviewableAfterRestart.sessions[0].sessionId, sessionId);
+  assert.equal(reviewableAfterRestart.sessions[0].status, "finalized");
+  assert.equal(reviewableAfterRestart.sessions[0].final.integrityVerified, true);
 
   const cancel = await jsonRequest(`/api/session/${sessionId}/cancel`, {
     method: "POST",
@@ -434,7 +546,7 @@ try {
 
   const history = (await jsonRequest("/api/history")) as Array<any>;
   assert.equal(history.length, 1);
-  assert.equal(history[0].candidateId, "candidate-001");
+  assert.equal(history[0].candidateId, "candidate-002");
   const wisdom = JSON.parse(
     fs.readFileSync(path.join(dataRoot, "library", "wisdom.json"), "utf8"),
   );

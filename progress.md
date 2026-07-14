@@ -1,5 +1,20 @@
 # Progress: Provider API Key Settings
 
+## 2026-07-14 — Candidate Review Experience
+
+- User approval received; continuous implementation authorized.
+- Created `docs/plans/candidate-review-experience-plan.md` and updated the active ledger.
+- Baseline inspection confirmed existing state/manifest/finalization foundations
+  and identified false completion labeling and the incomplete manual-review UI.
+- No protected user data, provider credentials, candidates, finals, or environment files were changed.
+- First Candidate Review type-check found React's local JSX typing did not admit
+  the mapped component `key`; the component props now explicitly tolerate the
+  React-only key while retaining the runtime behavior.
+- A read-only source search used a Windows-incompatible wildcard and referenced
+  a non-existent `targetedCorrection.ts`; the actual correction implementation
+  is in `specialistOrchestrator.ts`, which was inspected directly on the next action.
+
+
 ## 2026-07-13 Master Plan offline completion
 
 - Completed the remaining workflow-upgrade offline gates using mocked provider
@@ -537,3 +552,42 @@
   phase; focused schema test and TypeScript passed.
 - Complete: focused schema test, full mocked suite, TypeScript, and whitespace
   checks passed. No existing session files were read or rewritten.
+
+# 2026-07-14 — Candidate Review Experience complete
+
+- Added the authoritative review projection, integrity-gated candidate range
+  endpoint, reviewable-session recovery, accessible shared-player Candidate
+  Review UI, append-only human approval, honest completion labels, and final
+  playback/download/path presentation.
+- Added server-owned correction policy v1, exact one-transition correction
+  validation, plan hashes, duplicate-render rejection, three-candidate limit,
+  and no-op rejected-candidate cleanup so prior drafts remain preserved.
+- Added FFmpeg full-decode verification before final transaction projections or
+  completion. Failure injection proves a promoted but undecodable file remains
+  recoverable without history/wisdom updates or checkpoint deletion.
+- Browser acceptance passed against an isolated two-draft fixture: both drafts
+  displayed with review evidence and local paths, A/B switching changed the
+  shared player, Draft 2 finalized, restart restored both drafts and the verified
+  final, and browser error logs were empty.
+- Root `npm test` passed every code/mocked/payload test, then reached the known
+  release-contract mismatch caused by the unrelated user-edited `AGENTS.md`.
+  The exact complete suite passed in a disposable repository copy using the
+  committed guide: `npm run test:full`, including release contract, synthetic
+  FFmpeg render/correction/finalization, and only current OpenRouter `:free`
+  live checks.
+- `npm run lint`, `git diff --check`, isolated `npm run build`, and isolated
+  `npm run test:production-start` passed. Production smoke owned port 37711.
+- A release-copy setup command initially ran `npm ci` in the workspace and
+  partially removed ignored `node_modules` before Windows returned `EPERM`.
+  No source or protected artifact was involved. Dependencies were restored from
+  the verified disposable install, and workspace TypeScript passed afterward.
+- Secret scan found zero configured-key or generic credential hits in the scoped
+  diff and zero configured-key hits in isolated `dist`; no environment file is
+  tracked. The real repository `dist/` was never built or changed.
+- Final source review removed the last Automatic SSE shortcut that could set
+  `completed` directly from an event snapshot. Completion and manual-review
+  events now refresh authoritative final integrity; focused regression, SSE,
+  TypeScript, whitespace, and the isolated complete mocked suite pass.
+- A second isolated browser check proved that a restored verified final opens on
+  startup, clicking New session returns to upload, and checkpoint refresh does
+  not reopen the old final after 1.5 seconds. Browser errors remained empty.

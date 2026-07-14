@@ -7,7 +7,7 @@ import os from "os";
 import cors from "cors";
 import dotenv from "dotenv";
 import { v4 as uuidv4 } from "uuid";
-import { exec, execFile, spawn } from "child_process";
+import { exec, execFile, spawn, spawnSync } from "child_process";
 import { createServer as createViteServer } from "vite";
 import ffmpegPath from "ffmpeg-static";
 import MusicTempo from "music-tempo";
@@ -96,6 +96,7 @@ import {
   assertRegisteredSafeFile,
   assertCandidateStorageAvailable,
   assertSessionArtifactBudget,
+  computeCandidatePlanHash,
   discardAutomaticSessionFiles,
   getSessionDirectory,
   nextCandidateIdentity,
@@ -179,7 +180,13 @@ import { persistOpenRouterApiKey } from "./src/server/credentialStore";
 import {
   collectTransitionTrackIds,
   executeFinalizationTransaction,
+  readFinalizationJournal,
 } from "./src/server/finalizationTransaction";
+import { buildCandidateReviewProjection } from "./src/server/candidateReviewProjection";
+import {
+  bindAutomaticCorrectionPolicy,
+  getAllowedCorrectionPresets,
+} from "./src/server/correctionPolicy";
 import { reconcileStartupState } from "./src/server/startupReconciliation";
 
 const localEnvPath = path.join(process.cwd(), ".env.local");
@@ -1454,6 +1461,11 @@ app.post("/api/session/audio-review", async (req, res) => {
         fromTrackId: transition.fromTrackId,
         toTrackId: transition.toTrackId,
         style: transition.style,
+        allowedCorrectionPresets: getAllowedCorrectionPresets({
+          duration: transition.durationUsed,
+          style: transition.style,
+          executionPermissions: transition.executionPermissions,
+        }),
       }));
       if (!knownTransitions.length) {
         throw new Error("Automatic audio review requires the candidate's locked transition evidence");
@@ -2043,6 +2055,7 @@ app.post("/api/session/finish", async (req, res) => {
           manifestVersion: null,
           sha256: validated.sha256,
         }),
+        verifyFinalAudio: verifyFinalAudioWithFfmpeg,
         readHistory: getHistory,
         writeHistory: saveHistory,
         readWisdom: getWisdom,
@@ -2786,6 +2799,23 @@ app.post("/api/session/quality-review", async (req, res) => {
             `Unknown correction transition: ${unknownCorrection.transitionId}`,
           );
         }
+        if (existingManifest.workflowMode === "automatic") {
+          if (new Set(parsed.corrections.map((item) => item.transitionId)).size > 1) {
+            throw new Error("Automatic correction may change only one transition per draft");
+          }
+          const disallowedCorrection = parsed.corrections.find((correction) => {
+            const transition = plan.data.transitions.find(
+              (item) => item.transitionId === correction.transitionId,
+            );
+            return !transition || !correction.correctionPreset ||
+              !getAllowedCorrectionPresets(transition).includes(correction.correctionPreset);
+          });
+          if (disallowedCorrection) {
+            throw new Error(
+              `Correction preset is not allowed for ${disallowedCorrection.transitionId}`,
+            );
+          }
+        }
       }
       const automaticState = existingManifest.workflowMode === "automatic"
         ? readAutomaticSessionState(workDir, sessionId)
@@ -2851,19 +2881,145 @@ app.get("/api/session/:sessionId/candidates", (req, res) => {
   }
 });
 
+function sendRegisteredCandidateAudio(
+  req: express.Request,
+  res: express.Response,
+  filePath: string,
+  sizeBytes: number,
+) {
+  const range = req.headers.range;
+  res.setHeader("Accept-Ranges", "bytes");
+  res.setHeader("Cache-Control", "private, no-store");
+  res.setHeader("Content-Type", "audio/mpeg");
+  res.setHeader("Content-Disposition", `inline; filename="${path.basename(filePath).replaceAll('"', "")}"`);
+  if (!range) {
+    res.setHeader("Content-Length", sizeBytes);
+    fs.createReadStream(filePath).pipe(res);
+    return;
+  }
+  const match = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
+  if (!match) {
+    res.status(416).setHeader("Content-Range", `bytes */${sizeBytes}`);
+    res.end();
+    return;
+  }
+  const requestedStart = match[1] ? Number(match[1]) : null;
+  const requestedEnd = match[2] ? Number(match[2]) : null;
+  let start: number;
+  let end: number;
+  if (requestedStart === null) {
+    const suffixLength = requestedEnd ?? 0;
+    if (!Number.isInteger(suffixLength) || suffixLength <= 0) {
+      res.status(416).setHeader("Content-Range", `bytes */${sizeBytes}`);
+      res.end();
+      return;
+    }
+    start = Math.max(0, sizeBytes - suffixLength);
+    end = sizeBytes - 1;
+  } else {
+    start = requestedStart;
+    end = requestedEnd ?? sizeBytes - 1;
+  }
+  if (
+    !Number.isInteger(start) ||
+    !Number.isInteger(end) ||
+    start < 0 ||
+    end < start ||
+    start >= sizeBytes
+  ) {
+    res.status(416).setHeader("Content-Range", `bytes */${sizeBytes}`);
+    res.end();
+    return;
+  }
+  end = Math.min(end, sizeBytes - 1);
+  res.status(206);
+  res.setHeader("Content-Range", `bytes ${start}-${end}/${sizeBytes}`);
+  res.setHeader("Content-Length", end - start + 1);
+  fs.createReadStream(filePath, { start, end }).pipe(res);
+}
+
+app.get("/api/session/:sessionId/candidates/:candidateId/audio", (req, res) => {
+  try {
+    const { sessionId, candidateId } = req.params;
+    validateSessionId(sessionId);
+    const manifest = readCandidateManifest(workDir, sessionId);
+    const candidate = manifest.candidates.find((item) => item.candidateId === candidateId);
+    if (!candidate) return res.status(404).json({ error: "Candidate is not registered" });
+    const registered = manifest.candidates.flatMap((item) => [
+      item.outputPath,
+      ...item.debugPaths,
+      ...item.previewPaths,
+    ]);
+    const audioPath = assertRegisteredSafeFile(
+      workDir,
+      sessionId,
+      candidate.outputPath,
+      registered,
+    );
+    if (!fs.existsSync(audioPath)) {
+      return res.status(404).json({ error: "Candidate audio is missing" });
+    }
+    const stat = fs.lstatSync(audioPath);
+    if (
+      !stat.isFile() ||
+      stat.isSymbolicLink() ||
+      stat.size !== candidate.sizeBytes ||
+      sha256File(audioPath) !== candidate.sha256
+    ) {
+      return res.status(409).json({ error: "Candidate audio failed its integrity check" });
+    }
+    return sendRegisteredCandidateAudio(req, res, audioPath, stat.size);
+  } catch (error: any) {
+    return res.status(400).json({ error: error.message });
+  }
+});
+
 app.get("/api/session/:sessionId/state", (req, res) => {
   try {
     validateSessionId(req.params.sessionId);
     const state = readAutomaticSessionState(workDir, req.params.sessionId);
     if (!state) return res.status(404).json({ error: "Automatic v4 session state not found" });
+    const manifest = readCandidateManifest(workDir, req.params.sessionId);
+    let journal = null;
+    try {
+      journal = readFinalizationJournal(workDir, req.params.sessionId);
+    } catch {
+      // The projection reports an unverified final instead of hiding candidates.
+    }
     return res.json({
       success: true,
       state,
-      manifest: readCandidateManifest(workDir, req.params.sessionId),
+      manifest,
+      review: buildCandidateReviewProjection({ workDir, state, manifest, journal }),
     });
   } catch (error: any) {
     return res.status(400).json({ error: error.message });
   }
+});
+
+app.get("/api/sessions/reviewable", (_req, res) => {
+  const reviews = fs.existsSync(workDir)
+    ? fs.readdirSync(workDir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .flatMap((entry) => {
+          try {
+            validateSessionId(entry.name);
+            const state = readAutomaticSessionState(workDir, entry.name);
+            if (!state) return [];
+            const manifest = readCandidateManifest(workDir, entry.name);
+            if (!manifest.candidates.length) return [];
+            let journal = null;
+            try {
+              journal = readFinalizationJournal(workDir, entry.name);
+            } catch {}
+            return [buildCandidateReviewProjection({ workDir, state, manifest, journal })];
+          } catch {
+            return [];
+          }
+        })
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    : [];
+  return res.json({ success: true, sessions: reviews });
 });
 
 app.post("/api/session/manual-review-required", async (req, res) => {
@@ -3059,7 +3215,7 @@ app.post("/api/session/design-plan", async (req, res) => {
   const specialistPlan = ArrangementPlanSchema.safeParse(plan);
   if (specialistPlan.success) {
     const specialistContext = buildSpecialistContext(sessionId);
-    const authoritativePlan = bindLegacyArrangementAuthority(
+    let authoritativePlan = bindLegacyArrangementAuthority(
       specialistPlan.data,
       specialistContext,
     );
@@ -3088,6 +3244,7 @@ app.post("/api/session/design-plan", async (req, res) => {
     }
     const automaticState = readAutomaticSessionState(workDir, sessionId);
     if (automaticState) {
+      authoritativePlan = bindAutomaticCorrectionPolicy(authoritativePlan);
       const snapshot = readDesignSnapshotV4(workDir, sessionId);
       if (!snapshot || snapshot.designHash !== automaticState.designHash) {
         throw new Error("Automatic v4 design snapshot is missing or does not match session state");
@@ -3911,14 +4068,6 @@ app.post("/api/render-review-candidate", async (req, res) => {
     const artifactPrefix = candidateId;
     const graphName = `${artifactPrefix}-filtergraph.txt`;
 
-    // Clean up any old confusing filtergraph.txt from previous code paths
-    const oldGraph = path.join(sessionWorkDir, "filtergraph.txt");
-    if (fs.existsSync(oldGraph)) {
-      try {
-        fs.unlinkSync(oldGraph);
-      } catch {}
-    }
-
     console.log(
       `[finalize-medley] >>> ENTERING PURE-CLEAN-MVP ONLY PATH (no fallbacks) for session ${sessionId}`,
     );
@@ -4020,6 +4169,28 @@ app.post("/api/render-review-candidate", async (req, res) => {
       if (transitions.length === 0) {
         throw new Error(
           "MVP finalize_medley requires at least one transition to establish deterministic track ordering and crossfade points. Single-track support is out of current strict scope.",
+        );
+      }
+      if (
+        parentCandidateId &&
+        !manifest.candidates.some((item) => item.candidateId === parentCandidateId)
+      ) {
+        throw new Error("Parent candidate is not registered in this session");
+      }
+      const persistedResolvedTransitions = automaticSession
+        ? sanitizeResolvedTransitionsForManifest(transitions)
+        : undefined;
+      const planHash = computeCandidatePlanHash(persistedResolvedTransitions);
+      if (
+        planHash &&
+        manifest.candidates.some(
+          (item) =>
+            (item.planHash ?? computeCandidatePlanHash(item.resolvedTransitions)) ===
+            planHash,
+        )
+      ) {
+        throw new Error(
+          "Duplicate candidate plan rejected before rendering; the existing draft is already available for review",
         );
       }
 
@@ -4587,9 +4758,8 @@ app.post("/api/render-review-candidate", async (req, res) => {
         parentCandidateId,
         arrangementVersion,
         executionVersion,
-        resolvedTransitions: automaticSession
-          ? sanitizeResolvedTransitionsForManifest(transitions)
-          : undefined,
+        planHash: planHash ?? undefined,
+        resolvedTransitions: persistedResolvedTransitions,
         outputPath: immutableOutputPath,
         debugPaths: [
           renderArtifacts.graphFile,
@@ -4792,6 +4962,26 @@ app.post("/api/render-review-candidate", async (req, res) => {
   });
 });
 
+function verifyFinalAudioWithFfmpeg(finalPath: string) {
+  if (!ffmpegPath) throw new Error("Bundled FFmpeg is unavailable for final audio verification");
+  const result = spawnSync(
+    ffmpegPath,
+    ["-v", "error", "-i", finalPath, "-map", "0:a:0", "-f", "null", "-"],
+    {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 120_000,
+      maxBuffer: 2 * 1024 * 1024,
+    },
+  );
+  if (result.error || result.status !== 0) {
+    const detail = String(result.error?.message || result.stderr || "decode failed")
+      .replace(/\s+/g, " ")
+      .slice(0, 500);
+    throw new Error(`Final MP3 audio verification failed: ${detail}`);
+  }
+}
+
 function finalizeRegisteredCandidate(
   sessionId: string,
   candidateId: string,
@@ -4824,6 +5014,7 @@ function finalizeRegisteredCandidate(
         sha256: candidate.sha256,
       };
     },
+    verifyFinalAudio: verifyFinalAudioWithFfmpeg,
     readHistory: getHistory,
     writeHistory: saveHistory,
     readWisdom: getWisdom,
