@@ -448,7 +448,7 @@ let contextBriefBody = "";
 let contextProviderCalls = 0;
 globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
   const target = String(url);
-  if (target === "/api/provider/openrouter") {
+  if (target === "/api/provider/gemini") {
     contextProviderCalls++;
     return new Response(
       JSON.stringify({ choices: [{ message: { role: "assistant", content: "plain text" } }] }),
@@ -465,7 +465,7 @@ globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
 await assert.rejects(
   runAutomaticSpecialistWorkflow({
     sessionId,
-    config: { ...DEFAULT_CONFIG, openrouterApiKey: SERVER_MANAGED_API_KEY },
+    config: { ...DEFAULT_CONFIG, geminiApiKey: SERVER_MANAGED_API_KEY },
     library: [],
     design,
     signal: new AbortController().signal,
@@ -500,7 +500,7 @@ globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
   const target = String(url);
   if (target === "/api/session/project-brief")
     return new Response(JSON.stringify({ success: true }), { status: 200 });
-  if (target === "/api/provider/openrouter") {
+  if (target === "/api/provider/gemini") {
     fallbackProviderCalls++;
     return new Response(JSON.stringify({ error: "gateway timed out" }), {
       status: 504,
@@ -519,7 +519,7 @@ await assert.rejects(
     sessionId,
     config: {
       ...DEFAULT_CONFIG,
-      openrouterApiKey: SERVER_MANAGED_API_KEY,
+      geminiApiKey: SERVER_MANAGED_API_KEY,
     },
     library: [],
     design,
@@ -557,7 +557,7 @@ await assert.rejects(
     sessionId,
     config: {
       ...DEFAULT_CONFIG,
-      openrouterApiKey: SERVER_MANAGED_API_KEY,
+      geminiApiKey: SERVER_MANAGED_API_KEY,
     },
     library: [],
     design,
@@ -585,7 +585,7 @@ globalThis.fetch = (async (url: RequestInfo | URL) => {
   const target = String(url);
   if (target === "/api/session/project-brief")
     return new Response(JSON.stringify({ success: true }), { status: 200 });
-  if (target === "/api/provider/openrouter") {
+  if (target === "/api/provider/gemini") {
     abortedArrangementController.abort(new DOMException("Canceled", "AbortError"));
     throw abortedArrangementController.signal.reason;
   }
@@ -598,7 +598,7 @@ await assert.rejects(
     sessionId,
     config: {
       ...DEFAULT_CONFIG,
-      openrouterApiKey: SERVER_MANAGED_API_KEY,
+      geminiApiKey: SERVER_MANAGED_API_KEY,
     },
     library: [],
     design,
@@ -649,7 +649,7 @@ globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
   if (target === "/api/session/project-brief" || target === "/api/session/design-plan") {
     return new Response(JSON.stringify({ success: true }), { status: 200 });
   }
-  if (target === "/api/provider/openrouter") {
+  if (target === "/api/provider/gemini") {
     providerCall++;
     if (providerCall === 1) {
       return openRouterToolCall("transition-call", "apply_musical_transition", {
@@ -731,7 +731,7 @@ await assert.rejects(
     sessionId,
     config: {
       ...DEFAULT_CONFIG,
-      openrouterApiKey: SERVER_MANAGED_API_KEY,
+      geminiApiKey: SERVER_MANAGED_API_KEY,
     },
     library: [],
     design,

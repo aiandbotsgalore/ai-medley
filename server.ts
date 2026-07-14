@@ -93,6 +93,7 @@ import {
   applyCandidateReview,
   applyCandidateHumanReview,
   appendCandidateTechnicalEvaluation,
+  assertRegisteredSafeFile,
   assertCandidateStorageAvailable,
   assertSessionArtifactBudget,
   discardAutomaticSessionFiles,
@@ -109,6 +110,12 @@ import {
   withSessionLock,
   writeCandidateManifestAtomic,
 } from "./src/server/candidateStore";
+import {
+  AUTOMATIC_GEMINI_MODELS,
+  GeminiAudioReviewError,
+  reviewCandidateAudioWithGemini,
+  toQualityReviewFromAudioDecision,
+} from "./src/server/geminiAudioReview";
 import {
   getLocalAccessDenial,
   isAllowedLocalOrigin,
@@ -1389,6 +1396,103 @@ app.post("/api/provider/gemini", async (req, res) => {
     res.status(Number(error?.status) || 502).json({
       error: "Server Gemini provider request failed",
     });
+  }
+});
+
+/**
+ * Automatic v4 audio review. This endpoint is deliberately server-only: it
+ * accepts a registered candidate identity, not an arbitrary browser path, and
+ * uploads only that candidate (or its registered transition previews) using
+ * the server-managed Gemini credential.
+ */
+app.post("/api/session/audio-review", async (req, res) => {
+  const { sessionId, candidateId, mode, transitionIds } = req.body || {};
+  try {
+    validateSessionId(sessionId);
+    if (!geminiApiKey) {
+      return res.status(503).json({
+        error: "Automatic audio review needs a server Gemini credential. The candidate was preserved for manual review.",
+      });
+    }
+    if (mode !== "whole_mix" && mode !== "targeted") {
+      return res.status(400).json({ error: "Audio review mode must be whole_mix or targeted" });
+    }
+    return await withSessionLock(sessionId, async () => {
+      const manifest = readCandidateManifest(workDir, sessionId);
+      const candidate = manifest.candidates.find(
+        (item) => item.candidateId === candidateId,
+      );
+      if (!candidate) throw new Error("Candidate is not registered");
+      if (!candidate.technicallyValid) {
+        throw new Error("A technically invalid candidate cannot be sent for audio approval");
+      }
+      const registeredPaths = [
+        candidate.outputPath,
+        ...candidate.debugPaths,
+        ...candidate.previewPaths,
+      ];
+      const candidatePath = assertRegisteredSafeFile(
+        workDir,
+        sessionId,
+        candidate.outputPath,
+        registeredPaths,
+      );
+      if (!fs.existsSync(candidatePath)) throw new Error("Registered candidate audio is missing");
+      const resolvedTransitions = candidate.resolvedTransitions ?? [];
+      const knownTransitions = resolvedTransitions.map((transition) => ({
+        transitionId: transition.transitionId,
+        fromTrackId: transition.fromTrackId,
+        toTrackId: transition.toTrackId,
+        style: transition.style,
+      }));
+      if (!knownTransitions.length) {
+        throw new Error("Automatic audio review requires the candidate's locked transition evidence");
+      }
+      const requestedIds = Array.isArray(transitionIds)
+        ? [...new Set(transitionIds.map((value) => String(value)))].slice(0, 3)
+        : [];
+      if (mode === "targeted" && !requestedIds.length) {
+        throw new Error("Targeted audio review requires one to three locked transition IDs");
+      }
+      const clips = requestedIds.map((transitionId) => {
+        const transition = resolvedTransitions.find(
+          (item) => item.transitionId === transitionId,
+        );
+        if (!transition?.outputPath) {
+          throw new Error("Requested transition preview is not registered");
+        }
+        return {
+          transitionId,
+          filePath: assertRegisteredSafeFile(
+            workDir,
+            sessionId,
+            transition.outputPath,
+            registeredPaths,
+          ),
+        };
+      });
+      const model = mode === "whole_mix"
+        ? AUTOMATIC_GEMINI_MODELS.wholeMixReview
+        : AUTOMATIC_GEMINI_MODELS.targetedReview;
+      const decision = await reviewCandidateAudioWithGemini({
+        client: new GoogleGenAI({ apiKey: geminiApiKey }) as any,
+        model,
+        candidate,
+        candidateFilePath: mode === "whole_mix" ? candidatePath : undefined,
+        transitions: knownTransitions,
+        mode,
+        transitionClips: clips,
+      });
+      return res.json({
+        review: toQualityReviewFromAudioDecision({ candidate, decision, model }),
+        model,
+      });
+    });
+  } catch (error: any) {
+    const message = error instanceof GeminiAudioReviewError
+      ? error.message
+      : String(error?.message || "Automatic audio review failed");
+    res.status(400).json({ error: message });
   }
 });
 

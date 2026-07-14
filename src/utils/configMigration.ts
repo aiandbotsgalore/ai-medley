@@ -38,22 +38,32 @@ export function migrateMedleyConfigWithNotices(
 ): { config: MedleyConfig; notices: string[] } {
   const source = stored ?? {};
   const hasStoredConfig = Object.keys(source).length > 0;
-  const provider: ProviderId =
+  const storedProvider: ProviderId =
     source.provider === "gemini" || source.provider === "openrouter"
       ? source.provider
       : DEFAULT_CONFIG.provider;
-  const normalized = normalizeProviderModel(provider, source.model);
   const modelMode =
     source.modelMode === "automatic" || source.modelMode === "manual"
       ? source.modelMode
       : hasStoredConfig
         ? "manual"
         : DEFAULT_CONFIG.modelMode;
+  // Automatic v4 is direct Gemini only. Keep Manual mode exactly as chosen,
+  // but migrate a historical automatic/OpenRouter configuration without ever
+  // exposing an OpenRouter credential to the new audio-review path.
+  const provider: ProviderId = modelMode === "automatic" ? "gemini" : storedProvider;
+  const automaticMigration = modelMode === "automatic" &&
+    (storedProvider !== "gemini" || source.model !== "gemini-3.1-pro-preview");
+  const normalized = modelMode === "automatic"
+    ? { model: "gemini-3.1-pro-preview", notice: automaticMigration
+      ? "Automatic workflow was upgraded to direct Gemini 3.1 Pro; Manual provider settings were preserved."
+      : null }
+    : normalizeProviderModel(provider, source.model);
   return {
     config: {
       ...DEFAULT_CONFIG,
       ...source,
-      configVersion: 3,
+      configVersion: 4,
       modelMode,
       provider,
       model: normalized.model,
@@ -83,7 +93,7 @@ export function migrateMedleyConfig(
 }
 
 export function getProviderKey(config: MedleyConfig) {
-  if (config.modelMode === "automatic") return config.openrouterApiKey.trim();
+  if (config.modelMode === "automatic") return config.geminiApiKey.trim();
   return (
     config.provider === "gemini" ? config.geminiApiKey : config.openrouterApiKey
   ).trim();
@@ -94,7 +104,7 @@ export function getStartConfigurationError(
 ): string | null {
   if (getProviderKey(config)) return null;
   if (config.modelMode === "automatic") {
-    return "Automatic Specialist Team requires an OpenRouter API key. Add one in Configuration or switch to Manual Model mode.";
+    return "Automatic Medley requires a Gemini API key. Add GEMINI_API_KEY to the server configuration or switch to Manual Model mode.";
   }
   return config.provider === "gemini"
     ? "Add a Gemini API key in Configuration before starting."

@@ -295,6 +295,21 @@ try {
   assert.equal(repeatedRender.idempotent, true);
   assert.equal(repeatedRender.candidate.candidateId, render.candidate.candidateId);
 
+  // This isolated suite has no Gemini key. Prove that the new audio-review
+  // boundary never approves, rerenders, or damages a candidate when the
+  // provider is unavailable.
+  const unavailableAudioReview = await fetch(`${baseUrl}/api/session/audio-review`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sessionId,
+      candidateId: render.candidate.candidateId,
+      mode: "whole_mix",
+    }),
+  });
+  assert.equal(unavailableAudioReview.status, 503);
+  assert.equal(fs.existsSync(render.candidate.outputPath), true);
+
   const reviewRequest = {
     sessionId,
     review: {

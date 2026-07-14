@@ -313,28 +313,51 @@ export function buildTargetedCorrectionPlan(
   review: QualityReview,
 ): ArrangementPlan | null {
   const corrections = new Map(
-    review.corrections.map((item) => [item.transitionId, item.requestedChange]),
+    review.corrections.map((item) => [item.transitionId, item]),
   );
   if (!corrections.size) return null;
   let changed = false;
   const transitions = plan.transitions.map((transition) => {
-    const requestedChange = corrections.get(transition.transitionId);
-    if (!requestedChange) return transition;
+    const correction = corrections.get(transition.transitionId);
+    if (!correction) return transition;
     const permissions = transition.executionPermissions;
     let next = transition;
+    const requestedPreset = correction.correctionPreset;
+    if (requestedPreset === "shorter_crossfade" || requestedPreset === "longer_crossfade") {
+      // The reviewer names a preset only. This deterministic half-second step
+      // is resolved locally and must remain inside the plan's locked bounds.
+      const delta = requestedPreset === "shorter_crossfade" ? -0.5 : 0.5;
+      const requestedDuration = Number((transition.duration + delta).toFixed(3));
+      const minDuration = permissions?.minDuration ?? transition.duration;
+      const maxDuration = permissions?.maxDuration ?? transition.duration;
+      if (
+        permissions?.durationMutable === true &&
+        requestedDuration >= minDuration &&
+        requestedDuration <= maxDuration &&
+        requestedDuration !== transition.duration
+      ) {
+        next = { ...next, duration: requestedDuration };
+        changed = true;
+      }
+      return next;
+    }
     const styleHint = CORRECTION_STYLE_HINTS.find(([pattern]) =>
-      pattern.test(requestedChange),
+      requestedPreset === undefined && pattern.test(correction.requestedChange),
     )?.[1];
+    const presetStyle = requestedPreset;
+    const requestedStyle = presetStyle ?? styleHint;
     if (
-      styleHint &&
+      requestedStyle &&
       permissions?.styleMutable === true &&
-      permissions.allowedStyles?.includes(styleHint) &&
-      styleHint !== transition.style
+      permissions.allowedStyles?.includes(requestedStyle) &&
+      requestedStyle !== transition.style
     ) {
-      next = { ...next, style: styleHint };
+      next = { ...next, style: requestedStyle };
       changed = true;
     }
-    const durationMatch = requestedChange.match(/(\d+(?:\.\d+)?)\s*(?:s|sec(?:ond)?s?)/i);
+    // Legacy text-only reviews may still be resumed. New audio reviews always
+    // carry a correctionPreset and never provide a free-form duration.
+    const durationMatch = correction.requestedChange.match(/(\d+(?:\.\d+)?)\s*(?:s|sec(?:ond)?s?)/i);
     const requestedDuration = durationMatch ? Number(durationMatch[1]) : null;
     if (
       requestedDuration !== null &&
@@ -468,7 +491,9 @@ async function requestStructuredArtifact<T>(
     while (repairAttempt <= 1) {
       try {
         const session = createProviderSession(
-          { ...config, provider: "openrouter", model },
+          // Automatic v4 is direct Gemini. The browser carries only the
+          // server-managed sentinel; the real key stays in the local server.
+          { ...config, provider: "gemini", model },
           systemInstruction,
           tools,
           0.1,
@@ -898,8 +923,8 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
         (checkpoint.executionReport?.executionVersion ?? 0) + 1;
       await saveRequired({
         stage: correctionCount ? "correction" : "production",
-        activeRole: "production",
-        activeModel: SPECIALIST_MODELS.production,
+        activeRole: null,
+        activeModel: null,
       });
       executionReport = await runProductionRole({
         workflow: options,
@@ -1016,7 +1041,8 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
       throw new Error("No execution report is available for quality review");
     if (
       !qualityReview ||
-      qualityReview.candidateId !== currentCandidate.candidateId
+      qualityReview.candidateId !== currentCandidate.candidateId ||
+      qualityReview.reviewSource !== "gemini_audio"
     ) {
       options.onStage(
         "quality_review",
@@ -1028,48 +1054,83 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
         activeRole: "arrangement",
         activeModel: SPECIALIST_MODELS.arrangement,
       });
-      qualityReview = await requestStructuredArtifact({
-        role: "arrangement",
-        stage: "quality_review",
-        config: options.config,
-        sessionId: options.sessionId,
-        signal: options.signal,
-        schema: QualityReviewSchema,
-        toolName: "submit_quality_review",
-        systemInstruction: SPECIALIST_SYSTEM_PROMPTS.qualityReview,
-        tools: [...SPECIALIST_TOOLS.qualityReview],
-        prompt: JSON.stringify(
-          buildQualityReviewStageData({
-            candidate: currentCandidate,
-            localQuality: candidateData.quality,
-            executionReport,
-            resolvedTransitions: candidateData.resolvedTransitions,
-            correctionCount,
+      try {
+        const wholeMixResponse = await readJsonResponse(
+          await fetch("/api/session/audio-review", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              sessionId: options.sessionId,
+              candidateId: currentCandidate.candidateId,
+              mode: "whole_mix",
+            }),
+            signal: options.signal,
           }),
-        ),
-        contextualValidate: (review) => {
-          const errors: string[] = [];
-          if (review.candidateId !== currentCandidate!.candidateId)
-            errors.push("candidateId: Must match the active candidate");
-          if (review.arrangementVersion !== arrangementPlan!.arrangementVersion)
-            errors.push("arrangementVersion: Must match the locked plan");
-          return errors;
-        },
-        onLog: options.onLog,
-        onModel: (model) => {
-          options.onStage("quality_review", "arrangement", model);
-          saveProgress({
-            activeRole: "arrangement",
-            activeModel: model,
-            attemptedModels: [
-              ...new Set([...checkpoint.attemptedModels, model]),
+        );
+        qualityReview = QualityReviewSchema.parse(wholeMixResponse.review);
+        options.onLog(
+          `Gemini listened to the complete candidate using ${wholeMixResponse.model}.`,
+        );
+        // A rejected full-mix review gets one small, targeted follow-up. It
+        // uploads only the affected registered transition previews, never the
+        // source tracks or the full candidate a second time.
+        if (!qualityReview.approved && qualityReview.corrections.length) {
+          const transitionIds = qualityReview.corrections
+            .map((item) => item.transitionId)
+            .slice(0, 3);
+          const targetedResponse = await readJsonResponse(
+            await fetch("/api/session/audio-review", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                sessionId: options.sessionId,
+                candidateId: currentCandidate.candidateId,
+                mode: "targeted",
+                transitionIds,
+              }),
+              signal: options.signal,
+            }),
+          );
+          const targetedReview = QualityReviewSchema.parse(targetedResponse.review);
+          qualityReview = QualityReviewSchema.parse({
+            ...qualityReview,
+            // A clip-only response cannot overrule the whole-mix rejection.
+            approved: false,
+            corrections: targetedReview.corrections.length
+              ? targetedReview.corrections
+              : qualityReview.corrections,
+            warnings: [...new Set([...qualityReview.warnings, ...targetedReview.warnings])],
+            blockingIssues: [
+              ...new Set([
+                ...qualityReview.blockingIssues,
+                ...targetedReview.blockingIssues,
+              ]),
             ],
           });
-        },
-        onRepair: () =>
-          saveProgress({ repairCount: checkpoint.repairCount + 1 }),
-        onRequestAudit: options.onProviderRequestAudit,
-      });
+          options.onLog(
+            `Gemini checked ${transitionIds.length} transition clip(s) using ${targetedResponse.model}.`,
+          );
+        }
+      } catch (error: any) {
+        if (isAbortLike(error) || options.signal.aborted) throw error;
+        const summary =
+          "Gemini could not complete the audio review. The technically valid candidate was preserved for manual review; it was not approved automatically.";
+        options.onLog(`${summary} ${error?.message || ""}`.trim());
+        await requireAutomaticManualReview(options, summary);
+        options.onStage("manual_review_required", null, null);
+        await saveRequired({
+          stage: "manual_review_required",
+          currentCandidate,
+          qualityReview: null,
+        });
+        return {
+          summary,
+          candidateId: null,
+          outputPath: null,
+          qualityReview: null,
+          manualReviewRequired: true,
+        };
+      }
       options.onMetrics(qualityReview);
       await readJsonResponse(
         await fetch("/api/session/quality-review", {
@@ -1180,11 +1241,11 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
     throw new Error(
       "No approved selected candidate is available for automatic finalization",
     );
-  options.onStage("final_render", "production", SPECIALIST_MODELS.production);
+  options.onStage("final_render", null, null);
   await saveRequired({
     stage: "final_render",
-    activeRole: "production",
-    activeModel: SPECIALIST_MODELS.production,
+    activeRole: null,
+    activeModel: null,
   });
   const summary = `Specialist medley completed with ${arrangementPlan.transitions.length} transitions and ${correctionCount} correction cycle(s).`;
   const finalData = await readJsonResponse(

@@ -4,7 +4,8 @@ This list is generated from the Express registrations in `server.ts` and checked
 
 For Automatic workflow v4, `/api/medley-intelligence/design`,
 `/api/session/design-plan`, `/api/apply-transition`,
-`/api/render-review-candidate`, `/api/session/quality-review`, and
+`/api/render-review-candidate`, `/api/session/audio-review`,
+`/api/session/quality-review`, and
 `/api/finalize-medley` form the durable workflow path. The v4 path uses a
 deterministic local brief and execution compiler; it does not call a context
 specialist or a production/tool-execution provider. `/api/exec`,
@@ -53,6 +54,7 @@ specialist or a production/tool-execution provider. `/api/exec`,
 - `POST /api/render-review-candidate`
 - `POST /api/section-pair-evaluate`
 - `POST /api/session/:id/cancel`
+- `POST /api/session/audio-review`
 - `POST /api/session/design-plan`
 - `POST /api/session/execution-report`
 - `POST /api/session/finish`

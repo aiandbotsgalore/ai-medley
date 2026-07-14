@@ -32,8 +32,8 @@ The server reads variables from the process environment and loads git-ignored `.
 
 | Variable | Behavior |
 |---|---|
-| `OPENROUTER_API_KEY` | Optional server-managed OpenRouter credential. Required for Automatic Specialist Team runs unless a key is entered for the current browser session. |
-| `GEMINI_API_KEY` | Optional server-managed Gemini credential for Manual Model mode. |
+| `OPENROUTER_API_KEY` | Optional server-managed OpenRouter credential for Manual Model mode. |
+| `GEMINI_API_KEY` | Required server-managed credential for Automatic v4; also available to Manual Model mode. Automatic audio review uses this key only on the local server. |
 | `PORT` | Optional integer from 1–65535; defaults to `3000`. Invalid values fail startup. |
 | `AI_MEDLEY_DATA_ROOT` | Optional isolated persistence root. Defaults to the repository working directory. Its `library/` and `workdir/` children hold persistent state and session artifacts. |
 | `NODE_ENV` | `production` serves the built SPA and suppresses development stack details; other values use Vite middleware. |
@@ -47,30 +47,32 @@ pinned when the session is created: a v4 session never silently becomes v3,
 and a v3 checkpoint is preserved rather than resumed as v4.
 
 - Mode: **Automatic Specialist Team**.
-- Provider: OpenRouter.
+- Provider: direct Gemini API through the local server.
 - Local audio analysis.
 - Style: smooth transitions.
 - Target: 10 minutes; crossfade: 5 seconds.
 - Manual capability: `contained`.
-- Manual OpenRouter default: `google/gemini-2.5-pro`; routine fallback: `google/gemini-2.5-flash`.
-- Gemini manual default: `gemini-2.5-flash`; `gemini-2.5-pro` is also listed.
+- Manual OpenRouter and Gemini choices remain independently configurable.
 
 Automatic v4 has a deterministic local brief and deterministic FFmpeg
 execution compiler. It makes **no context-brief provider request** and **no
-production/tool-execution provider request**. Provider use is limited to
-bounded, structured arrangement and musical-review decisions; corrections may
-only alter explicitly permitted transition fields. Provider failures and model
-fallbacks are recorded in the session log and request audit without exposing
-credentials.
+production/tool-execution provider request**. Provider use is limited to a
+constrained arrangement decision and an audio-aware candidate review;
+corrections may only choose explicitly permitted local presets. Provider
+failures are recorded without exposing credentials. A Pro arrangement failure
+uses the deterministic local arrangement fallback rather than silently using a
+weaker model; an audio-review failure preserves the candidate for manual review.
 
 The remaining constrained provider decisions use the fixed roster:
 
 | Role | Primary model |
 |---|---|
-| Arrangement and quality review | `google/gemini-2.5-pro` |
-| Bounded fallback | `google/gemini-2.5-flash` |
+| Arrangement and whole-mix audio review | `gemini-3.1-pro-preview` |
+| Targeted transition-clip review after a rejection | `gemini-3.5-flash` |
 
-Each role can fall back only across this two-model roster. Provider requests are rejected before network access above 100 KiB or 24,000 estimated tokens, with a 16,000-token regression target. One bounded 429 retry may honor at most 30 seconds of `Retry-After`.
+The whole-mix approval has no silent model fallback. Provider text requests are rejected before network access above 100 KiB or 24,000 estimated tokens, with a 16,000-token regression target. One bounded 429 retry may honor at most 30 seconds of `Retry-After`.
+
+After local technical checks pass, Automatic v4 sends the rendered candidate MP3—not original library audio—to Gemini for a whole-mix review. A rejected candidate may send at most three registered transition previews to Gemini 3.5 Flash for a focused correction choice. Every temporary Gemini Files API artifact created by this path is deleted after the request; if deletion cannot be confirmed, the candidate is not approved automatically. The original library tracks and all local candidate artifacts remain local and are never removed by this review step.
 
 Manual Model mode supports the Gemini and OpenRouter models listed in `src/components/ConfigPanel.tsx`, plus a custom OpenRouter model ID. Saved provider/model pairs are validated and visibly migrated to a compatible default when necessary.
 

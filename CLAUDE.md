@@ -21,9 +21,11 @@ Supported Node is `>=20 <27`. Production runs bundled ESM `dist/server.js` on `1
 ## Current behavior
 
 - Automatic Specialist Team v4: deterministic local brief and transition
-  execution, with bounded OpenRouter arrangement and musical-review decisions
-  only. It makes no context-brief or production/tool-execution provider call;
-  v3 checkpoints remain isolated rather than silently migrating.
+  execution, with direct Gemini 3.1 Pro arrangement and whole-mix audio review.
+  A rejected candidate can use Gemini 3.5 Flash on registered transition clips
+  only; rendering remains local. It makes no context-brief or
+  production/tool-execution provider call; v3 checkpoints remain isolated
+  rather than silently migrating.
 - Manual Model: Gemini or OpenRouter with strict versioned tool contracts.
 - Audio analysis is local by default and server-authoritative.
 - Provider payloads fail before network access when over shared limits; retries are bounded and recorded.

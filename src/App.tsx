@@ -2216,7 +2216,7 @@ export default function App() {
       <Header
         status={status}
         provider={
-          config.modelMode === "automatic" ? "openrouter" : config.provider
+          config.modelMode === "automatic" ? "gemini" : config.provider
         }
         currentModel={
           config.modelMode === "automatic"
@@ -2243,7 +2243,7 @@ export default function App() {
           selectedTrackIds={selectedTrackIds}
           status={status}
           provider={
-            config.modelMode === "automatic" ? "openrouter" : config.provider
+            config.modelMode === "automatic" ? "gemini" : config.provider
           }
           apiReady={hasProviderKey}
           onRemove={removeFile}

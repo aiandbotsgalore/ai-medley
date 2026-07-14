@@ -1,26 +1,25 @@
 import { z } from "zod";
 
 export const SPECIALIST_MODELS = {
-  context: "google/gemini-2.5-pro",
-  arrangement: "google/gemini-2.5-pro",
-  production: "google/gemini-2.5-flash",
+  // Automatic v4 calls Gemini directly. These are deliberately not OpenRouter
+  // aliases: the audio-review path uses Gemini's Files API through the local
+  // server, keeping credentials out of the browser and avoiding an
+  // intermediary's multimodal compatibility layer.
+  context: "gemini-3.1-pro-preview",
+  arrangement: "gemini-3.1-pro-preview",
+  production: "gemini-3.5-flash",
 } as const;
 
 export type SpecialistRole = keyof typeof SPECIALIST_MODELS;
 
 export const SPECIALIST_FALLBACKS: Record<SpecialistRole, string[]> = {
-  context: [
-    SPECIALIST_MODELS.context,
-    SPECIALIST_MODELS.production,
-  ],
-  arrangement: [
-    SPECIALIST_MODELS.arrangement,
-    SPECIALIST_MODELS.production,
-  ],
-  production: [
-    SPECIALIST_MODELS.production,
-    SPECIALIST_MODELS.arrangement,
-  ],
+  context: [SPECIALIST_MODELS.context],
+  // Do not silently substitute Flash for an arrangement decision. If Pro is
+  // unavailable, v4 records the failed attempt and falls back to the local
+  // deterministic arrangement compiler instead.
+  arrangement: [SPECIALIST_MODELS.arrangement],
+  // v4 has no provider-backed production role.
+  production: [],
 };
 
 export const WORKFLOW_STAGES = [
@@ -52,6 +51,21 @@ const Score100 = z.number().min(0).max(100);
 const Confidence = z.number().min(0).max(1);
 
 export const TransitionStyleSchema = z.enum([
+  "smooth_blend",
+  "beat_aligned",
+  "energy_ramp",
+  "harmonic_blend",
+  "dramatic_cut",
+  "reset_moment",
+  "mashup_layer",
+]);
+
+// Reviewers select a bounded local preset, never an arbitrary millisecond
+// offset. The execution compiler resolves these names against the locked
+// transition's explicit permissions.
+export const CorrectionPresetSchema = z.enum([
+  "shorter_crossfade",
+  "longer_crossfade",
   "smooth_blend",
   "beat_aligned",
   "energy_ramp",
@@ -163,6 +177,10 @@ export const ExecutionReportSchema = z.strictObject({
 
 export const QualityReviewSchema = z.strictObject({
   schemaVersion: z.literal(1),
+  // Historical text/metric-only reviews remain readable. Automatic v4 only
+  // treats a Gemini-audio review as eligible to approve a new candidate.
+  reviewSource: z.enum(["legacy_metadata", "gemini_audio"]).optional(),
+  reviewModel: z.string().trim().min(1).max(300).optional(),
   candidateId: Id,
   candidateVersion: z.number().int().positive(),
   arrangementVersion: z.number().int().positive(),
@@ -178,6 +196,7 @@ export const QualityReviewSchema = z.strictObject({
         transitionId: Id,
         issue: ShortText,
         requestedChange: ShortText,
+        correctionPreset: CorrectionPresetSchema.optional(),
       }),
     )
     .max(20),

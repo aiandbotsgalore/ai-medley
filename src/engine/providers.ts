@@ -203,8 +203,13 @@ async function abortablePromise<T>(
   promise: Promise<T>,
   signal: AbortSignal,
 ): Promise<T> {
-  if (signal.aborted)
+  if (signal.aborted) {
+    // The request may have synchronously observed cancellation before this
+    // wrapper attaches its normal handlers. Consume that late rejection so a
+    // cancelled provider attempt never becomes an unhandled browser error.
+    void promise.catch(() => {});
     throw signal.reason ?? new DOMException("Aborted", "AbortError");
+  }
   return new Promise<T>((resolve, reject) => {
     const abort = () =>
       reject(signal.reason ?? new DOMException("Aborted", "AbortError"));

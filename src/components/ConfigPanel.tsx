@@ -13,7 +13,7 @@ export type AudioAnalysisMode = "local" | "clips" | "ask" | "cloud";
 export type ModelMode = "automatic" | "manual";
 
 export interface MedleyConfig {
-  configVersion: 3;
+  configVersion: 4;
   modelMode: ModelMode;
   provider: ProviderId;
   model: string;
@@ -29,10 +29,10 @@ export interface MedleyConfig {
 }
 
 export const DEFAULT_CONFIG: MedleyConfig = {
-  configVersion: 3,
+  configVersion: 4,
   modelMode: "automatic",
-  provider: "openrouter",
-  model: "google/gemini-2.5-pro",
+  provider: "gemini",
+  model: "gemini-3.1-pro-preview",
   geminiApiKey: "",
   openrouterApiKey: "",
   audioAnalysisMode: "local",
@@ -73,6 +73,16 @@ const PRIMARY_STYLES = STYLES.filter(
 );
 
 export const GEMINI_MODELS = [
+  {
+    id: "gemini-3.1-pro-preview",
+    label: "Gemini 3.1 Pro (Preview)",
+    desc: "Best automatic arrangement and whole-mix audio review",
+  },
+  {
+    id: "gemini-3.5-flash",
+    label: "Gemini 3.5 Flash",
+    desc: "Fast targeted audio-review follow-ups",
+  },
   {
     id: "gemini-2.5-flash",
     label: "Gemini 2.5 Flash",
@@ -330,15 +340,15 @@ export default function ConfigPanel({
               Manual configuration is active
             </div>
             <p className="mt-1 text-[10px] text-[#BBB]">
-              Switch to the streamlined automatic mix to use the recommended Gemini models through OpenRouter.
+              Switch to the streamlined automatic mix to use the server-managed Gemini models.
             </p>
             <button
               type="button"
               onClick={() =>
                 update({
                   modelMode: "automatic",
-                  provider: "openrouter",
-                  model: "google/gemini-2.5-pro",
+                  provider: "gemini",
+                  model: "gemini-3.1-pro-preview",
                   audioAnalysisMode: "local",
                   manualCapabilityMode: "contained",
                 })
@@ -354,53 +364,56 @@ export default function ConfigPanel({
               Automatic mix
             </div>
             <p className="mt-1 text-[10px] text-[#AAA]">
-              Gemini Pro plans and reviews; Gemini Flash handles routine production through OpenRouter.
+              Direct Gemini Pro plans and reviews the whole mix; Gemini Flash handles targeted follow-up reviews. Rendering stays local.
+            </p>
+            <p className="mt-2 text-[10px] text-amber-100/80">
+              Automatic review sends the rendered candidate to Gemini. If it finds a problem, only the affected transition previews are sent for follow-up; original library tracks stay local.
             </p>
           </div>
         )}
 
         <div className="mb-5">
           <label htmlFor="config-api-key" className="block text-[11px] uppercase tracking-widest text-[#999] mb-2 font-semibold">
-            {local.modelMode === "automatic" || local.provider === "openrouter"
-              ? "OpenRouter API Key"
-              : "Gemini API Key"}
+            {local.modelMode === "automatic" || local.provider === "gemini"
+              ? "Gemini API Key"
+              : "OpenRouter API Key"}
           </label>
           <input
             id="config-api-key"
             type="password"
             value={
-              local.modelMode === "automatic" || local.provider === "openrouter"
-                ? local.openrouterApiKey === SERVER_MANAGED_API_KEY
-                  ? ""
-                  : local.openrouterApiKey
-                : local.geminiApiKey === SERVER_MANAGED_API_KEY
+              local.modelMode === "automatic" || local.provider === "gemini"
+                ? local.geminiApiKey === SERVER_MANAGED_API_KEY
                   ? ""
                   : local.geminiApiKey
+                : local.openrouterApiKey === SERVER_MANAGED_API_KEY
+                  ? ""
+                  : local.openrouterApiKey
             }
             onChange={(e) =>
               update(
                 local.modelMode === "automatic" ||
-                  local.provider === "openrouter"
-                  ? { openrouterApiKey: e.target.value }
-                  : { geminiApiKey: e.target.value },
+                  local.provider === "gemini"
+                  ? { geminiApiKey: e.target.value }
+                  : { openrouterApiKey: e.target.value },
               )
             }
             placeholder={
-              local.modelMode === "automatic" || local.provider === "openrouter"
-                ? "sk-or-v1-..."
-                : "AIza..."
+              local.modelMode === "automatic" || local.provider === "gemini"
+                ? "AIza..."
+                : "sk-or-v1-..."
             }
             className="w-full min-h-11 bg-[#0A0A0A] border border-[#444] rounded-lg px-3 py-2.5 text-[11px] text-[#CCC] placeholder:text-[#888] focus:border-[#00F0FF]/50 focus:outline-none"
           />
           <div className="mt-1 text-[9px] text-[#555]">
             API keys are kept in memory for this run and are not saved to browser storage.
-            {(local.modelMode === "automatic" || local.provider === "openrouter"
-              ? local.openrouterApiKey
-              : local.geminiApiKey) === SERVER_MANAGED_API_KEY
+            {(local.modelMode === "automatic" || local.provider === "gemini"
+              ? local.geminiApiKey
+              : local.openrouterApiKey) === SERVER_MANAGED_API_KEY
               ? " A server-managed credential is available."
               : ""}
           </div>
-          {(local.modelMode === "automatic" || local.provider === "openrouter") && (
+          {local.modelMode === "manual" && local.provider === "openrouter" && (
             <>
             <div className="mt-2 flex items-center gap-3">
               <button

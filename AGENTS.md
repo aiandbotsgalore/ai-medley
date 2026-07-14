@@ -23,8 +23,8 @@ Node support is `>=20 <27`. Production is bundled ESM at `dist/server.js`; the s
 - `server.ts`: Express API, local access controls, persistence, FFmpeg orchestration, candidate/finalization transactions, SSE, and production static serving.
 - `src/App.tsx`: React SPA and Manual Model orchestration.
 - `src/engine/specialistOrchestrator.ts`: workflow-v4 Automatic Specialist Team
-  orchestration: deterministic brief/execution plus constrained arrangement and
-  musical-review provider decisions.
+  orchestration: deterministic brief/execution, constrained direct-Gemini
+  arrangement, and server-only audio review of rendered candidates.
 - `src/engine/providers.ts` and `providerRequest.ts`: server-proxied providers, bounded requests, retries, and typed failures.
 - `src/server/`: atomic stores, path/upload/resource policy, analysis authority, candidate integrity, event journal, and finalization journal.
 - `library/`: protected source metadata/audio/history/wisdom.
@@ -39,8 +39,11 @@ Node support is `>=20 <27`. Production is bundled ESM at `dist/server.js`; the s
 - If a build changes `dist`, restore the pre-existing `dist` exactly unless the user explicitly requests generated artifacts.
 
 Automatic Specialist Team v4 pins its workflow version per session. It makes
-no context-brief or production/tool-execution provider request; provider
-fallback is limited to structured arrangement and musical-review decisions.
+no context-brief or production/tool-execution provider request. It uses direct
+Gemini 3.1 Pro for arrangement and whole-mix candidate review, and Gemini 3.5
+Flash only for targeted registered transition-preview review after rejection.
+The server uploads no source tracks through this review path and deletes its
+temporary Gemini review files; cleanup failure blocks automatic approval.
 Manual Model mode supports Gemini and OpenRouter, including custom OpenRouter
 model IDs. Server-managed credentials come from `OPENROUTER_API_KEY` and
 `GEMINI_API_KEY`; browser-entered keys are memory-only.

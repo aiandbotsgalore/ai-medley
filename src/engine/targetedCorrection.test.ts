@@ -24,4 +24,14 @@ assert.equal(corrected.transitions[0].style, "beat_aligned");
 assert.equal(corrected.transitions[0].duration, 3);
 assert.deepEqual(corrected.transitions[1], plan.transitions[1]);
 assert.equal(buildTargetedCorrectionPlan(plan, { ...review, corrections: [{ ...review.corrections[0], requestedChange: "Make it nicer." }] }), null);
+const boundedPreset = buildTargetedCorrectionPlan(plan, {
+  ...review,
+  corrections: [{
+    transitionId: "transition-a",
+    issue: "The vocal handoff needs more room.",
+    requestedChange: "Apply bounded preset longer_crossfade.",
+    correctionPreset: "longer_crossfade",
+  }],
+});
+assert.equal(boundedPreset?.transitions[0].duration, 2.5);
 console.log("targetedCorrection tests passed");
