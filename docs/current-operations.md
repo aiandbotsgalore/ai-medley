@@ -33,6 +33,7 @@ The server reads variables from the process environment and loads git-ignored `.
 | Variable | Behavior |
 |---|---|
 | `OPENROUTER_API_KEY` | Required server-managed credential for Automatic v4; also available to Manual Model mode. |
+| `OPENROUTER_LIVE_TEST_MODEL` | Test-only override used by the isolated end-to-end test. It must end in `:free`; the test discovers a currently listed free OpenRouter model that accepts audio and tool calls, then sends it only a generated test MP3. Never set this for normal app use. |
 | `GEMINI_API_KEY` | Optional server-managed credential for the explicit Manual Gemini mode only. |
 | `PORT` | Optional integer from 1–65535; defaults to `3000`. Invalid values fail startup. |
 | `AI_MEDLEY_DATA_ROOT` | Optional isolated persistence root. Defaults to the repository working directory. Its `library/` and `workdir/` children hold persistent state and session artifacts. |

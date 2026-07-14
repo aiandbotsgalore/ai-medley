@@ -33,7 +33,7 @@ Node support is `>=20 <27`. Production is bundled ESM at `dist/server.js`; the s
 ## Safety constraints
 
 - Do not run cleanup over `library/` or `workdir/`; inventory is preserve-only.
-- Unit and end-to-end tests use mocked provider responses. `npm run test:full` adds one explicit live OpenRouter contract request to a currently listed `:free` model only; it uses synthetic text and an isolated data root.
+- Unit tests use mocked provider responses. `npm run test:full` adds isolated live OpenRouter checks against currently listed `:free` models only: it renders a synthetic MP3 for an actual audio/tool review and sends one synthetic text tool-contract request. It never reads protected application data.
 - Preserve source audio, history, wisdom, checkpoints, candidates, manifests, finals, environment files, and the documented `provider-payload-audit.json` incident.
 - `contained` is the default manual capability. `expert` intentionally grants arbitrary shell access and must remain explicit.
 - If a build changes `dist`, restore the pre-existing `dist` exactly unless the user explicitly requests generated artifacts.

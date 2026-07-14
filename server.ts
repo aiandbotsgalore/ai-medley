@@ -1481,9 +1481,13 @@ app.post("/api/session/audio-review", async (req, res) => {
           ),
         };
       });
-      const model = mode === "whole_mix"
+      const liveTestModel = process.env.NODE_ENV === "test" &&
+        String(process.env.OPENROUTER_LIVE_TEST_MODEL || "").endsWith(":free")
+        ? String(process.env.OPENROUTER_LIVE_TEST_MODEL)
+        : null;
+      const model = liveTestModel ?? (mode === "whole_mix"
         ? AUTOMATIC_OPENROUTER_MODELS.wholeMixReview
-        : AUTOMATIC_OPENROUTER_MODELS.targetedReview;
+        : AUTOMATIC_OPENROUTER_MODELS.targetedReview);
       const decision = await reviewCandidateAudioWithOpenRouter({
         model,
         candidate,

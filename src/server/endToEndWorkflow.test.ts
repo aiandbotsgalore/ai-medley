@@ -12,6 +12,54 @@ const port = 39_000 + Math.floor(Math.random() * 500);
 const baseUrl = `http://127.0.0.1:${port}`;
 let serverOutput = "";
 
+type OpenRouterModel = {
+  id?: unknown;
+  supported_parameters?: unknown;
+  architecture?: { input_modalities?: unknown };
+};
+
+function isFreeAudioToolModel(model: OpenRouterModel): model is {
+  id: string;
+  supported_parameters: string[];
+  architecture: { input_modalities: string[] };
+} {
+  return (
+    typeof model.id === "string" &&
+    model.id.endsWith(":free") &&
+    Array.isArray(model.supported_parameters) &&
+    model.supported_parameters.includes("tools") &&
+    Array.isArray(model.architecture?.input_modalities) &&
+    model.architecture.input_modalities.includes("audio")
+  );
+}
+
+async function getLiveFreeAudioToolModel() {
+  const requested = process.env.OPENROUTER_LIVE_TEST_MODEL?.trim();
+  if (requested) {
+    assert.match(
+      requested,
+      /:free$/,
+      "OPENROUTER_LIVE_TEST_MODEL must end in :free so this test cannot spend credits",
+    );
+  }
+  const response = await fetch(
+    "https://openrouter.ai/api/v1/models?input_modalities=audio&supported_parameters=tools&sort=throughput-high-to-low",
+  );
+  assert.equal(response.ok, true, `OpenRouter model catalog failed (${response.status})`);
+  const payload = await response.json() as { data?: OpenRouterModel[] };
+  const models = Array.isArray(payload.data) ? payload.data : [];
+  const model = requested
+    ? models.find((item) => item.id === requested && isFreeAudioToolModel(item))
+    : models.find(isFreeAudioToolModel);
+  assert.ok(
+    model,
+    requested
+      ? `Configured live test model is not currently a free audio/tool model: ${requested}`
+      : "OpenRouter currently lists no free model that accepts audio and tool calls",
+  );
+  return model.id as string;
+}
+
 function sha256(filePath: string) {
   return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
@@ -57,6 +105,11 @@ function createTone(filename: string, frequency: number) {
   return output;
 }
 
+// This test is deliberately live, but only against a catalog-listed free
+// OpenRouter audio/tool model. The model receives a generated test MP3, never
+// user audio, and every writable application path remains in dataRoot.
+const liveFreeAudioModel = await getLiveFreeAudioToolModel();
+
 const server = spawn(
   process.execPath,
   [path.join(workspace, "node_modules", "tsx", "dist", "cli.mjs"), "server.ts"],
@@ -65,17 +118,17 @@ const server = spawn(
     env: {
       ...process.env,
       AI_MEDLEY_DATA_ROOT: dataRoot,
-      NODE_ENV: "development",
+      NODE_ENV: "test",
       PORT: String(port),
       GEMINI_API_KEY: "",
-      OPENROUTER_API_KEY: "",
+      OPENROUTER_LIVE_TEST_MODEL: liveFreeAudioModel,
     },
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
   },
 );
-server.stdout.on("data", (chunk) => (serverOutput += String(chunk)));
-server.stderr.on("data", (chunk) => (serverOutput += String(chunk)));
+server.stdout?.on("data", (chunk) => (serverOutput += String(chunk)));
+server.stderr?.on("data", (chunk) => (serverOutput += String(chunk)));
 
 try {
   let healthy = false;
@@ -295,10 +348,11 @@ try {
   assert.equal(repeatedRender.idempotent, true);
   assert.equal(repeatedRender.candidate.candidateId, render.candidate.candidateId);
 
-  // This isolated suite has no Gemini key. Prove that the new audio-review
-  // boundary never approves, rerenders, or damages a candidate when the
-  // provider is unavailable.
-  const unavailableAudioReview = await fetch(`${baseUrl}/api/session/audio-review`, {
+  // Send the MP3 FFmpeg just rendered to a real catalog-listed free OpenRouter
+  // model. Approval is not asserted because synthetic tones are not music;
+  // the contract is that the provider can hear the candidate and return the
+  // required structured review without changing the registered artifact.
+  const audioReview = await jsonRequest("/api/session/audio-review", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -307,8 +361,11 @@ try {
       mode: "whole_mix",
     }),
   });
-  assert.equal(unavailableAudioReview.status, 503);
+  assert.equal(audioReview.model, liveFreeAudioModel);
+  assert.equal(audioReview.review.reviewSource, "openrouter_audio");
+  assert.equal(audioReview.review.candidateId, render.candidate.candidateId);
   assert.equal(fs.existsSync(render.candidate.outputPath), true);
+  console.log(`Live OpenRouter audio review passed using ${liveFreeAudioModel}`);
 
   const reviewRequest = {
     sessionId,
