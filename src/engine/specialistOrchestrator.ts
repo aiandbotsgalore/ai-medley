@@ -181,6 +181,46 @@ async function readJsonResponse(response: Response) {
   return data;
 }
 
+/**
+ * A few OpenRouter-compatible models occasionally return the requested JSON
+ * artifact as message content even when `tool_choice` requires a function
+ * call.  We can safely accept that narrow compatibility form because it is
+ * still passed through the same strict schema and local authority checks as a
+ * real tool call.  Prose, partial JSON, and a wrapper for another tool remain
+ * invalid and continue through the normal fallback/error path.
+ */
+function extractStructuredArtifactFromText(
+  text: string,
+  expectedToolName: string,
+): unknown | null {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)?.[1];
+  const jsonCandidates = [fenced, trimmed].filter(
+    (candidate): candidate is string => Boolean(candidate),
+  );
+  for (const candidate of jsonCandidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (
+        parsed &&
+        typeof parsed === "object" &&
+        "name" in parsed &&
+        "arguments" in parsed
+      ) {
+        const wrapper = parsed as { name?: unknown; arguments?: unknown };
+        if (wrapper.name !== expectedToolName) continue;
+        return wrapper.arguments ?? null;
+      }
+      return parsed;
+    } catch {
+      // A valid structured artifact must be a complete JSON document. Do not
+      // attempt to recover JSON embedded in explanatory prose.
+    }
+  }
+  return null;
+}
+
 function buildContext(design: MedleyDesignPayload): SpecialistContext {
   return {
     trackIds: new Set(design.tracks.map((track) => track.trackId)),
@@ -618,12 +658,20 @@ async function requestStructuredArtifact<T>(
         const call = result.functionCalls?.find(
           (item) => item.name === toolName,
         );
-        if (!call) {
+        const textArtifact = call
+          ? null
+          : extractStructuredArtifactFromText(result.text ?? "", toolName);
+        if (!call && textArtifact === null) {
           throw new Error(
-            `Expected tool call ${toolName}, but the model returned no matching call`,
+            `Expected tool call ${toolName}, but the model returned neither a matching call nor a valid JSON artifact`,
           );
         }
-        const parsed = schema.safeParse(call.args);
+        if (!call) {
+          onLog(
+            `Specialist ${role}: ${model} returned a validated JSON artifact instead of the ${toolName} tool wrapper.`,
+          );
+        }
+        const parsed = schema.safeParse(call ? call.args : textArtifact);
         const canonical = parsed.success
           ? (options.canonicalize?.(parsed.data) ?? parsed.data)
           : null;

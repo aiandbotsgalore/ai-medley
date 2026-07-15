@@ -826,6 +826,23 @@ function openRouterToolCall(id: string, name: string, args: unknown) {
   );
 }
 
+function openRouterJsonArtifact(args: unknown) {
+  return new Response(
+    JSON.stringify({
+      choices: [{
+        message: {
+          role: "assistant",
+          // Some OpenRouter models return a complete JSON artifact in content
+          // despite a forced tool choice. The Automatic workflow must accept
+          // it only after its normal strict schema and authority checks.
+          content: JSON.stringify(args),
+        },
+      }],
+    }),
+    { status: 200, headers: { "Content-Type": "application/json" } },
+  );
+}
+
 globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
   const target = String(url);
   if (target === "/api/session/project-brief" || target === "/api/session/design-plan") {
@@ -1083,12 +1100,13 @@ globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
       function: { name: "set_design_plan" },
     });
     assert.equal(body.parallel_tool_calls, false);
+    if (fullWorkflowOpenRouterRequests === 1) {
+      return openRouterJsonArtifact(fullWorkflowPlan);
+    }
     return openRouterToolCall(
-      "openrouter-arrangement",
+      "openrouter-arrangement-comparison",
       "set_design_plan",
-      fullWorkflowOpenRouterRequests === 1
-        ? fullWorkflowPlan
-        : fullWorkflowAlternativePlan,
+      fullWorkflowAlternativePlan,
     );
   }
   if (target === "/api/session/design-plan") {
