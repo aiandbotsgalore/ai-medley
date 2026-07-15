@@ -636,6 +636,7 @@ export function promoteCandidate(
   candidateId: string,
   options: {
     requireApproved?: boolean;
+    requireHumanApproval?: boolean;
     requireSelected?: boolean;
   } = {},
 ) {
@@ -656,6 +657,17 @@ export function promoteCandidate(
   }
   if (options.requireApproved && candidate.reviewStatus !== "approved") {
     throw new Error("Automatic finalization requires an approved candidate");
+  }
+  if (
+    options.requireHumanApproval &&
+    !manifest.humanReviews.some(
+      (review) =>
+        review.candidateId === candidateId && review.decision === "approved",
+    )
+  ) {
+    throw new Error(
+      "Automatic finalization requires an explicit human approval",
+    );
   }
   if (options.requireSelected && manifest.selectedCandidateId !== candidateId) {
     throw new Error("Automatic finalization requires the selected candidate");

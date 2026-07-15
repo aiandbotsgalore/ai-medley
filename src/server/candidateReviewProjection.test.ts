@@ -113,13 +113,30 @@ assert.equal(rendered.candidates[0].actions.includes("play_candidate"), true);
 
 const review = buildCandidateReviewProjection({ workDir: root, state, manifest, journal: null });
 assert.equal(review.status, "review_required");
-assert.equal(review.title, "Choose what happens to your draft");
+assert.equal(review.title, "Choose the draft you want to make final");
 assert.equal(review.candidateCount, 1);
 assert.equal(review.maximumCandidates, 3);
 assert.equal(review.candidates[0].reviewSummary, "The second transition is abrupt.");
 assert.equal(review.candidates[0].actions.includes("approve_candidate"), true);
 assert.equal(review.candidates[0].audioIntegrityVerified, true);
 assert.equal(review.final, null);
+
+const aiRecommended = buildCandidateReviewProjection({
+  workDir: root,
+  state,
+  manifest: {
+    ...manifest,
+    candidates: [{ ...manifest.candidates[0], reviewStatus: "approved" }],
+    musicalReviews: [{ ...manifest.musicalReviews[0], approved: true, blockingIssues: [] }],
+  },
+  journal: null,
+});
+assert.equal(aiRecommended.candidates[0].recommended, true);
+assert.equal(
+  aiRecommended.candidates[0].actions.includes("approve_candidate"),
+  true,
+  "An AI recommendation must still wait for the person to approve the draft",
+);
 
 fs.appendFileSync(candidatePath, "tampered");
 const unavailable = buildCandidateReviewProjection({

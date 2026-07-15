@@ -954,6 +954,16 @@ const fullWorkflowPlan = ArrangementPlanSchema.parse({
   projectId: fullWorkflowSessionId,
   strategy: "Mocked fallback plan",
 });
+const fullWorkflowAlternativePlan = ArrangementPlanSchema.parse({
+  ...fullWorkflowPlan,
+  arrangementVersion: 2,
+  strategy: "Mocked comparison option",
+  transitions: fullWorkflowPlan.transitions.map((transition) => ({
+    ...transition,
+    style: "beat_aligned",
+    duration: 4.5,
+  })),
+});
 const fullWorkflowCandidate = {
   candidateId: "candidate-full-workflow",
   candidateVersion: 1,
@@ -1001,6 +1011,31 @@ const fullWorkflowReview = {
   corrections: [],
   warnings: [],
   reviewedAt: new Date(0).toISOString(),
+};
+const fullWorkflowAlternativeCandidate = {
+  ...fullWorkflowCandidate,
+  candidateId: "candidate-full-workflow-alternative",
+  candidateVersion: 2,
+  parentCandidateId: fullWorkflowCandidate.candidateId,
+  arrangementVersion: fullWorkflowAlternativePlan.arrangementVersion,
+  executionVersion: 2,
+  resolvedTransitions: fullWorkflowAlternativePlan.transitions.map((transition) => ({
+    ...transition,
+    actualFromExitSec: transition.fromExitSec,
+    actualToEntrySec: transition.toEntrySec,
+    durationUsed: transition.duration,
+    outputPath: "workdir/automatic-full-workflow/transition-t1-option-2.mp3",
+    executionVersion: 2,
+  })),
+  outputPath: "workdir/automatic-full-workflow/candidate-2.mp3",
+  previewPaths: ["workdir/automatic-full-workflow/transition-t1-option-2.mp3"],
+  sha256: "b".repeat(64),
+};
+const fullWorkflowAlternativeReview = {
+  ...fullWorkflowReview,
+  candidateId: fullWorkflowAlternativeCandidate.candidateId,
+  candidateVersion: fullWorkflowAlternativeCandidate.candidateVersion,
+  arrangementVersion: fullWorkflowAlternativeCandidate.arrangementVersion,
 };
 const fullWorkflowStages: string[] = [];
 const fullWorkflowCheckpoints: AutomaticWorkflowCheckpoint[] = [];
@@ -1051,7 +1086,9 @@ globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
     return openRouterToolCall(
       "openrouter-arrangement",
       "set_design_plan",
-      fullWorkflowPlan,
+      fullWorkflowOpenRouterRequests === 1
+        ? fullWorkflowPlan
+        : fullWorkflowAlternativePlan,
     );
   }
   if (target === "/api/session/design-plan") {
@@ -1064,6 +1101,10 @@ globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
       createTransitionCandidateAuthority(design.transitionMatrixSummary[0]),
       "the fallback plan must be tied to a locally measured transition candidate",
     );
+    if (parsedPlan.arrangementVersion === 2) {
+      assert.equal(parsedPlan.transitions[0].style, "beat_aligned");
+      assert.equal(parsedPlan.transitions[0].duration, 4.5);
+    }
     return new Response(JSON.stringify({ success: true }), { status: 200 });
   }
   if (target === "/api/apply-transition") {
@@ -1072,7 +1113,7 @@ globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
     assert.equal(body.sessionId, fullWorkflowSessionId);
     assert.equal(body.transitionId, "t1");
     assert.equal(init?.headers && new Headers(init.headers).get("Idempotency-Key"),
-      `${fullWorkflowSessionId}:transition:1:t1`);
+      `${fullWorkflowSessionId}:transition:${body.executionVersion}:t1`);
     return new Response(JSON.stringify({
       success: true,
       outputPath: fullWorkflowCandidate.previewPaths[0],
@@ -1091,55 +1132,55 @@ globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
     fullWorkflowRenderRequests++;
     const body = JSON.parse(String(init?.body ?? ""));
     assert.equal(body.sessionId, fullWorkflowSessionId);
-    assert.equal(body.executionVersion, 1);
-    if (fullWorkflowRenderRequests === 1) {
+    if (body.executionVersion === 1 && fullWorkflowRenderRequests === 1) {
       return new Response(JSON.stringify({
         success: false,
         registrationPending: true,
         error: "Candidate MP3 was rendered but manifest registration is temporarily unavailable",
       }), { status: 503 });
     }
+    const candidate = body.executionVersion === 1
+      ? fullWorkflowCandidate
+      : fullWorkflowAlternativeCandidate;
     return new Response(JSON.stringify({
       success: true,
-      candidate: fullWorkflowCandidate,
+      candidate,
       quality: { note: "Mock technical quality pass" },
-      resolvedTransitions: fullWorkflowCandidate.resolvedTransitions,
+      resolvedTransitions: candidate.resolvedTransitions,
     }), { status: 200 });
   }
   if (target === "/api/session/audio-review") {
     fullWorkflowAudioReviewRequests++;
     const body = JSON.parse(String(init?.body ?? ""));
     assert.equal(body.sessionId, fullWorkflowSessionId);
-    assert.equal(body.candidateId, fullWorkflowCandidate.candidateId);
     assert.equal(body.mode, "whole_mix");
+    const review = body.candidateId === fullWorkflowCandidate.candidateId
+      ? fullWorkflowReview
+      : fullWorkflowAlternativeReview;
     return new Response(JSON.stringify({
       success: true,
       model: "google/gemini-3.1-pro-preview",
-      review: fullWorkflowReview,
+      review,
     }), { status: 200 });
   }
   if (target === "/api/session/quality-review") {
     const body = JSON.parse(String(init?.body ?? ""));
-    assert.deepEqual(body.review, fullWorkflowReview);
+    assert.ok(
+      body.review.candidateId === fullWorkflowCandidate.candidateId ||
+        body.review.candidateId === fullWorkflowAlternativeCandidate.candidateId,
+    );
     return new Response(JSON.stringify({ success: true }), { status: 200 });
   }
-  if (target === `/api/session/${fullWorkflowSessionId}/candidates`) {
-    return new Response(JSON.stringify({
-      success: true,
-      manifest: {
-        candidates: [{ ...fullWorkflowCandidate, reviewStatus: "approved" }],
-        selectedCandidateId: fullWorkflowCandidate.candidateId,
-      },
-    }), { status: 200 });
-  }
-  if (target === "/api/finalize-medley") {
+  if (target === "/api/session/prepare-comparison-option") {
     const body = JSON.parse(String(init?.body ?? ""));
     assert.equal(body.sessionId, fullWorkflowSessionId);
-    assert.equal(body.candidateId, fullWorkflowCandidate.candidateId);
-    return new Response(JSON.stringify({
-      success: true,
-      outputPath: "library/finals/automatic-full-workflow.mp3",
-    }), { status: 200 });
+    return new Response(JSON.stringify({ success: true }), { status: 200 });
+  }
+  if (target === "/api/session/manual-review-required") {
+    const body = JSON.parse(String(init?.body ?? ""));
+    assert.equal(body.sessionId, fullWorkflowSessionId);
+    assert.match(body.reason, /no final MP3 was created automatically/i);
+    return new Response(JSON.stringify({ success: true, alreadyRequired: true }), { status: 200 });
   }
   throw new Error(`Unexpected full workflow fetch: ${target}`);
 }) as typeof fetch;
@@ -1167,17 +1208,17 @@ const fullWorkflowResult = await runAutomaticSpecialistWorkflow({
   onMetrics: () => {},
 });
 
-assert.equal(fullWorkflowResult.manualReviewRequired, false);
-assert.equal(fullWorkflowResult.candidateId, fullWorkflowCandidate.candidateId);
-assert.equal(fullWorkflowResult.outputPath, "library/finals/automatic-full-workflow.mp3");
+assert.equal(fullWorkflowResult.manualReviewRequired, true);
+assert.equal(fullWorkflowResult.candidateId, null);
+assert.equal(fullWorkflowResult.outputPath, null);
 assert.equal(fullWorkflowGeminiRequests, 0, "Automatic mode must never call Gemini Direct");
-assert.equal(fullWorkflowOpenRouterRequests, 1, "the configured OpenRouter model must provide the arrangement");
-assert.equal(fullWorkflowTransitionRequests, 1);
-assert.equal(fullWorkflowRenderRequests, 2, "a pending manifest registration must be retried once without rerendering");
-assert.equal(fullWorkflowAudioReviewRequests, 1, "an approved whole-mix review must not make a clip follow-up request");
+assert.equal(fullWorkflowOpenRouterRequests, 2, "the configured OpenRouter model must provide two comparison arrangements");
+assert.equal(fullWorkflowTransitionRequests, 2);
+assert.equal(fullWorkflowRenderRequests, 3, "a pending manifest registration must be retried once without rerendering");
+assert.equal(fullWorkflowAudioReviewRequests, 2, "each comparison draft receives one whole-mix review");
 assert.equal(fullWorkflowRequests.includes("/api/provider/openrouter"), true);
-assert.equal(fullWorkflowStages.at(-1), "completed");
-assert.equal(fullWorkflowCheckpoints.at(-1)?.stage, "final_render");
+assert.equal(fullWorkflowStages.at(-1), "manual_review_required");
+assert.equal(fullWorkflowCheckpoints.at(-1)?.stage, "manual_review_required");
 
 globalThis.fetch = originalFetch;
 (globalThis as any).window = originalWindow;

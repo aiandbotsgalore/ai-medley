@@ -17,6 +17,7 @@ export const AutomaticSessionStatusV1Schema = z.enum([
   "rendering_candidate",
   "technical_review",
   "musical_review",
+  "generating_options",
   "correcting",
   "manual_review_required",
   "finalizing",

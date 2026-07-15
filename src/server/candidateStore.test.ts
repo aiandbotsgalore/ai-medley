@@ -139,8 +139,23 @@ writeCandidateManifestAtomic(root, sessionId, {
   ...manifest,
   selectedCandidateId: "candidate-002",
 });
+assert.throws(
+  () =>
+    promoteCandidate(root, sessionId, "candidate-002", {
+      requireHumanApproval: true,
+      requireSelected: true,
+    }),
+  /explicit human approval/,
+  "An AI-approved candidate must still wait for a person to choose it",
+);
+applyCandidateHumanReview(root, sessionId, {
+  candidateId: "candidate-002",
+  decision: "approved",
+  notes: ["Chosen after listening in Candidate Review."],
+  reviewedAt: "2026-07-15T00:00:00.000Z",
+});
 const promoted = promoteCandidate(root, sessionId, "candidate-002", {
-  requireApproved: true,
+  requireHumanApproval: true,
   requireSelected: true,
 });
 assert.equal(fs.readFileSync(promoted.finalPath, "utf8"), "approved candidate");

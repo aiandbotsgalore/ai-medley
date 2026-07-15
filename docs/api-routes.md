@@ -6,6 +6,7 @@ For Automatic workflow v4, `/api/medley-intelligence/design`,
 `/api/session/design-plan`, `/api/apply-transition`,
 `/api/render-review-candidate`, `/api/session/audio-review`,
 `/api/session/quality-review`, and
+`/api/session/prepare-comparison-option`, `/api/session/human-review`, and
 `/api/finalize-medley` form the durable workflow path. The v4 path uses a
 deterministic local brief and execution compiler; it does not call a context
 specialist or a production/tool-execution provider. `/api/exec`,
@@ -62,6 +63,7 @@ specialist or a production/tool-execution provider. `/api/exec`,
 - `POST /api/session/finish`
 - `POST /api/session/human-review`
 - `POST /api/session/manual-review-required`
+- `POST /api/session/prepare-comparison-option`
 - `POST /api/session/metrics`
 - `POST /api/session/project-brief`
 - `POST /api/session/quality-review`

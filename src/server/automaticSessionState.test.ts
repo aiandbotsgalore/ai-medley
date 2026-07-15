@@ -23,6 +23,17 @@ try {
     "a failed write must preserve the prior durable state",
   );
   assert.doesNotThrow(() => assertLegalSessionTransition("created", "analyzing"));
+  assert.doesNotThrow(() =>
+    assertLegalSessionTransition("musical_review", "generating_options"),
+  );
+  assert.doesNotThrow(() =>
+    assertLegalSessionTransition("generating_options", "validating_arrangement"),
+  );
+  assert.throws(
+    () => assertLegalSessionTransition("musical_review", "finalizing"),
+    /Illegal/,
+    "AI musical review must not bypass the human choice",
+  );
   assert.throws(() => assertLegalSessionTransition("completed", "planning"), /Illegal/);
   const analyzing = transitionAutomaticSessionState({
     workDir: root,

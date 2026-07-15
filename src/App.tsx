@@ -1844,8 +1844,9 @@ export default function App() {
     production: "PRODUCTION",
     review_candidate: "REVIEW CANDIDATE",
     quality_review: "QUALITY REVIEW",
+    candidate_options: "BUILDING OPTIONS",
     correction: "CORRECTIONS",
-    manual_review_required: "MANUAL REVIEW REQUIRED",
+    manual_review_required: "CHOOSE YOUR DRAFT",
     final_render: "FINAL RENDER",
     completed: "COMPLETED",
   };

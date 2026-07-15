@@ -210,8 +210,10 @@ function topLevelStatus(
   if (state.state === "manual_review_required") {
     return {
       status: "review_required",
-      title: "Choose what happens to your draft",
-      message: state.recoverableError ?? "Automatic review stopped. Your rendered drafts are preserved below.",
+      title: "Choose the draft you want to make final",
+      message:
+        state.recoverableError ??
+        "The AI may recommend a draft, but only your choice can create the final MP3.",
     };
   }
   if (state.state === "recoverable_error") {
@@ -252,7 +254,8 @@ export function buildCandidateReviewProjection(input: {
     const human = latestForCandidate(manifest.humanReviews, candidate.candidateId);
     const selected = manifest.selectedCandidateId === candidate.candidateId;
     const finalized = manifest.finalizedCandidateId === candidate.candidateId && finalVerified;
-    const approved = candidate.reviewStatus === "approved" || human?.decision === "approved";
+    const aiApproved = review?.approved === true;
+    const humanApproved = human?.decision === "approved";
     let audioProblem: string | null = null;
     try {
       const registered = manifest.candidates.flatMap((item) => [
@@ -279,13 +282,18 @@ export function buildCandidateReviewProjection(input: {
     const audioIntegrityVerified = audioProblem === null;
     const actions: CandidateReviewAction[] = ["copy_candidate_path"];
     if (audioIntegrityVerified) actions.unshift("play_candidate");
-    if (state.state === "manual_review_required" && candidate.technicallyValid && audioIntegrityVerified && !approved) {
+    if (
+      state.state === "manual_review_required" &&
+      candidate.technicallyValid &&
+      audioIntegrityVerified &&
+      !humanApproved
+    ) {
       actions.push("approve_candidate");
     }
     if (
       state.state === "finalizing" &&
       selected &&
-      approved &&
+      humanApproved &&
       candidate.technicallyValid &&
       audioIntegrityVerified &&
       journal?.status === "in_progress"
@@ -319,7 +327,7 @@ export function buildCandidateReviewProjection(input: {
       planChanges: describePlanChanges(candidate, candidate.parentCandidateId ? byId.get(candidate.parentCandidateId) ?? null : null),
       createdAt: candidate.createdAt,
       selected,
-      recommended: selected && candidate.technicallyValid && approved,
+      recommended: selected && candidate.technicallyValid && aiApproved,
       finalized,
       actions,
     };

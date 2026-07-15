@@ -29,6 +29,7 @@ export const WORKFLOW_STAGES = [
   "production",
   "review_candidate",
   "quality_review",
+  "candidate_options",
   "correction",
   "manual_review_required",
   "final_render",

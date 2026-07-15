@@ -76,11 +76,14 @@ The whole-mix approval has no silent model fallback. Provider text requests are 
 
 After local technical checks pass, Automatic v4 sends the rendered candidate MP3—not original library audio—to OpenRouter for a whole-mix review. A rejected candidate may send at most three registered transition previews through OpenRouter to Gemini 3.5 Flash for a focused correction choice. Audio is sent as base64 through OpenRouter's audio-input contract; no temporary Google Files API artifact is created. The original library tracks and all local candidate artifacts remain local and are never removed by this review step.
 
-Automatic v4 renders one initial candidate and permits at most two targeted
-correction candidates. The server offers exact, versioned correction presets;
-the provider can select one offered preset for one named transition but cannot
-invent timestamps, change several transitions, or repeat an identical plan.
-Every earlier candidate remains registered and visible.
+Automatic v4 renders an initial candidate and, after it passes the local and
+whole-mix checks, requests one distinct, constrained arrangement option for
+side-by-side human comparison. It never promotes either draft automatically.
+Targeted corrections may use only the remaining candidate capacity, up to the
+hard limit of three preserved drafts. The server offers exact, versioned
+correction presets; the provider can select one offered preset for one named
+transition but cannot invent timestamps, change several transitions, or repeat
+an identical plan. Every earlier candidate remains registered and visible.
 
 ## Candidate Review and completion truth
 
@@ -95,7 +98,8 @@ was interrupted. It is also restored automatically on startup. The screen:
   cannot play over each other;
 - keeps invalid or tampered drafts visible while disabling playback or final
   approval when integrity cannot be verified;
-- permits a technically valid draft to receive an append-only human approval;
+- labels AI approval as a recommendation only and requires an append-only human
+  approval before a technically valid draft can be promoted; and
   and
 - resumes an interrupted finalization without rerendering or duplicating the
   approval.

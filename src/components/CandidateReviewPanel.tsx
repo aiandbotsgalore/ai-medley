@@ -208,8 +208,8 @@ export default function CandidateReviewPanel({
   const subheading = isFinalized
     ? "Your chosen version passed every check and is ready to play or download."
     : projection.candidateCount > 1
-      ? "Listen, compare, then make one final."
-      : "Listen to your draft, then decide whether to keep it.";
+      ? "Listen, compare, then choose the version you want to make final."
+      : "The AI can recommend this draft, but only you can make it final.";
 
   return (
     <section

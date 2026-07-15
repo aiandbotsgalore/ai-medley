@@ -377,6 +377,42 @@ export function buildTargetedCorrectionPlan(
     : null;
 }
 
+function comparisonPlanIdentity(plan: ArrangementPlan) {
+  return JSON.stringify({
+    orderedTrackIds: plan.orderedTrackIds,
+    transitions: plan.transitions.map((transition) => ({
+      transitionCandidateId: transition.transitionCandidateId,
+      style: transition.style,
+      duration: transition.duration,
+      beatAlign: transition.beatAlign,
+    })),
+  });
+}
+
+function comparisonOptionStageData(
+  projectBrief: ProjectBrief,
+  design: MedleyDesignPayload,
+  baseline: ArrangementPlan,
+) {
+  return {
+    task:
+      "Create one contrasting, safe arrangement option for a person to compare with the baseline. " +
+      "Use only the supplied transition candidates. Keep every selected track. Change at least one transition candidate, ordering choice, or permitted execution choice. " +
+      "Do not invent timestamps, section IDs, track IDs, or FFmpeg instructions.",
+    stageData: buildArrangementStageData(projectBrief, design),
+    baseline: {
+      orderedTrackIds: baseline.orderedTrackIds,
+      transitions: baseline.transitions.map((transition) => ({
+        transitionId: transition.transitionId,
+        transitionCandidateId: transition.transitionCandidateId,
+        style: transition.style,
+        duration: transition.duration,
+        beatAlign: transition.beatAlign,
+      })),
+    },
+  };
+}
+
 /**
  * Provider-free fallback used only when the arrangement specialist cannot
  * produce a valid target-length plan. It uses authoritative local candidates
@@ -1207,7 +1243,149 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
       await saveRequired({ qualityReview, currentCandidate });
     }
 
-    if (qualityReview.approved) break;
+    if (qualityReview.approved) {
+      if (
+        currentCandidate.candidateVersion === 1 &&
+        correctionCount === 0
+      ) {
+        let alternativePlan: ArrangementPlan;
+        try {
+          options.onLog(
+            "Draft 1 passed review. Building one distinct, safe option for comparison.",
+          );
+          alternativePlan = await requestStructuredArtifact({
+            role: "arrangement",
+            stage: "candidate_options",
+            config: options.config,
+            sessionId: options.sessionId,
+            signal: options.signal,
+            schema: ArrangementPlanSchema,
+            toolName: "set_design_plan",
+            systemInstruction: SPECIALIST_SYSTEM_PROMPTS.arrangement,
+            tools: [...SPECIALIST_TOOLS.arrangement],
+            prompt: JSON.stringify(
+              comparisonOptionStageData(
+                projectBrief,
+                options.design,
+                arrangementPlan,
+              ),
+            ),
+            contextualValidate: (plan) => {
+              const errors = validateArrangementForWorkflow(
+                plan,
+                arrangementContext,
+                projectBrief,
+                options.sessionId,
+              );
+              if (comparisonPlanIdentity(plan) === comparisonPlanIdentity(arrangementPlan)) {
+                errors.push(
+                  "The comparison option must differ from the baseline arrangement.",
+                );
+              }
+              return errors;
+            },
+            canonicalize: (plan) =>
+              ArrangementPlanSchema.parse({
+                ...bindLegacyArrangementAuthority(plan, arrangementContext),
+                arrangementVersion: arrangementPlan.arrangementVersion + 1,
+                warnings: [
+                  ...plan.warnings,
+                  "Distinct comparison option generated for human review.",
+                ],
+              }),
+            onLog: options.onLog,
+            onModel: (model) => {
+              options.onStage("candidate_options", "arrangement", model);
+              saveProgress({
+                activeRole: "arrangement",
+                activeModel: model,
+                attemptedModels: [
+                  ...new Set([...checkpoint.attemptedModels, model]),
+                ],
+              });
+            },
+            onRepair: () =>
+              saveProgress({ repairCount: checkpoint.repairCount + 1 }),
+            onRequestAudit: options.onProviderRequestAudit,
+          });
+        } catch (error: any) {
+          const summary =
+            "Draft 1 passed the technical and AI music reviews. A distinct second option could not be produced safely, so Draft 1 is preserved for your choice; no final MP3 was created automatically.";
+          options.onLog(`${summary} ${error?.message || ""}`.trim());
+          await requireAutomaticManualReview(options, summary);
+          options.onStage("manual_review_required", null, null);
+          await saveRequired({
+            stage: "manual_review_required",
+            currentCandidate,
+            qualityReview,
+          });
+          return {
+            summary,
+            candidateId: null,
+            outputPath: null,
+            qualityReview,
+            manualReviewRequired: true,
+          };
+        }
+
+        await readJsonResponse(
+          await fetch("/api/session/prepare-comparison-option", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Idempotency-Key": `${options.sessionId}:comparison-option:${alternativePlan.arrangementVersion}`,
+            },
+            body: JSON.stringify({ sessionId: options.sessionId }),
+            signal: options.signal,
+          }),
+        );
+        arrangementPlan = alternativePlan;
+        await readJsonResponse(
+          await fetch("/api/session/design-plan", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Idempotency-Key": `${options.sessionId}:arrangement:${arrangementPlan.arrangementVersion}`,
+            },
+            body: JSON.stringify({
+              sessionId: options.sessionId,
+              plan: arrangementPlan,
+            }),
+            signal: options.signal,
+          }),
+        );
+        options.onLog("Comparison option locked locally. Rendering Draft 2.");
+        qualityReview = null;
+        productionRepairErrors = [];
+        await saveRequired({
+          stage: "production",
+          arrangementPlan,
+          currentCandidate,
+          qualityReview,
+          activeRole: null,
+          activeModel: null,
+        });
+        continue;
+      }
+      const summary =
+        "This draft passed the technical and AI music reviews. It is preserved for you to listen to and choose; no final MP3 was created automatically.";
+      // Quality review is a recommendation, never a substitute for the
+      // person's explicit choice in Candidate Review.
+      await requireAutomaticManualReview(options, summary);
+      options.onStage("manual_review_required", null, null);
+      await saveRequired({
+        stage: "manual_review_required",
+        currentCandidate,
+        qualityReview,
+      });
+      return {
+        summary,
+        candidateId: null,
+        outputPath: null,
+        qualityReview,
+        manualReviewRequired: true,
+      };
+    }
     if (correctionCount >= MAX_CORRECTION_RETRIES) {
       const summary =
         `Automatic correction limit reached after ${MAX_CORRECTION_RETRIES} correction cycle(s). ` +
@@ -1278,55 +1456,7 @@ export async function runAutomaticSpecialistWorkflow(options: WorkflowOptions) {
     currentCandidate = null;
   }
 
-  const manifestData = await readJsonResponse(
-    await fetch(
-      `/api/session/${encodeURIComponent(options.sessionId)}/candidates`,
-      {
-        signal: options.signal,
-      },
-    ),
+  throw new Error(
+    "Automatic workflow reached an invalid state before Candidate Review. No final MP3 was created.",
   );
-  const selectedCandidate = manifestData.manifest.candidates?.find(
-    (candidate: RenderCandidate) =>
-      candidate.candidateId === manifestData.manifest.selectedCandidateId,
-  );
-  const candidateId =
-    selectedCandidate?.reviewStatus === "approved" &&
-    selectedCandidate.technicallyValid
-      ? selectedCandidate.candidateId
-      : null;
-  if (!candidateId)
-    throw new Error(
-      "No approved selected candidate is available for automatic finalization",
-    );
-  options.onStage("final_render", null, null);
-  await saveRequired({
-    stage: "final_render",
-    activeRole: null,
-    activeModel: null,
-  });
-  const summary = `Specialist medley completed with ${arrangementPlan.transitions.length} transitions and ${correctionCount} correction cycle(s).`;
-  const finalData = await readJsonResponse(
-    await fetch("/api/finalize-medley", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Idempotency-Key": `${options.sessionId}:finalization:${candidateId}`,
-      },
-      body: JSON.stringify({
-        sessionId: options.sessionId,
-        candidateId,
-        summary,
-      }),
-      signal: options.signal,
-    }),
-  );
-  options.onStage("completed", null, null);
-  return {
-    summary,
-    candidateId,
-    outputPath: finalData.outputPath,
-    qualityReview,
-    manualReviewRequired: false,
-  };
 }

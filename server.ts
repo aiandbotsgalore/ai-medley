@@ -2832,16 +2832,16 @@ app.post("/api/session/quality-review", async (req, res) => {
       const manifest = applyCandidateReview(workDir, sessionId, parsed);
       sessions[sessionId].qualityReview = parsed;
       sessions[sessionId].workflowStage = parsed.approved
-        ? "final_render"
+        ? "candidate_options"
         : "correction";
       const postReviewState = existingManifest.workflowMode === "automatic"
         ? readAutomaticSessionState(workDir, sessionId)
         : null;
-      if (postReviewState) {
+      if (postReviewState && !parsed.approved) {
         transitionAutomaticSessionState({
           workDir,
           sessionId,
-          to: parsed.approved ? "finalizing" : "correcting",
+          to: "correcting",
         });
       }
       return { success: true, review: parsed, manifest };
@@ -3040,10 +3040,11 @@ app.post("/api/session/manual-review-required", async (req, res) => {
         if (state.state === "manual_review_required") {
           return { success: true, state, alreadyRequired: true };
         }
-        if (![
-          "technical_review",
-          "musical_review",
-          "correcting",
+        if ([
+            "technical_review",
+            "musical_review",
+            "generating_options",
+            "correcting",
         ].includes(state.state)) {
           throw new Error(`Manual review cannot be entered while session state is ${state.state}`);
         }
@@ -3062,6 +3063,49 @@ app.post("/api/session/manual-review-required", async (req, res) => {
             operation: "correction_submission",
             key: idempotencyKey,
             request: { reason: normalizedReason },
+            execute,
+          })
+        : { replayed: false, result: await execute() };
+      return res.json({ ...replay.result, idempotent: replay.replayed });
+    });
+  } catch (error: any) {
+    return res.status(409).json({ success: false, error: error.message });
+  }
+});
+
+app.post("/api/session/prepare-comparison-option", async (req, res) => {
+  const { sessionId } = req.body || {};
+  try {
+    validateSessionId(sessionId);
+    const idempotencyKey = String(
+      req.get("Idempotency-Key") || req.body?.idempotencyKey || "",
+    ).trim();
+    return await withSessionLock(sessionId, async () => {
+      const execute = async () => {
+        const state = readAutomaticSessionState(workDir, sessionId);
+        if (!state) throw new Error("Automatic v4 session state is missing");
+        if (state.state === "generating_options") {
+          return { success: true, state, alreadyPreparing: true };
+        }
+        if (state.state !== "musical_review") {
+          throw new Error(
+            `A comparison option cannot be prepared while session state is ${state.state}`,
+          );
+        }
+        const next = transitionAutomaticSessionState({
+          workDir,
+          sessionId,
+          to: "generating_options",
+        });
+        return { success: true, state: next, alreadyPreparing: false };
+      };
+      const replay = idempotencyKey
+        ? await replayAutomaticSessionIdempotent({
+            workDir,
+            sessionId,
+            operation: "correction_submission",
+            key: idempotencyKey,
+            request: { prepareComparisonOption: true },
             execute,
           })
         : { replayed: false, result: await execute() };
@@ -5002,7 +5046,7 @@ function finalizeRegisteredCandidate(
     summary,
     promote: () => {
       const promoted = promoteCandidate(workDir, sessionId, candidateId, {
-        requireApproved: requireApproval,
+        requireHumanApproval: requireApproval,
         requireSelected: requireApproval,
       });
       const candidate = promoted.manifest.candidates.find(
