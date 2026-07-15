@@ -164,8 +164,15 @@ export function buildOpenRouterRequest(input: {
   tools: unknown[];
   /** Automatic stages require one named structured result, not free text. */
   requiredToolName?: string;
+  /**
+   * A provider-supported alternative to tool calling for a single durable
+   * artifact. It is used only after a forced tool call returned no artifact.
+   */
+  structuredOutput?: { name: string; schema: unknown };
 }): BuiltProviderRequest {
-  const toolChoice = input.requiredToolName
+  const toolChoice = input.structuredOutput
+    ? undefined
+    : input.requiredToolName
     ? {
         type: "function" as const,
         function: { name: input.requiredToolName },
@@ -175,11 +182,29 @@ export function buildOpenRouterRequest(input: {
     model: input.model,
     temperature: input.temperature,
     messages: input.messages.map((item) => item.message),
-    tools: input.tools,
-    tool_choice: toolChoice,
+    ...(input.structuredOutput
+      ? {
+          response_format: {
+            type: "json_schema",
+            json_schema: {
+              name: input.structuredOutput.name,
+              strict: true,
+              schema: input.structuredOutput.schema,
+            },
+          },
+          // Never route a structured-output request to an endpoint that
+          // silently drops the JSON Schema requirement.
+          provider: { require_parameters: true },
+        }
+      : {
+          tools: input.tools,
+          tool_choice: toolChoice,
+        }),
     // A structured automatic stage has exactly one durable artifact. Multiple
     // simultaneous tool calls would be ambiguous and cannot be committed.
-    ...(input.requiredToolName ? { parallel_tool_calls: false } : {}),
+    ...(input.requiredToolName && !input.structuredOutput
+      ? { parallel_tool_calls: false }
+      : {}),
   };
   const serializedBody = JSON.stringify(requestBody);
   const total = measureSerialized(serializedBody);
@@ -190,15 +215,25 @@ export function buildOpenRouterRequest(input: {
   const breakdown: ProviderRequestBreakdown = {
     systemPrompt: measureValue(messagesByCategory("systemPrompt")),
     stageData: measureValue(messagesByCategory("stageData")),
-    toolSchemas: measureValue(input.tools),
+    toolSchemas: measureValue(input.structuredOutput ?? input.tools),
     messageHistory: measureValue(messagesByCategory("messageHistory")),
     toolResults: measureValue(messagesByCategory("toolResults")),
     repairErrors: measureValue(messagesByCategory("repairErrors")),
     requestEnvelope: measureValue({
       model: input.model,
       temperature: input.temperature,
-      tool_choice: toolChoice,
-      ...(input.requiredToolName ? { parallel_tool_calls: false } : {}),
+      ...(input.structuredOutput
+        ? {
+            response_format: {
+              type: "json_schema",
+              json_schema: { name: input.structuredOutput.name, strict: true },
+            },
+            provider: { require_parameters: true },
+          }
+        : {
+            tool_choice: toolChoice,
+            ...(input.requiredToolName ? { parallel_tool_calls: false } : {}),
+          }),
     }),
   };
 

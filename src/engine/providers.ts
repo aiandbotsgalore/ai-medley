@@ -58,6 +58,8 @@ type ProviderAuditContext = {
   role: string;
   /** Force the single schema-bearing tool required by an Automatic stage. */
   requiredToolName?: string;
+  /** Use OpenRouter strict JSON Schema output instead of a tool call. */
+  structuredOutput?: { name: string; schema: unknown };
   onRequestAudit?: (audit: ProviderRequestAudit) => void;
 };
 
@@ -483,12 +485,17 @@ export function createProviderSession(
           }));
 
       requestNumber++;
+      const structuredOutput = auditContext?.structuredOutput;
+      const requestTools = structuredOutput ? [] : tools;
       const builtRequest = buildOpenRouterRequest({
         model: config.model,
         temperature,
         messages: [...messages, ...pending],
-        tools,
-        requiredToolName: auditContext?.requiredToolName,
+        tools: requestTools,
+        requiredToolName: structuredOutput
+          ? undefined
+          : auditContext?.requiredToolName,
+        structuredOutput,
       });
       const requestId =
         options?.requestId ??
@@ -499,7 +506,7 @@ export function createProviderSession(
         role: auditContext?.role ?? "unknown",
         model: config.model,
         requestNumber,
-        tools: tools
+        tools: requestTools
           .map((tool: any) => String(tool?.function?.name ?? ""))
           .filter(Boolean),
         utf8Bytes: builtRequest.utf8Bytes,

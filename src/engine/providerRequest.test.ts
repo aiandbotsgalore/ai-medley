@@ -32,6 +32,41 @@ assert.deepEqual(forcedOpenRouter.requestBody.tool_choice, {
 });
 assert.equal(forcedOpenRouter.requestBody.parallel_tool_calls, false);
 
+const structuredOpenRouter = buildOpenRouterRequest({
+  model: "test/model",
+  temperature: 0.1,
+  messages: [],
+  tools: [],
+  requiredToolName: "set_design_plan",
+  structuredOutput: {
+    name: "set_design_plan",
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      properties: { status: { type: "string" } },
+      required: ["status"],
+    },
+  },
+});
+assert.deepEqual(structuredOpenRouter.requestBody.response_format, {
+  type: "json_schema",
+  json_schema: {
+    name: "set_design_plan",
+    strict: true,
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      properties: { status: { type: "string" } },
+      required: ["status"],
+    },
+  },
+});
+assert.deepEqual(structuredOpenRouter.requestBody.provider, {
+  require_parameters: true,
+});
+assert.equal("tools" in structuredOpenRouter.requestBody, false);
+assert.equal("tool_choice" in structuredOpenRouter.requestBody, false);
+
 const gemini = buildGeminiRequest({
   model: "gemini-test",
   temperature: 0.1,

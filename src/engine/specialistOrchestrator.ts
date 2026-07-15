@@ -630,6 +630,7 @@ async function requestStructuredArtifact<T>(
     onModel(model);
     onLog(`Specialist ${role}: ${provider}/${model}`);
     let repairAttempt = 0;
+    let usedStructuredOutputFallback = false;
     let message = prompt;
     while (repairAttempt <= 1) {
       try {
@@ -655,12 +656,46 @@ async function requestStructuredArtifact<T>(
           messageCategory: repairAttempt ? "repairErrors" : "stageData",
         });
         assertActive(signal);
-        const call = result.functionCalls?.find(
+        let call = result.functionCalls?.find(
           (item) => item.name === toolName,
         );
-        const textArtifact = call
+        let textArtifact = call
           ? null
           : extractStructuredArtifactFromText(result.text ?? "", toolName);
+        if (!call && textArtifact === null && !usedStructuredOutputFallback) {
+          usedStructuredOutputFallback = true;
+          onLog(
+            `Specialist ${role}: ${model} returned no ${toolName} tool call. Retrying once with OpenRouter strict JSON Schema output.`,
+          );
+          const structuredSession = createProviderSession(
+            { ...config, provider, model },
+            systemInstruction,
+            tools,
+            0.1,
+            [],
+            {
+              stage: options.stage,
+              role,
+              structuredOutput: {
+                name: toolName,
+                schema: z.toJSONSchema(schema),
+              },
+              onRequestAudit: options.onRequestAudit,
+            },
+          );
+          const structuredResult = await structuredSession.send(message, {
+            signal,
+            requestId: `${options.sessionId}:${options.stage}:${model}:${repairAttempt}:json-schema`,
+            timeoutMs: PROVIDER_REQUEST_TIMEOUT_MS,
+            messageCategory: repairAttempt ? "repairErrors" : "stageData",
+          });
+          call = structuredResult.functionCalls?.find(
+            (item) => item.name === toolName,
+          );
+          textArtifact = call
+            ? null
+            : extractStructuredArtifactFromText(structuredResult.text ?? "", toolName);
+        }
         if (!call && textArtifact === null) {
           throw new Error(
             `Expected tool call ${toolName}, but the model returned neither a matching call nor a valid JSON artifact`,

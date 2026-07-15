@@ -1095,14 +1095,35 @@ globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
   if (target === "/api/provider/openrouter") {
     fullWorkflowOpenRouterRequests++;
     const body = JSON.parse(String(init?.body ?? ""));
+    if (fullWorkflowOpenRouterRequests === 1) {
+      assert.deepEqual(body.tool_choice, {
+        type: "function",
+        function: { name: "set_design_plan" },
+      });
+      assert.equal(body.parallel_tool_calls, false);
+      return new Response(JSON.stringify({
+        choices: [{ message: { role: "assistant", content: "" } }],
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    if (fullWorkflowOpenRouterRequests === 2) {
+      assert.deepEqual(body.response_format, {
+        type: "json_schema",
+        json_schema: {
+          name: "set_design_plan",
+          strict: true,
+          schema: body.response_format.json_schema.schema,
+        },
+      });
+      assert.deepEqual(body.provider, { require_parameters: true });
+      assert.equal("tools" in body, false);
+      assert.equal("tool_choice" in body, false);
+      return openRouterJsonArtifact(fullWorkflowPlan);
+    }
     assert.deepEqual(body.tool_choice, {
       type: "function",
       function: { name: "set_design_plan" },
     });
     assert.equal(body.parallel_tool_calls, false);
-    if (fullWorkflowOpenRouterRequests === 1) {
-      return openRouterJsonArtifact(fullWorkflowPlan);
-    }
     return openRouterToolCall(
       "openrouter-arrangement-comparison",
       "set_design_plan",
@@ -1230,7 +1251,7 @@ assert.equal(fullWorkflowResult.manualReviewRequired, true);
 assert.equal(fullWorkflowResult.candidateId, null);
 assert.equal(fullWorkflowResult.outputPath, null);
 assert.equal(fullWorkflowGeminiRequests, 0, "Automatic mode must never call Gemini Direct");
-assert.equal(fullWorkflowOpenRouterRequests, 2, "the configured OpenRouter model must provide two comparison arrangements");
+assert.equal(fullWorkflowOpenRouterRequests, 3, "a missing tool call must get one strict JSON-schema retry before the comparison arrangement");
 assert.equal(fullWorkflowTransitionRequests, 2);
 assert.equal(fullWorkflowRenderRequests, 3, "a pending manifest registration must be retried once without rerendering");
 assert.equal(fullWorkflowAudioReviewRequests, 2, "each comparison draft receives one whole-mix review");
