@@ -34,6 +34,7 @@ The server reads variables from the process environment and loads git-ignored `.
 |---|---|
 | `OPENROUTER_API_KEY` | Required server-managed credential for Automatic v4; also available to Manual Model mode. |
 | `OPENROUTER_LIVE_TEST_MODEL` | Test-only override used by the isolated end-to-end test. It must end in `:free`; the test discovers a currently listed free OpenRouter model that accepts audio and tool calls, then sends it only a generated test MP3. Never set this for normal app use. |
+| `OPENROUTER_LIVE_STRUCTURED_TEST_MODEL` | Optional test-only override for the strict structured-output OpenRouter contract check. It must end in `:free`; normal app runs ignore it. |
 | `GEMINI_API_KEY` | Optional server-managed credential for the explicit Manual Gemini mode only. |
 | `PORT` | Optional integer from 1–65535; defaults to `3000`. Invalid values fail startup. |
 | `AI_MEDLEY_DATA_ROOT` | Optional isolated persistence root. Defaults to the repository working directory. Its `library/` and `workdir/` children hold persistent state and session artifacts. |
@@ -65,6 +66,13 @@ stops before rendering and offers Retry, Change Model, or Cancel rather than
 silently producing a local substitute. An audio-review failure preserves the
 rendered candidate and opens Candidate Review.
 
+Automatic OpenRouter tool requests expose exactly one tool and use
+`tool_choice: "required"`, followed by strict local schema and authority
+validation. If the tool wrapper is rejected or absent, arrangement recovery
+uses strict JSON Schema output with Response Healing and
+`provider.require_parameters: true`. This recovery is still locally validated
+before any plan can be stored or rendered.
+
 The remaining constrained provider decisions use the fixed roster:
 
 | Role | Primary model |
@@ -72,7 +80,7 @@ The remaining constrained provider decisions use the fixed roster:
 | Arrangement and whole-mix audio review | `google/gemini-3.1-pro-preview` via OpenRouter |
 | Targeted transition-clip review after a rejection | `google/gemini-3.5-flash` via OpenRouter |
 
-The whole-mix approval has no silent model fallback. Provider text requests are rejected before network access above 100 KiB or 24,000 estimated tokens, with a 16,000-token regression target. One bounded 429 retry may honor at most 30 seconds of `Retry-After`.
+The whole-mix approval has no silent model fallback. Provider text requests are rejected before network access above 100 KiB or 24,000 estimated tokens, with a 16,000-token regression target. One bounded transport retry handles HTTP 429 or 503 and may honor at most 60 seconds of `Retry-After`.
 
 After local technical checks pass, Automatic v4 sends the rendered candidate MP3—not original library audio—to OpenRouter for a whole-mix review. A rejected candidate may send at most three registered transition previews through OpenRouter to Gemini 3.5 Flash for a focused correction choice. Audio is sent as base64 through OpenRouter's audio-input contract; no temporary Google Files API artifact is created. The original library tracks and all local candidate artifacts remain local and are never removed by this review step.
 
@@ -100,7 +108,6 @@ was interrupted. It is also restored automatically on startup. The screen:
   approval when integrity cannot be verified;
 - labels AI approval as a recommendation only and requires an append-only human
   approval before a technically valid draft can be promoted; and
-  and
 - resumes an interrupted finalization without rerendering or duplicating the
   approval.
 
