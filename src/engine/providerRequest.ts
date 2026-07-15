@@ -173,10 +173,10 @@ export function buildOpenRouterRequest(input: {
   const toolChoice = input.structuredOutput
     ? undefined
     : input.requiredToolName
-    ? {
-        type: "function" as const,
-        function: { name: input.requiredToolName },
-      }
+    // Automatic stages expose exactly one tool. OpenRouter documents
+    // "required" as the broadly supported way to guarantee a tool call;
+    // some upstreams reject the provider-specific named-function form.
+    ? "required"
     : "auto";
   const requestBody = {
     model: input.model,
@@ -195,16 +195,15 @@ export function buildOpenRouterRequest(input: {
           // Never route a structured-output request to an endpoint that
           // silently drops the JSON Schema requirement.
           provider: { require_parameters: true },
+          // OpenRouter's response-healing plugin repairs common JSON syntax
+          // defects before the response reaches our strict local validator.
+          // It is supported only for non-streaming structured-output calls.
+          plugins: [{ id: "response-healing" }],
         }
       : {
           tools: input.tools,
           tool_choice: toolChoice,
         }),
-    // A structured automatic stage has exactly one durable artifact. Multiple
-    // simultaneous tool calls would be ambiguous and cannot be committed.
-    ...(input.requiredToolName && !input.structuredOutput
-      ? { parallel_tool_calls: false }
-      : {}),
   };
   const serializedBody = JSON.stringify(requestBody);
   const total = measureSerialized(serializedBody);
@@ -229,10 +228,10 @@ export function buildOpenRouterRequest(input: {
               json_schema: { name: input.structuredOutput.name, strict: true },
             },
             provider: { require_parameters: true },
+            plugins: [{ id: "response-healing" }],
           }
         : {
             tool_choice: toolChoice,
-            ...(input.requiredToolName ? { parallel_tool_calls: false } : {}),
           }),
     }),
   };
@@ -321,10 +320,22 @@ export function parseRetryAfterMs(
   if (!value) return null;
   const seconds = Number(value);
   if (Number.isFinite(seconds) && seconds >= 0)
-    return Math.min(seconds * 1_000, 30_000);
+    return Math.min(seconds * 1_000, 60_000);
   const timestamp = Date.parse(value);
   if (!Number.isFinite(timestamp)) return null;
-  return Math.min(Math.max(0, timestamp - now), 30_000);
+  return Math.min(Math.max(0, timestamp - now), 60_000);
+}
+
+function redactProviderSecrets(value: string): string {
+  return value
+    // Redact the credential itself even when it appears after an
+    // Authorization label or inside a quoted JSON error string.
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]")
+    .replace(/\bsk-or-v1-[A-Za-z0-9_-]+\b/gi, "[REDACTED]")
+    .replace(
+      /(["']?(?:api[_ -]?key|authorization|access[_ -]?token|token|secret)["']?\s*[:=]\s*["']?)[^"'\s,;}]+/gi,
+      "$1[REDACTED]",
+    );
 }
 
 function safeProviderMessage(body: unknown): string | null {
@@ -360,12 +371,7 @@ function safeProviderMessage(body: unknown): string | null {
     candidate = typeof body === "string" ? body : "";
   }
   if (!candidate) return null;
-  return candidate
-    .replace(
-      /(api[_ -]?key|authorization|token|secret)\s*[:=]\s*[^\s,;}]+/gi,
-      "$1=[REDACTED]",
-    )
-    .slice(0, 500);
+  return redactProviderSecrets(candidate).slice(0, 500);
 }
 
 function parseProviderBody(body: unknown): Record<string, any> | null {

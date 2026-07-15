@@ -26,11 +26,9 @@ const forcedOpenRouter = buildOpenRouterRequest({
   tools: [],
   requiredToolName: "set_design_plan",
 });
-assert.deepEqual(forcedOpenRouter.requestBody.tool_choice, {
-  type: "function",
-  function: { name: "set_design_plan" },
-});
-assert.equal(forcedOpenRouter.requestBody.parallel_tool_calls, false);
+assert.equal(forcedOpenRouter.requestBody.tool_choice, "required");
+assert.equal("parallel_tool_calls" in forcedOpenRouter.requestBody, false);
+assert.equal("provider" in forcedOpenRouter.requestBody, false);
 
 const structuredOpenRouter = buildOpenRouterRequest({
   model: "test/model",
@@ -64,6 +62,9 @@ assert.deepEqual(structuredOpenRouter.requestBody.response_format, {
 assert.deepEqual(structuredOpenRouter.requestBody.provider, {
   require_parameters: true,
 });
+assert.deepEqual(structuredOpenRouter.requestBody.plugins, [
+  { id: "response-healing" },
+]);
 assert.equal("tools" in structuredOpenRouter.requestBody, false);
 assert.equal("tool_choice" in structuredOpenRouter.requestBody, false);
 
@@ -130,6 +131,7 @@ for (const trackCount of [2, 4, 10, 25, 100]) {
 }
 
 assert.equal(parseRetryAfterMs("2", 0), 2_000);
+assert.equal(parseRetryAfterMs("90", 0), 60_000);
 assert.equal(parseRetryAfterMs("invalid", 0), null);
 
 const routingAudit = extractOpenRouterRoutingAudit({
@@ -218,5 +220,26 @@ assert.match(
   nestedProviderFailure.message,
   /Tool calling is unavailable for this route/,
 );
+
+const fakeOpenRouterKey = ["sk", "or", "v1", "example", "secret"].join("-");
+const secretBearingProviderFailure = classifyProviderFailure({
+  status: 400,
+  body: {
+    error: {
+      message: "Provider returned error",
+      metadata: {
+        raw: JSON.stringify({
+          error: {
+            message:
+              `Authorization: Bearer ${fakeOpenRouterKey}; api_key="another-secret"`,
+          },
+        }),
+      },
+    },
+  },
+});
+assert.equal(secretBearingProviderFailure.message.includes(fakeOpenRouterKey), false);
+assert.doesNotMatch(secretBearingProviderFailure.message, /another-secret/);
+assert.match(secretBearingProviderFailure.message, /\[REDACTED\]/);
 
 console.log("providerRequest tests passed");

@@ -345,8 +345,10 @@ export async function reviewCandidateAudioWithOpenRouter(
           parameters: z.toJSONSchema(GeminiAudioReviewDecisionSchema),
         },
       }],
-      tool_choice: { type: "function", function: { name: "submit_audio_review" } },
-      parallel_tool_calls: false,
+      // Exactly one tool is exposed, so OpenRouter's broadly supported
+      // "required" mode still forces submit_audio_review without relying on
+      // endpoint-specific named-function forcing.
+      tool_choice: "required",
       max_tokens: 2_000,
     });
     const call = response?.choices?.[0]?.message?.tool_calls?.find(

@@ -501,6 +501,44 @@ try {
   });
   assert.equal(review.idempotent, false);
 
+  const manualReview = await jsonRequest("/api/session/manual-review-required", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": "isolated-human-choice-required",
+    },
+    body: JSON.stringify({
+      sessionId,
+      reason: "The listener must choose the final draft.",
+    }),
+  });
+  assert.equal(manualReview.state.state, "manual_review_required");
+  const manualReviewView = await jsonRequest(`/api/session/${sessionId}/state`);
+  assert.equal(manualReviewView.state.state, "manual_review_required");
+  assert.ok(
+    manualReviewView.state.stateRevision >= manualReview.state.stateRevision,
+    "the refreshed review projection must expose the authoritative revision",
+  );
+
+  const humanApproval = await jsonRequest("/api/session/human-review", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": "isolated-human-approval",
+    },
+    body: JSON.stringify({
+      sessionId,
+      expectedRevision: manualReviewView.state.stateRevision,
+      review: {
+        candidateId: correctedRender.candidate.candidateId,
+        decision: "approved",
+        notes: ["Chosen in the isolated Candidate Review acceptance test."],
+        reviewedAt: "2026-07-13T00:03:00.000Z",
+      },
+    }),
+  });
+  assert.equal(humanApproval.state.state, "finalizing");
+
   const finalizeBody = JSON.stringify({
     sessionId,
     candidateId: correctedRender.candidate.candidateId,

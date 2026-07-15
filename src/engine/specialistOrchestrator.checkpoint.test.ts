@@ -1096,11 +1096,9 @@ globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
     fullWorkflowOpenRouterRequests++;
     const body = JSON.parse(String(init?.body ?? ""));
     if (fullWorkflowOpenRouterRequests === 1) {
-      assert.deepEqual(body.tool_choice, {
-        type: "function",
-        function: { name: "set_design_plan" },
-      });
-      assert.equal(body.parallel_tool_calls, false);
+      assert.equal(body.tool_choice, "required");
+      assert.equal("parallel_tool_calls" in body, false);
+      assert.equal("provider" in body, false);
       return new Response(JSON.stringify({
         error: { message: "Provider returned error" },
       }), { status: 400, headers: { "Content-Type": "application/json" } });
@@ -1115,15 +1113,14 @@ globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
         },
       });
       assert.deepEqual(body.provider, { require_parameters: true });
+      assert.deepEqual(body.plugins, [{ id: "response-healing" }]);
       assert.equal("tools" in body, false);
       assert.equal("tool_choice" in body, false);
       return openRouterJsonArtifact(fullWorkflowPlan);
     }
-    assert.deepEqual(body.tool_choice, {
-      type: "function",
-      function: { name: "set_design_plan" },
-    });
-    assert.equal(body.parallel_tool_calls, false);
+    assert.equal(body.tool_choice, "required");
+    assert.equal("parallel_tool_calls" in body, false);
+    assert.equal("provider" in body, false);
     return openRouterToolCall(
       "openrouter-arrangement-comparison",
       "set_design_plan",

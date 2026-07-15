@@ -53,7 +53,7 @@ export async function runOpenRouterPreflight(input: {
         Authorization: `Bearer ${input.apiKey}`,
         "Content-Type": "application/json",
         "HTTP-Referer": input.referer,
-        "X-Title": "AI Medley Architect",
+        "X-OpenRouter-Title": "AI Medley Architect",
       },
       body: JSON.stringify({
         model: OPENROUTER_PREFLIGHT_MODEL,

@@ -29,7 +29,19 @@ function isFreeToolModel(model: OpenRouterModel): model is {
   );
 }
 
-async function getLiveFreeToolModel() {
+function isFreeStructuredModel(model: OpenRouterModel): model is {
+  id: string;
+  supported_parameters: string[];
+} {
+  return (
+    typeof model.id === "string" &&
+    model.id.endsWith(":free") &&
+    Array.isArray(model.supported_parameters) &&
+    model.supported_parameters.includes("structured_outputs")
+  );
+}
+
+async function getLiveFreeToolModels() {
   const requested = process.env.OPENROUTER_LIVE_TEST_MODEL?.trim();
   if (requested) {
     assert.match(
@@ -44,16 +56,43 @@ async function getLiveFreeToolModel() {
   assert.equal(response.ok, true, `OpenRouter model catalog failed (${response.status})`);
   const payload = await response.json() as { data?: OpenRouterModel[] };
   const models = Array.isArray(payload.data) ? payload.data : [];
-  const model = requested
-    ? models.find((item) => item.id === requested && isFreeToolModel(item))
-    : models.find(isFreeToolModel);
+  const matching = requested
+    ? models.filter((item) => item.id === requested && isFreeToolModel(item))
+    : models.filter(isFreeToolModel);
   assert.ok(
-    model,
+    matching.length,
     requested
       ? `Configured live test model is not currently a free tool-calling model: ${requested}`
       : "OpenRouter currently lists no free model with tool-calling support",
   );
-  return model.id;
+  return matching.slice(0, 10).map((model) => model.id as string);
+}
+
+async function getLiveFreeStructuredModels() {
+  const requested = process.env.OPENROUTER_LIVE_STRUCTURED_TEST_MODEL?.trim();
+  if (requested) {
+    assert.match(
+      requested,
+      /:free$/,
+      "OPENROUTER_LIVE_STRUCTURED_TEST_MODEL must end in :free so this test cannot spend credits",
+    );
+  }
+  const response = await fetch(
+    "https://openrouter.ai/api/v1/models?supported_parameters=structured_outputs&output_modalities=text&sort=throughput-high-to-low",
+  );
+  assert.equal(response.ok, true, `OpenRouter model catalog failed (${response.status})`);
+  const payload = await response.json() as { data?: OpenRouterModel[] };
+  const models = Array.isArray(payload.data) ? payload.data : [];
+  const matching = requested
+    ? models.filter((item) => item.id === requested && isFreeStructuredModel(item))
+    : models.filter(isFreeStructuredModel);
+  assert.ok(
+    matching.length,
+    requested
+      ? `Configured live test model is not currently a free structured-output model: ${requested}`
+      : "OpenRouter currently lists no free model with structured-output support",
+  );
+  return matching.slice(0, 10).map((model) => model.id as string);
 }
 
 async function waitForServer() {
@@ -90,27 +129,31 @@ server.stdout.on("data", (chunk) => (serverOutput += String(chunk)));
 server.stderr.on("data", (chunk) => (serverOutput += String(chunk)));
 
 try {
-  const model = await getLiveFreeToolModel();
+  const toolModels = await getLiveFreeToolModels();
+  const structuredModels = await getLiveFreeStructuredModels();
   await waitForServer();
-  const response = await fetch(`${baseUrl}/api/provider/openrouter`, {
-    method: "POST",
-    headers: { "Content-Type": "text/plain" },
-    body: JSON.stringify({
-      model,
-      temperature: 0,
-      messages: [
-        {
-          role: "system",
-          content:
-            "This is an integration test. Call the required function exactly once. Do not write normal text.",
-        },
-        {
-          role: "user",
-          content: "Report that the OpenRouter free-model tool contract passed.",
-        },
-      ],
-      tools: [
-        {
+  let model = "";
+  let payload: any = null;
+  const toolFailures: string[] = [];
+  for (const candidateModel of toolModels) {
+    const response = await fetch(`${baseUrl}/api/provider/openrouter`, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: JSON.stringify({
+        model: candidateModel,
+        temperature: 0,
+        messages: [
+          {
+            role: "system",
+            content:
+              "This is an integration test. Call the required function exactly once. Do not write normal text.",
+          },
+          {
+            role: "user",
+            content: "Report that the OpenRouter free-model tool contract passed.",
+          },
+        ],
+        tools: [{
           type: "function",
           function: {
             name: "report_openrouter_contract",
@@ -118,41 +161,95 @@ try {
             parameters: {
               type: "object",
               additionalProperties: false,
-              properties: {
-                status: { type: "string", enum: ["pass"] },
-              },
+              properties: { status: { type: "string", enum: ["pass"] } },
               required: ["status"],
             },
           },
-        },
-      ],
-      tool_choice: {
-        type: "function",
-        function: { name: "report_openrouter_contract" },
-      },
-      parallel_tool_calls: false,
-      max_tokens: 128,
-    }),
-  });
-  const payload = await response.json().catch(() => ({}));
-  assert.equal(
-    response.ok,
-    true,
-    `Live free OpenRouter request failed (${response.status}): ${String(payload?.error ?? "unknown error").slice(0, 500)}`,
+        }],
+        tool_choice: "required",
+        max_tokens: 128,
+      }),
+    });
+    const candidatePayload: any = await response.json().catch(() => ({}));
+    const toolCall = candidatePayload?.choices?.[0]?.message?.tool_calls?.find(
+      (item: any) => item?.function?.name === "report_openrouter_contract",
+    );
+    let args: unknown = null;
+    try {
+      args = toolCall
+        ? JSON.parse(String(toolCall.function.arguments ?? "{}"))
+        : null;
+    } catch {}
+    if (response.ok && toolCall && JSON.stringify(args) === '{"status":"pass"}') {
+      model = candidateModel;
+      payload = candidatePayload;
+      break;
+    }
+    toolFailures.push(
+      `${candidateModel} (${response.status}): ${JSON.stringify(candidatePayload?.error ?? "invalid tool result").slice(0, 240)}`,
+    );
+  }
+  assert.ok(
+    model,
+    `No catalog-listed free model completed the required tool contract: ${toolFailures.join(" | ")}`,
   );
-  const toolCall = payload?.choices?.[0]?.message?.tool_calls?.find(
-    (item: any) => item?.function?.name === "report_openrouter_contract",
-  );
-  assert.ok(toolCall, "Live free model did not return the required tool call");
-  const args = JSON.parse(String(toolCall.function.arguments ?? "{}"));
-  assert.deepEqual(args, { status: "pass" });
   const routing = payload?.openrouter_metadata;
   assert.ok(
     routing && typeof routing === "object",
     "OpenRouter routing metadata was not returned by the server proxy",
   );
+
+  let structuredModel = "";
+  const structuredFailures: string[] = [];
+  for (const candidateModel of structuredModels) {
+    const response = await fetch(`${baseUrl}/api/provider/openrouter`, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: JSON.stringify({
+        model: candidateModel,
+        temperature: 0,
+        messages: [{
+          role: "user",
+          content: "Return the fixed integration-test status.",
+        }],
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "report_structured_contract",
+            strict: true,
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              properties: { status: { type: "string", enum: ["pass"] } },
+              required: ["status"],
+            },
+          },
+        },
+        provider: { require_parameters: true },
+        plugins: [{ id: "response-healing" }],
+        max_tokens: 128,
+      }),
+    });
+    const candidatePayload: any = await response.json().catch(() => ({}));
+    const content = String(candidatePayload?.choices?.[0]?.message?.content ?? "");
+    let parsed: unknown = null;
+    try {
+      parsed = JSON.parse(content);
+    } catch {}
+    if (response.ok && JSON.stringify(parsed) === '{"status":"pass"}') {
+      structuredModel = candidateModel;
+      break;
+    }
+    structuredFailures.push(
+      `${candidateModel} (${response.status}): ${JSON.stringify(candidatePayload?.error ?? "invalid structured result").slice(0, 240)}`,
+    );
+  }
+  assert.ok(
+    structuredModel,
+    `No catalog-listed free model completed the structured-output contract: ${structuredFailures.join(" | ")}`,
+  );
   console.log(
-    `openRouterFreeLive passed using ${model}; routing attempt ${routing.attempt ?? "unknown"}: ${String(routing.summary ?? "no summary").slice(0, 240)}`,
+    `openRouterFreeLive passed tool=${model}, structured=${structuredModel}; routing attempt ${routing.attempt ?? "unknown"}: ${String(routing.summary ?? "no summary").slice(0, 240)}`,
   );
 } finally {
   if (server.exitCode === null) server.kill("SIGTERM");

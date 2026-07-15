@@ -1368,7 +1368,7 @@ app.post(
           Authorization: `Bearer ${openrouterApiKey}`,
           "Content-Type": "application/json",
           "HTTP-Referer": `http://${HOST}:${PORT}`,
-          "X-Title": "AI Medley Architect",
+          "X-OpenRouter-Title": "AI Medley Architect",
           "X-OpenRouter-Metadata": "enabled",
         },
         body: String(req.body || ""),
@@ -1515,7 +1515,7 @@ app.post("/api/session/audio-review", async (req, res) => {
               Authorization: `Bearer ${openrouterApiKey}`,
               "Content-Type": "application/json",
               "HTTP-Referer": `http://${HOST}:${PORT}`,
-              "X-Title": "AI Medley Architect",
+              "X-OpenRouter-Title": "AI Medley Architect",
               "X-OpenRouter-Metadata": "enabled",
             },
             body: JSON.stringify(body),
@@ -3040,14 +3040,10 @@ app.post("/api/session/manual-review-required", async (req, res) => {
         if (state.state === "manual_review_required") {
           return { success: true, state, alreadyRequired: true };
         }
-        if ([
-            "technical_review",
-            "musical_review",
-            "generating_options",
-            "correcting",
-        ].includes(state.state)) {
-          throw new Error(`Manual review cannot be entered while session state is ${state.state}`);
-        }
+        // The authoritative transition matrix already defines which states
+        // may enter human review. Do not contradict it here: technical review,
+        // musical review, option generation, and correction are precisely the
+        // recoverable boundaries where a preserved draft must remain usable.
         const next = transitionAutomaticSessionState({
           workDir,
           sessionId,

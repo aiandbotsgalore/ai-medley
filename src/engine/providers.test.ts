@@ -57,6 +57,7 @@ assert.equal(result.text, "ok");
 assert.equal(attempts, 2);
 assert.equal(bodies[0], bodies[1], "transport retry must reuse the exact body");
 assert.equal(requestHeaders[0].get("X-OpenRouter-Metadata"), "enabled");
+assert.equal(requestHeaders[0].get("X-OpenRouter-Title"), "AI Medley Architect");
 assert.deepEqual(successfulAudits.at(-1)?.routing, {
   strategy: "fallback",
   summary: "available=2, selected=Provider B",
@@ -67,6 +68,44 @@ assert.deepEqual(
   session.getHistory().map((message: any) => message.role),
   ["user", "assistant"],
 );
+
+let unavailableAttempts = 0;
+const unavailableBodies: string[] = [];
+globalAny.fetch = async (_url: string, init: RequestInit) => {
+  unavailableAttempts++;
+  unavailableBodies.push(String(init.body));
+  if (unavailableAttempts === 1)
+    return response(503, { error: { message: "temporarily unavailable" } }, { "Retry-After": "0" });
+  return response(200, {
+    choices: [{ message: { role: "assistant", content: "recovered" } }],
+  });
+};
+const temporarilyUnavailable = createProviderSession(config, "system", [], 0.1);
+assert.equal((await temporarilyUnavailable.send("retry once")).text, "recovered");
+assert.equal(unavailableAttempts, 2);
+assert.equal(
+  unavailableBodies[0],
+  unavailableBodies[1],
+  "503 transport retry must reuse the exact body",
+);
+
+let exhaustedUnavailableAttempts = 0;
+globalAny.fetch = async () => {
+  exhaustedUnavailableAttempts++;
+  return response(
+    503,
+    { error: { message: "still temporarily unavailable" } },
+    { "Retry-After": "0" },
+  );
+};
+const exhaustedUnavailable = createProviderSession(config, "system", [], 0.1);
+await assert.rejects(
+  exhaustedUnavailable.send("stop after one retry"),
+  (error: unknown) =>
+    error instanceof ProviderRequestError && error.category === "server",
+);
+assert.equal(exhaustedUnavailableAttempts, 2, "503 retry budget must remain bounded");
+assert.deepEqual(exhaustedUnavailable.getHistory(), []);
 
 globalAny.fetch = async () =>
   response(401, {
@@ -283,11 +322,9 @@ const forcedOpenRouter = createProviderSession(
 );
 await forcedOpenRouter.send("produce the arrangement");
 const forcedOpenRouterBody = JSON.parse(String(proxyRequest!.init.body));
-assert.deepEqual(forcedOpenRouterBody.tool_choice, {
-  type: "function",
-  function: { name: "set_design_plan" },
-});
-assert.equal(forcedOpenRouterBody.parallel_tool_calls, false);
+assert.equal(forcedOpenRouterBody.tool_choice, "required");
+assert.equal("parallel_tool_calls" in forcedOpenRouterBody, false);
+assert.equal("provider" in forcedOpenRouterBody, false);
 
 globalAny.fetch = async () =>
   response(400, { error: "Invalid tool schema: api_key=secret-value" });

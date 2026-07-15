@@ -181,7 +181,7 @@ async function fetchOpenRouter(
             ? {}
             : {
                 "HTTP-Referer": window.location.origin,
-                "X-Title": "AI Medley Architect",
+                "X-OpenRouter-Title": "AI Medley Architect",
                 [OPENROUTER_ROUTING_METADATA_HEADER]: OPENROUTER_ROUTING_METADATA_VALUE,
               }),
         },
@@ -211,7 +211,7 @@ async function fetchOpenRouter(
       body: text,
       retryAfter: response.headers.get("Retry-After"),
     });
-    if (response.status === 429 && attempt === 0) {
+    if ((response.status === 429 || response.status === 503) && attempt === 0) {
       await new Promise<void>((resolve, reject) => {
         const timer = window.setTimeout(() => {
           signal?.removeEventListener("abort", abort);

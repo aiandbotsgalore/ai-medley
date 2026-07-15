@@ -148,7 +148,9 @@ assert.equal(openRouterDecision.approved, true);
 assert.equal(openRouterRequest.model, "google/gemini-3.1-pro-preview");
 assert.equal(openRouterRequest.messages[0].content[1].type, "input_audio");
 assert.equal(openRouterRequest.messages[0].content[1].input_audio.format, "mp3");
-assert.equal(openRouterRequest.tool_choice.function.name, "submit_audio_review");
+assert.equal(openRouterRequest.tool_choice, "required");
+assert.equal("provider" in openRouterRequest, false);
+assert.equal("parallel_tool_calls" in openRouterRequest, false);
 
 await assert.rejects(
   () => reviewCandidateAudioWithOpenRouter({
