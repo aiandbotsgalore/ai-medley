@@ -337,6 +337,25 @@ function safeProviderMessage(body: unknown): string | null {
         (parsed as any)?.message ??
         "",
     );
+    const rawProviderDetail = providerError?.metadata?.raw;
+    if (
+      candidate.toLowerCase() === "provider returned error" &&
+      typeof rawProviderDetail === "string"
+    ) {
+      try {
+        const nested = JSON.parse(rawProviderDetail);
+        const nestedError = nested?.error;
+        const nestedMessage = String(
+          (typeof nestedError === "string" ? nestedError : nestedError?.message) ??
+            nested?.message ??
+            "",
+        ).trim();
+        if (nestedMessage) candidate = `${candidate}: ${nestedMessage}`;
+      } catch {
+        const boundedRaw = rawProviderDetail.replace(/\s+/g, " ").trim();
+        if (boundedRaw) candidate = `${candidate}: ${boundedRaw}`;
+      }
+    }
   } catch {
     candidate = typeof body === "string" ? body : "";
   }

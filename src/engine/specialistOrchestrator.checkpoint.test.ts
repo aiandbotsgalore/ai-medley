@@ -1102,8 +1102,8 @@ globalThis.fetch = (async (url: RequestInfo | URL, init?: RequestInit) => {
       });
       assert.equal(body.parallel_tool_calls, false);
       return new Response(JSON.stringify({
-        choices: [{ message: { role: "assistant", content: "" } }],
-      }), { status: 200, headers: { "Content-Type": "application/json" } });
+        error: { message: "Provider returned error" },
+      }), { status: 400, headers: { "Content-Type": "application/json" } });
     }
     if (fullWorkflowOpenRouterRequests === 2) {
       assert.deepEqual(body.response_format, {

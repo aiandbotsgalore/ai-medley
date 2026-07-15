@@ -632,6 +632,31 @@ async function requestStructuredArtifact<T>(
     let repairAttempt = 0;
     let usedStructuredOutputFallback = false;
     let message = prompt;
+    const sendStructuredOutput = async (currentMessage: string, currentRepairAttempt: number) => {
+      usedStructuredOutputFallback = true;
+      const structuredSession = createProviderSession(
+        { ...config, provider, model },
+        systemInstruction,
+        tools,
+        0.1,
+        [],
+        {
+          stage: options.stage,
+          role,
+          structuredOutput: {
+            name: toolName,
+            schema: z.toJSONSchema(schema),
+          },
+          onRequestAudit: options.onRequestAudit,
+        },
+      );
+      return structuredSession.send(currentMessage, {
+        signal,
+        requestId: `${options.sessionId}:${options.stage}:${model}:${currentRepairAttempt}:json-schema`,
+        timeoutMs: PROVIDER_REQUEST_TIMEOUT_MS,
+        messageCategory: currentRepairAttempt ? "repairErrors" : "stageData",
+      });
+    };
     while (repairAttempt <= 1) {
       try {
         const session = createProviderSession(
@@ -649,12 +674,21 @@ async function requestStructuredArtifact<T>(
             onRequestAudit: options.onRequestAudit,
           },
         );
-        const result = await session.send(message, {
-          signal,
-          requestId: `${options.sessionId}:${options.stage}:${model}:${repairAttempt}`,
-          timeoutMs: PROVIDER_REQUEST_TIMEOUT_MS,
-          messageCategory: repairAttempt ? "repairErrors" : "stageData",
-        });
+        let result;
+        try {
+          result = await session.send(message, {
+            signal,
+            requestId: `${options.sessionId}:${options.stage}:${model}:${repairAttempt}`,
+            timeoutMs: PROVIDER_REQUEST_TIMEOUT_MS,
+            messageCategory: repairAttempt ? "repairErrors" : "stageData",
+          });
+        } catch (error: any) {
+          if (error?.status !== 400 || usedStructuredOutputFallback) throw error;
+          onLog(
+            `Specialist ${role}: ${model} rejected the tool-call request. Retrying once with OpenRouter strict JSON Schema output.`,
+          );
+          result = await sendStructuredOutput(message, repairAttempt);
+        }
         assertActive(signal);
         let call = result.functionCalls?.find(
           (item) => item.name === toolName,
@@ -663,32 +697,10 @@ async function requestStructuredArtifact<T>(
           ? null
           : extractStructuredArtifactFromText(result.text ?? "", toolName);
         if (!call && textArtifact === null && !usedStructuredOutputFallback) {
-          usedStructuredOutputFallback = true;
           onLog(
             `Specialist ${role}: ${model} returned no ${toolName} tool call. Retrying once with OpenRouter strict JSON Schema output.`,
           );
-          const structuredSession = createProviderSession(
-            { ...config, provider, model },
-            systemInstruction,
-            tools,
-            0.1,
-            [],
-            {
-              stage: options.stage,
-              role,
-              structuredOutput: {
-                name: toolName,
-                schema: z.toJSONSchema(schema),
-              },
-              onRequestAudit: options.onRequestAudit,
-            },
-          );
-          const structuredResult = await structuredSession.send(message, {
-            signal,
-            requestId: `${options.sessionId}:${options.stage}:${model}:${repairAttempt}:json-schema`,
-            timeoutMs: PROVIDER_REQUEST_TIMEOUT_MS,
-            messageCategory: repairAttempt ? "repairErrors" : "stageData",
-          });
+          const structuredResult = await sendStructuredOutput(message, repairAttempt);
           call = structuredResult.functionCalls?.find(
             (item) => item.name === toolName,
           );

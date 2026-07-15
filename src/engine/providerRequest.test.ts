@@ -201,4 +201,22 @@ assert.equal(openRouterFailure.providerErrorType, "rate_limit_exceeded");
 assert.equal(openRouterFailure.providerCode, "upstream_429");
 assert.equal(openRouterFailure.routing?.attempt, 2);
 
+const nestedProviderFailure = classifyProviderFailure({
+  status: 400,
+  body: {
+    error: {
+      message: "Provider returned error",
+      metadata: {
+        raw: JSON.stringify({
+          error: { message: "Tool calling is unavailable for this route" },
+        }),
+      },
+    },
+  },
+});
+assert.match(
+  nestedProviderFailure.message,
+  /Tool calling is unavailable for this route/,
+);
+
 console.log("providerRequest tests passed");
