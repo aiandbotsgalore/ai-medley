@@ -1,5 +1,10 @@
 # Complete Stabilization Audit Progress Ledger
 
+> **Historical audit — not current instructions.** This is the dated progress
+> record for the 2026-07-03 stabilization audit. Current behavior and current
+> work are defined by `docs/current-operations.md`, `AGENTS.md`, and
+> `task_plan.md`.
+
 Date: 2026-07-03  
 Repository: `G:\ai-medley--main`  
 Branch: `payload-optimization`  

@@ -1,7 +1,7 @@
 # Archived Task Plan History Through 2026-07-11
 
 This file is historical evidence, not the active plan. The current Git state
-and release proposal are documented in the root `task_plan.md`. Statements
+and active execution ledger are documented in the root `task_plan.md`. Statements
 below describe the state when written unless a later note supersedes them.
 
 ## End-to-end medley workflow audit — 2026-07-11

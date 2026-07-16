@@ -1,5 +1,10 @@
 # AI Medley: Four-Feature Improvements Implementation Plan
 
+> **Historical plan — do not execute.** Retained for provenance. Current
+> workflow and active work are defined by `docs/current-operations.md`,
+> `AGENTS.md`, and `task_plan.md`; old model and provider instructions below are
+> superseded.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Implement four improvements: default model upgrade to gemini-2.5-pro, session checkpoint/resume, in-progress audio preview, and beat/key-aware FFmpeg crossfades.

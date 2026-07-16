@@ -1,12 +1,19 @@
 flowchart TD
   Start[Automatic v4 session] --> Local[Local analysis and deterministic design]
-  Local --> Arrangement[Constrained arrangement decision]
+  Local --> Arrangement[OpenRouter chooses from authoritative candidates]
   Arrangement -->|valid authoritative plan| Compile[Compile and execute]
-  Arrangement -->|invalid or no permitted correction| Manual[manual_review_required]
+  Arrangement -->|provider or validation failure| Choice[Retry AI, change model, or cancel]
   Compile --> Technical{Technical gate passes?}
-  Technical -->|no| Correct[Targeted permitted correction]
-  Technical -->|yes| Musical{Musical review approves?}
+  Technical -->|no| Review[Candidate Review with preserved draft]
+  Technical -->|yes| Musical{OpenRouter recommends this mix?}
   Musical -->|no| Correct
-  Musical -->|yes| Promote[Promote selected candidate]
-  Correct -->|limit reached| Manual
+  Musical -->|yes| Options{Distinct option safely available?}
+  Options -->|yes| Arrangement
+  Options -->|no or limit reached| Review
+  Correct -->|limit reached or no safe preset| Review
   Correct -->|allowed| Compile
+  Review --> Human{Human selects a valid draft?}
+  Human -->|yes| Approve[Append human approval]
+  Human -->|request correction| Correct
+  Human -->|cancel| Cancelled[Cancelled]
+  Approve --> Promote[Verify and promote selected candidate]

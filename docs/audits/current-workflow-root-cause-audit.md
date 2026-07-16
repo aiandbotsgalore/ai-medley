@@ -1,5 +1,11 @@
 # Current Workflow Root-Cause Audit
 
+> **Historical audit — despite the filename, this is not the current workflow.**
+> It records the 2026-06-23 repository state at commit `546287cf`. Current
+> behavior is defined by `docs/current-operations.md`, `AGENTS.md`, and
+> `task_plan.md`; do not execute old provider, model, or finalization steps from
+> this audit.
+
 Date: 2026-06-23
 Repository: `G:\ai-medley--main`
 Branch: `payload-optimization`

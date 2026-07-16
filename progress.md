@@ -1,4 +1,71 @@
-# Progress: Provider API Key Settings
+# AI Medley Architect Progress
+
+## 2026-07-15 — Repository-wide documentation alignment started
+
+- User requested that every project document be brought current.
+- Ran a read-only inventory of all Markdown, Mermaid, and text documentation.
+- Classified active contracts, chronological ledgers, historical plans/audits,
+  incident reports, experiments, and generated repository snapshots.
+- Confirmed active semantic drift in `CLAUDE.md`, architecture diagrams,
+  `task_plan.md`, acceptance wording, and historical-looking verification files.
+- Replaced the stale active task ledger with this documentation-alignment phase.
+- No protected audio, session, manifest, candidate, final, history, wisdom,
+  checkpoint, environment, or provider-payload audit artifact was read or changed.
+- Documentation inventory attempt 1 used an invalid PowerShell pipeline after a
+  `foreach` statement and failed before reading or writing files. The follow-up
+  uses an explicit results array instead of repeating that syntax.
+- The corrected inventory classified 39 tracked documentation files and four
+  untracked local artifacts. Historical plans/audits will keep their dated
+  claims; active contracts, diagrams, ledgers, and experiment indexes will be
+  corrected, while untracked generated/history files will not be staged.
+- Reviewed the complete active plans, plan index, README, audit headers, and
+  payload-experiment directory. Established a banner/addendum strategy that
+  keeps historical facts intact while preventing old instructions from being
+  mistaken for current behavior.
+- Updated the current README and CLAUDE guide, the Automatic v4 visual guide,
+  all three workflow diagrams, the plan index, Candidate Review acceptance
+  wording, and the Master Plan superseding rules. They now agree that Automatic
+  mode uses OpenRouter only, rendering is local and deterministic, candidates
+  are immutable, AI review is advisory, and a human must choose before final
+  promotion.
+- Compared the Master Plan transition matrix with
+  `src/server/automaticSessionState.ts`; the documented `generating_options`
+  and human-review path now match the enforced server states.
+- Added a historical audit index and explicit non-authoritative banners to all
+  dated audits and old imperative plans without altering their recorded facts.
+- Converted the payload-optimization directory from a misleading active plan
+  into a completed experiment archive and added the current 12-request payload
+  measurement summary to the historical verification report.
+- Marked the four pre-existing untracked chat/verification/repository snapshots
+  as stale local history. They remain untracked and will not be included in the
+  documentation commit.
+- Replaced the destructive tracked `clean-workdir` skill instructions with a
+  read-only protected-storage audit contract and extended the FFmpeg reviewer
+  to enforce no-overwrite, decode/probe/hash verification, and protected input
+  safety.
+- The repository-wide relative documentation link check passed for all 45
+  tracked/current Markdown and Mermaid files.
+- `npm test` passed the complete mocked suite, including the 12-request payload
+  audit and documentation contract. `npm run test:e2e` also passed in its
+  isolated temporary root; as designed, it made one live audio-review call to
+  catalog-listed `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free` using only
+  generated tones. No paid model, source track, library, or repository workdir
+  data was used.
+- Updated the command documentation to distinguish the mocked core gate from
+  the two deliberately live, free-only synthetic integration scripts.
+- `npm run test:openrouter-free-live` passed with catalog-listed free models:
+  tool calling used `nvidia/nemotron-3-nano-30b-a3b:free` and strict structured
+  output used `tencent/hy3:free`. The gate used only generated prompts and an
+  isolated temporary application root.
+- The first final source-comparison helper used the overly exact phrase
+  `a human must choose`; `AGENTS.md` correctly says `A person must choose`.
+  The helper failed without changing files and was corrected to assert the
+  actual contract wording.
+- Final gates passed: release documentation contract, TypeScript, complete
+  mocked `npm test`, isolated synthetic/free-model end-to-end, free-only tool
+  and structured-output integration, all relative links, Mermaid structure,
+  provider/model/state source comparisons, `git diff --check`, credential
+  pattern scan, and protected-path diff scan.
 
 ## 2026-07-14 — Candidate Review Experience
 
@@ -569,8 +636,10 @@
   displayed with review evidence and local paths, A/B switching changed the
   shared player, Draft 2 finalized, restart restored both drafts and the verified
   final, and browser error logs were empty.
-- Root `npm test` passed every code/mocked/payload test, then reached the known
-  release-contract mismatch caused by the unrelated user-edited `AGENTS.md`.
+- Root `npm test` passed every code/mocked/payload test, then reached the
+  then-known release-contract mismatch while user-edited `AGENTS.md` was being
+  preserved outside that implementation scope. The 2026-07-15 aligned contract
+  now passes.
   The exact complete suite passed in a disposable repository copy using the
   committed guide: `npm run test:full`, including release contract, synthetic
   FFmpeg render/correction/finalization, and only current OpenRouter `:free`

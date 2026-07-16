@@ -1,5 +1,23 @@
 # Provider Payload Verification
 
+> **Historical verification report — not current operating instructions.** The
+> detailed 117-request and live-session tables below describe the provider
+> architecture measured on 2026-06-14. Current Automatic v4 behavior is defined
+> by `docs/current-operations.md`; it has no context-brief or production-model
+> provider calls.
+
+## Current status — 2026-07-15
+
+- `src/engine/providerPayloadAudit.test.ts` audits all 12 current arrangement
+  and musical-review request shapes using mocked providers.
+- The latest largest measurement is 12,187 bytes / 4,056 estimated tokens for
+  `maximum-4-track arrangement_repair`; `repairErrors` is the largest component
+  at 9,445 bytes.
+- The automated audit writes only to an isolated operating-system temporary
+  data root. The protected historical file under `workdir/` is not regenerated.
+- The historical live-run tables below are retained as evidence and must not be
+  interpreted as the current provider roster or workflow.
+
 Date: 2026-06-14
 
 ## Limits

@@ -1,9 +1,19 @@
 ---
 name: clean-workdir
-description: Delete all FFmpeg session temp files from workdir/ to free disk space
+description: Audit FFmpeg session storage without deleting protected workdir data
 disable-model-invocation: true
 ---
 
-Remove all subdirectories in G:/ai-medley--main/workdir/ but keep the workdir/ folder itself.
-Run: Remove-Item "G:/ai-medley--main/workdir/\*" -Recurse -Force
-Report how many session folders were deleted and total MB freed.
+`workdir/` is protected user data. Never bulk-delete, clean, reset, migrate, or
+regenerate it. This skill is read-only.
+
+When asked to clean `workdir/`:
+
+1. Report that automatic cleanup is disabled to protect candidates, manifests,
+   checkpoints, recovery sidecars, finals, and unfinished sessions.
+2. Perform only a read-only inventory when the user asks for one.
+3. Do not delete anything unless a separate, explicit user-authorized cleanup
+   policy identifies exact files and the application proves each file is owned
+   by the same session, execution generation, and cancelled operation and is not
+   registered in a manifest or recovery sidecar.
+4. Never use recursive wildcard deletion against `workdir/`.

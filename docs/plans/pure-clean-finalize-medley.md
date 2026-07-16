@@ -1,5 +1,9 @@
 # Pure Clean Finalize Medley – Architecture Plan
 
+> **Historical plan — do not execute.** Its “ongoing” status is preserved as a
+> dated May 2026 record, not a current status. Current workflow and active work
+> are defined by `docs/current-operations.md`, `AGENTS.md`, and `task_plan.md`.
+
 **Date:** 2026-05 (ongoing)
 **Status:** In discussion / early implementation
 **Goal:** Eliminate intermittent silent gaps during transitions by moving to a high-quality single-pass render for the final medley output.

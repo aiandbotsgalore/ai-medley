@@ -1,5 +1,9 @@
 # Cancel + History + Library Preview Implementation Plan
 
+> **Historical plan — do not execute.** Retained for provenance. Current
+> workflow and active work are defined by `docs/current-operations.md`,
+> `AGENTS.md`, and `task_plan.md`; imperative instructions below are superseded.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Add three features: a cancel button for running sessions, a history browser tab, and shared-audio library preview with canvas waveforms.

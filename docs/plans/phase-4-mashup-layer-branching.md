@@ -1,5 +1,10 @@
 # Phase 4: Mashup Layer Branching in Final Render
 
+> **Historical plan — do not execute.** Its “Starting implementation” status is
+> preserved as a dated May 2026 record, not a current status. Current workflow
+> and active work are defined by `docs/current-operations.md`, `AGENTS.md`, and
+> `task_plan.md`.
+
 **Date:** 2026-05
 **Status:** Starting implementation
 **Phase:** Moving beyond pure-sequential MVP

@@ -3,7 +3,8 @@
 Status: open; reboot required
 
 This operating-system task is unrelated to AI Medley Architect and was moved
-out of the project plan.
+out of the project plan. It is not a medley release gate and must not be mixed
+into AI Medley implementation or verification work.
 
 ## Known state
 

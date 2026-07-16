@@ -1,5 +1,9 @@
 # Iteration Counter + Pre-Analysis Pipeline Implementation Plan
 
+> **Historical plan — do not execute.** Retained for provenance. Current
+> workflow and active work are defined by `docs/current-operations.md`,
+> `AGENTS.md`, and `task_plan.md`; imperative instructions below are superseded.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Surface loop progress to the user (Task 3) and pre-analyze all unanalyzed library tracks before the autonomous loop starts so the AI can skip Phase 1 and spend more iterations on medley construction (Task 5).

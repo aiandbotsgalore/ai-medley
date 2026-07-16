@@ -1,4 +1,79 @@
-# Findings: Provider API Key Settings
+# AI Medley Architect Findings
+
+## 2026-07-15 — Repository-wide documentation audit
+
+> Current reconciliation note: the active-document defects listed below were
+> the audit inputs. `README.md`, `CLAUDE.md`, the architecture guide and
+> diagrams, the plan index, Candidate Review acceptance wording, and the Master
+> Plan superseding rules have now been corrected in the working tree. The
+> remaining work is historical labeling, payload-experiment archival, and
+> verification.
+
+- The tracked `.claude/skills/clean-workdir/SKILL.md` was an active safety
+  contradiction: it instructed recursive deletion of every `workdir/` session.
+  It is now a read-only audit skill and explicitly forbids wildcard deletion.
+- All relative Markdown links resolve across the 45 tracked/current Markdown
+  and Mermaid files. Historical references remain available without becoming
+  active instructions.
+- `npm run test:e2e` is deliberately not a mocked-only command: it discovers a
+  catalog-listed OpenRouter audio/tool model whose ID ends in `:free`, generates
+  isolated tone fixtures, and performs the audio-review acceptance call. The
+  active command documentation now states this explicitly so operators know
+  exactly which test scripts access the network.
+- The final tracked change set is documentation/instruction material only. It
+  changes no application source, dependency, build output, environment file,
+  library/workdir artifact, candidate, manifest, final, history, wisdom,
+  checkpoint, or protected provider-payload audit artifact.
+
+- `AGENTS.md` and `docs/current-operations.md` now describe the current
+  OpenRouter-only Automatic v4 route, bounded provider recovery, immutable
+  candidates, mandatory human selection, and verified final promotion.
+- At audit start, `CLAUDE.md` incorrectly said Automatic mode used Gemini
+  Direct; it is corrected in the current working tree.
+- At audit start, the architecture guide and `end-to-end-workflow.mmd` /
+  `decision-process.mmd` allowed musical AI approval to flow directly into
+  promotion; they now require the human choice.
+- At audit start, `task_plan.md` claimed `AGENTS.md` and `.planning/` were
+  uncommitted and instructed publishing an already-published implementation
+  commit; the ledger has been replaced with the current documentation phase.
+- The completed Master Plan's original mocked happy path ends at AI musical
+  approval; a dated superseding rule is needed so historical phase text remains
+  intact while current acceptance always requires human approval.
+- `final_verification.md` and `provider-payload-verification.md` describe
+  specific historical sessions and obsolete provider roles but are not clearly
+  labeled as historical evidence.
+- `repo-context.txt`, `repomix-output.txt`, and `payload-optimization/` documents
+  are generated/experimental snapshots containing old Gemini 2.5, context,
+  production-specialist, automatic-finalization, and retry descriptions.
+- Dated files under `docs/plans/`, `docs/audits/`, `.aider.chat.history.md`, and
+  `.planning/debug/` must preserve their original facts. They need clear
+  non-authoritative labeling/indexing, not factual rewriting.
+- `README.md` and `docs/api-routes.md` are broadly current; the route inventory
+  remains contract-tested.
+- `docs/plans/README.md` already classified dated plans as historical; its stale
+  root-ledger description has now been corrected.
+- `docs/plans/candidate-review-experience-plan.md` is complete. Its acceptance
+  criterion now requires explicit human selection after AI recommendation.
+- The Master Plan is a completed foundation record. Its original transition
+  matrix and mocked happy path predate `generating_options` and mandatory human
+  choice; a superseding implementation addendum should be added without
+  rewriting the original phase record.
+- `payload-optimization/PLAN.md` and `README.md` incorrectly say the old payload
+  experiment is active/awaiting instrumentation. Two experiment files contain
+  only `PLACEHOLDER`; the directory should become a clearly completed archive.
+- `.aider.chat.history.md`, `repo-context.txt`, `repomix-output.txt`, and
+  `final_verification.md` are untracked local historical/generated artifacts.
+  They should receive unmistakable local headers where safe, but should not be
+  added to Git merely to make old generated content appear current.
+- All seven tracked audit files lack a standard non-authoritative banner; one is
+  misleadingly named `current-workflow-root-cause-audit.md` despite describing
+  commit `546287cf` from June 23. Standard historical banners are needed.
+- Five May plans still begin with imperative execution instructions and three
+  other plan/tracker files claim “starting,” “ongoing,” or “draft.” The plan
+  index classifies them as historical, but each file should also say so directly.
+- `README.md` correctly says Automatic mode requires OpenRouter, but its opening
+  sentence blurs Automatic and Manual provider boundaries and omits mandatory
+  human selection.
 
 ## 2026-07-14 — Candidate Review Experience approval and baseline
 
@@ -14,7 +89,9 @@
   `manualReviewRequired`; refresh/restart needs authoritative projection hydration.
 - `GET /api/session/:sessionId/state` already returns state plus manifest and is
   the safest compatibility point for a typed UI projection.
-- User-authored `AGENTS.md` is a pre-existing unrelated change and remains unstaged.
+- At the 2026-07-14 baseline, user-authored `AGENTS.md` was preserved unstaged
+  while overlapping implementation work proceeded. As of 2026-07-15 it is the
+  tracked, aligned, authoritative project rule set.
 
 
 ## 2026-07-13 Master Plan completion findings
@@ -347,7 +424,7 @@ Sources:
   “not a git repository” statement was historical.
 - `dist/`, `.env*`, `workdir/`, and `library/audio/` are ignored, but protected
   library JSON files and several old workdir artifacts are already tracked.
-  Safe correction requires approval-gated index-only de-tracking plus local
+  Safe correction requires explicit user-authorized index-only de-tracking plus local
   hash verification; ignore rules alone are insufficient.
 - `npm test` invokes the provider payload audit and Phase 34 security suites.
   The active plan now names them explicitly and adds a canary secret-leak gate.

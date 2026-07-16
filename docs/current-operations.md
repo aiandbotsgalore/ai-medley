@@ -16,8 +16,15 @@ This document describes the executable application after the 2026-07 stabilizati
 npm ci
 npm run dev
 
+# Mocked core and contract tests (no provider calls):
 npm test
 npm run lint
+
+# Explicit live integration gates: catalog-listed OpenRouter :free models,
+# generated prompts/audio, and isolated temporary data only:
+npm run test:e2e
+npm run test:openrouter-free-live
+
 npm run build
 npm run test:production-start
 
@@ -25,6 +32,14 @@ npm run start
 ```
 
 `npm run lint` is TypeScript checking (`tsc --noEmit`), not ESLint. `npm run clean` is guarded and can remove only this repository's `dist` directory; it must never be pointed at library or workdir data.
+
+`npm test` is the complete mocked provider gate. `npm run test:e2e` is
+deliberately live for its audio-review step and `npm run
+test:openrouter-free-live` is deliberately live for tool and strict structured
+output contracts. Both live scripts query OpenRouter's current model catalog,
+reject any model ID without the `:free` suffix, use synthetic data only, and
+write application artifacts only under an isolated operating-system temporary
+root. `npm run test:full` runs the mocked suite followed by both live gates.
 
 ## Environment variables
 

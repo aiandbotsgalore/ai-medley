@@ -1,5 +1,9 @@
 # Master Refactor Goal Tracker
 
+> **Historical tracker — do not resume from this checklist.** Retained for
+> provenance. Current workflow and active work are defined by
+> `docs/current-operations.md`, `AGENTS.md`, and `task_plan.md`.
+
 - [x] Phase 0: Setup (tracker created)
 - [x] Phase 2a: Fix pre-existing tsc error in App.tsx
 - [x] Phase 2b: Upgrade useMetricsManager to full spec

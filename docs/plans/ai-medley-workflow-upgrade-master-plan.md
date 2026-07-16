@@ -1,5 +1,21 @@
 # AI Medley Architect Workflow Upgrade Master Implementation Plan
 
+**Status:** Completed foundation plan. Current runtime behavior is governed by
+`docs/current-operations.md`, `AGENTS.md`, and the repository-root
+`task_plan.md`.
+
+**Superseding implementation addendum — 2026-07-15:** Automatic v4 now uses
+OpenRouter as its only cloud-provider route, generates distinct candidate
+options when safe, and always requires a human choice before final promotion.
+AI musical approval is recommendation evidence only. The implemented state
+machine includes `generating_options`; `musical_review` may transition to
+`generating_options`, `correcting`, `manual_review_required`, or `failed`, but
+never directly to `finalizing`. `generating_options` may transition to
+`validating_arrangement`, `manual_review_required`, or `failed`. The former
+paid/live-provider gate remains skipped; current explicit live integration uses
+only catalog-listed OpenRouter `:free` models, synthetic audio, and an isolated
+data root.
+
 **Target workspace:** `G:\ai-medley--main`
 **Role:** Lead Architect & System Hardening Codex Agent
 **Execution mode:** sequential internal phases with verification gates
@@ -34,7 +50,7 @@ Use one per-session transaction coordinator for all state changes; do not nest i
 
 Finalization durable order: write intent → copy candidate → verify size/SHA-256 → update manifest → history projection → wisdom projection → delete checkpoint → mark transaction complete → mark session completed.
 
-Legal transitions: `created→analyzing`; `analyzing→planning|cancelled|failed|recoverable_error`; `planning→validating_arrangement|cancelled|failed`; `validating_arrangement→executing_transitions|manual_review_required|failed`; `executing_transitions→rendering_candidate|correcting|cancelled|failed`; `rendering_candidate→technical_review|recoverable_error|failed`; `technical_review→musical_review|correcting|manual_review_required|failed`; `musical_review→finalizing|correcting|manual_review_required|failed`; `correcting→executing_transitions|planning|manual_review_required|cancelled`; `manual_review_required→correcting|finalizing|cancelled`; `finalizing→completed|recoverable_error|failed`. Terminal: `completed`, `cancelled`, `failed`.
+Legal transitions: `created→analyzing`; `analyzing→planning|cancelled|failed|recoverable_error`; `planning→validating_arrangement|cancelled|failed`; `validating_arrangement→executing_transitions|manual_review_required|failed`; `executing_transitions→rendering_candidate|correcting|cancelled|failed`; `rendering_candidate→technical_review|recoverable_error|failed`; `technical_review→musical_review|correcting|manual_review_required|failed`; `musical_review→generating_options|correcting|manual_review_required|failed`; `generating_options→validating_arrangement|manual_review_required|failed`; `correcting→executing_transitions|planning|manual_review_required|cancelled`; `manual_review_required→correcting|finalizing|cancelled`; `finalizing→completed|recoverable_error|failed`. Terminal: `completed`, `cancelled`, `failed`.
 
 ## IV. Core Code Enhancements and Contracts
 
@@ -67,7 +83,7 @@ Cancellation is session-wide. Remove only owned, unregistered `.part` files for 
 
 ## VI. Acceptance, Regression, and Documentation Requirements
 
-Mocked normal completion: upload three synthetic tracks, select two, analyze two, deterministic brief, constrained arrangement, deterministic execution, candidate render, technical pass, mocked musical approval, exact promotion. Mocked targeted correction reruns one transition only, preserves unaffected work and previous candidate, then approves corrected candidate. Mocked manual review exhausts corrections, restores after refresh, and human-approves a technically valid candidate.
+Mocked normal completion: upload three synthetic tracks, select two, analyze two, deterministic brief, constrained arrangement, deterministic execution, candidate render, technical pass, mocked musical recommendation, distinct comparison candidate when safe, Candidate Review, explicit human approval, and exact promotion. Mocked targeted correction reruns one transition only, preserves unaffected work and previous candidates, then requires the human to choose a technically valid draft. Mocked manual review exhausts corrections, restores after refresh, and human-approves a technically valid candidate.
 
 Manual regressions cover Gemini, OpenRouter, custom OpenRouter model ID, manual v2 checkpoint resume, tool-failure streak, legacy finish route, cancellation, playback, and final download. Inject atomic-write, stale-revision, upload-rollback, checkpoint, render, SSE disconnect, different-existing-final, and history-interruption failures; prove protected artifacts remain and recoverability is correct.
 
@@ -88,4 +104,7 @@ Do not stop, request approval, or send a final user-facing response between phas
 
 Only stop before all offline phases are complete if continuing would risk protected user data, require an unauthorized irreversible action, or be impossible because required access or information is unavailable.
 
-The optional live-provider test is skipped. Use mocked provider calls only.
+Paid live-provider acceptance is skipped. Core tests use mocked provider calls.
+The separate, explicitly authorized integration gate may call only
+catalog-listed OpenRouter `:free` models with synthetic prompts/audio and an
+isolated `AI_MEDLEY_DATA_ROOT`.

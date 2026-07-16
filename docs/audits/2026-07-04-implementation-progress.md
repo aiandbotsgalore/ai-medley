@@ -1,5 +1,10 @@
 # Stabilization Implementation Progress
 
+> **Historical progress record — not current instructions.** This file records
+> the stabilization implementation begun on 2026-07-04. Current behavior and
+> current work are defined by `docs/current-operations.md`, `AGENTS.md`, and
+> `task_plan.md`.
+
 Date started: 2026-07-04  
 Repository: `G:\ai-medley--main`  
 Branch: `payload-optimization`  

@@ -69,6 +69,6 @@ Every rendered draft is visible, playable, understandable, recoverable, and acti
 1. Draft 1 is immediately visible and playable.
 2. A permitted rejection creates Draft 2 by changing only the named transition.
 3. Both drafts remain playable and comparable after restart.
-4. The chosen technically valid draft is human- or AI-approved and promoted with identical verified bytes.
+4. AI review may recommend a draft, but the chosen technically valid draft is promoted only after explicit append-only human approval, with identical verified bytes.
 5. Final and candidate views remain accurate after restart.
 6. No protected data is lost, hidden, overwritten, migrated, or falsely reported complete.

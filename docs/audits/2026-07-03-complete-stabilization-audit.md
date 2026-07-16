@@ -1,5 +1,10 @@
 # Complete Stabilization, Verification, and Simplification Audit
 
+> **Historical audit — not current instructions.** This file preserves the
+> 2026-07-03 through 2026-07-04 audit evidence. Current behavior is defined by
+> `docs/current-operations.md`, `AGENTS.md`, and `task_plan.md`; old workflow
+> descriptions below are not current operating instructions.
+
 Date: 2026-07-03  
 Completed: 2026-07-04  
 Repository: `G:\ai-medley--main`  
