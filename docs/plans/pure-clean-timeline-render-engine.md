@@ -1,5 +1,9 @@
 # Pure Clean Timeline Render Engine – Full Implementation Plan
 
+> **Historical plan — do not execute.** Its draft status is preserved as a
+> dated May 2026 record, not a current status. Current workflow and active work
+> are defined by `docs/current-operations.md`, `AGENTS.md`, and `task_plan.md`.
+
 **Project:** AI Medley Engine  
 **Status:** Draft for Review & Refinement  
 **Last Updated:** 2026-05  

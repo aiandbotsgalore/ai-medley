@@ -2,8 +2,15 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import { Upload, Play, Loader2, AlertCircle, CircleCheck } from "lucide-react";
 import Header from "./components/Header";
 import LibrarySidebar, { type LibraryFile } from "./components/LibrarySidebar";
+import { reconcileSelectedTrackIds, toggleSelectedTrackId } from "./utils/librarySelection";
+import {
+  shouldResetManualToolFailure,
+  shouldSendManualToolResponses,
+} from "./utils/manualRunState";
 import MetricsSidebar from "./components/MetricsSidebar";
 import LogPanel from "./components/LogPanel";
+import CandidateReviewPanel from "./components/CandidateReviewPanel";
+import type { CandidateReviewProjection } from "./server/candidateReviewProjection";
 import ConfigPanel, {
   type MedleyConfig,
   DEFAULT_CONFIG,
@@ -78,7 +85,14 @@ import { parseManualToolCall } from "./engine/manualToolContracts";
 import { redactSensitive } from "./server/redaction";
 import { getAdjacentTab } from "./utils/accessibility";
 
-type AppStatus = "idle" | "uploading" | "running" | "completed" | "error";
+type AppStatus = "idle" | "uploading" | "running" | "manual_review_required" | "completed" | "error";
+
+type AutomaticSessionViewResponse = {
+  success: boolean;
+  state: { stateRevision: number; state: string };
+  manifest: unknown;
+  review: CandidateReviewProjection;
+};
 
 type CheckpointData = {
   schemaVersion?: 2;
@@ -241,6 +255,10 @@ function deriveExecutionContext(
 
 export default function App() {
   const [library, setLibrary] = useState<LibraryFile[]>([]);
+  const [selectedTrackIds, setSelectedTrackIds] = useState<string[]>([]);
+  const selectedTrackIdsRef = useRef<string[]>([]);
+  const selectionInitializedRef = useRef(false);
+  const knownLibraryIdsRef = useRef<string[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [status, setStatus] = useState<AppStatus>("idle");
 
@@ -252,6 +270,10 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
   const [summary, setSummary] = useState<string | null>(null);
+  const [manualReviewData, setManualReviewData] = useState<AutomaticSessionViewResponse | null>(null);
+  const [legacyHistoryFinalSessionId, setLegacyHistoryFinalSessionId] = useState<string | null>(null);
+  const [candidateReviewBusy, setCandidateReviewBusy] = useState(false);
+  const [candidateReviewError, setCandidateReviewError] = useState<string | null>(null);
   const [newSessionReady, setNewSessionReady] = useState(false);
   const metricsManager = useMetricsManager();
   const sessionManager = useSessionState();
@@ -293,8 +315,47 @@ export default function App() {
   const { connect: connectSSE, disconnect: disconnectSSE } = useSSEStream();
   const sessionIdRef = useRef<string | null>(null);
 
+  const refreshCandidateReview = useCallback(async (
+    requestedSessionId?: string | null,
+    signal?: AbortSignal,
+  ) => {
+    const targetSessionId = requestedSessionId ?? sessionIdRef.current;
+    if (!targetSessionId) throw new Error("No medley session is available to review");
+    const response = await fetch(
+      `/api/session/${encodeURIComponent(targetSessionId)}/state`,
+      { signal },
+    );
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.review) {
+      throw new Error(payload.error || "Could not load the authoritative candidate review");
+    }
+    const view = payload as AutomaticSessionViewResponse;
+    setSessionId(targetSessionId);
+    sessionIdRef.current = targetSessionId;
+    setManualReviewData(view);
+    setCandidateReviewError(null);
+    if (view.review.status === "finalized" && view.review.final?.integrityVerified) {
+      setSummary(view.review.message);
+      setStatus("completed");
+    } else if (
+      view.review.candidateCount > 0 ||
+      ["review_required", "draft_ready", "recoverable_error", "finalizing"].includes(view.review.status)
+    ) {
+      setStatus("manual_review_required");
+    } else if (view.review.status === "failed") {
+      setErrorMessage(view.review.message);
+      setStatus("error");
+    }
+    return view;
+  }, []);
+
   const addLog = useCallback((msg: string) => {
     setLogs((prev) => [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`]);
+  }, []);
+
+  const commitSelectedTrackIds = useCallback((next: string[]) => {
+    selectedTrackIdsRef.current = next;
+    setSelectedTrackIds(next);
   }, []);
 
   // Rich error logger - designed to make debugging failures (especially with free/weak models) much easier
@@ -345,12 +406,35 @@ export default function App() {
         res.ok &&
         res.headers.get("content-type")?.includes("application/json")
       ) {
-        setLibrary(await res.json());
+        const nextLibrary = await res.json() as LibraryFile[];
+        setLibrary(nextLibrary);
+        const nextLibraryIds = nextLibrary.map((file) => file.id);
+        const nextSelection = reconcileSelectedTrackIds(
+          selectedTrackIdsRef.current,
+          knownLibraryIdsRef.current,
+          nextLibraryIds,
+          selectionInitializedRef.current,
+        );
+        selectionInitializedRef.current = true;
+        knownLibraryIdsRef.current = nextLibraryIds;
+        commitSelectedTrackIds(nextSelection);
       }
     } catch (e) {
       console.error("Library fetch error:", e);
     }
-  }, []);
+  }, [commitSelectedTrackIds]);
+
+  const recoverSavedTracks = useCallback(async () => {
+    try {
+      const response = await fetch("/api/library/recover", { method: "POST" });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not recover saved tracks");
+      await fetchLibrary();
+      addLog(`✅ Recovered ${data.recovered?.length || 0} saved track(s).`);
+    } catch (error: any) {
+      setErrorMessage(error.message || "Could not recover saved tracks");
+    }
+  }, [addLog, fetchLibrary]);
 
   useEffect(() => {
     fetchLibrary();
@@ -366,6 +450,34 @@ export default function App() {
   useEffect(() => {
     fetchCheckpoints();
   }, [fetchCheckpoints]);
+
+  useEffect(() => {
+    if (statusRef.current !== "idle" || sessionIdRef.current) return;
+    let cancelled = false;
+    void fetch("/api/sessions/reviewable")
+      .then(async (response) => ({ response, payload: await response.json().catch(() => ({})) }))
+      .then(({ response, payload }) => {
+        if (cancelled || !response.ok || !Array.isArray(payload.sessions)) return;
+        const review = payload.sessions[0] as CandidateReviewProjection | undefined;
+        if (review?.candidateCount) {
+          setSessionId(review.sessionId);
+          sessionIdRef.current = review.sessionId;
+          setManualReviewData({ success: true, state: {
+            stateRevision: review.stateRevision,
+            state: review.state,
+          }, manifest: null, review });
+          setStatus(
+            review.status === "finalized" && review.final?.integrityVerified
+              ? "completed"
+              : "manual_review_required",
+          );
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -604,6 +716,19 @@ export default function App() {
 
     // === Real-Time Progress Stream (SSE) ===
     connectSSE(sid, {
+      onSnapshot: (snapshot) => {
+        if (!isActiveRequest() || !snapshot) return;
+        if (snapshot.metrics) metricsManager.setMetrics(snapshot.metrics);
+        if (snapshot.renderProgress)
+          metricsManager.setRenderProgress(snapshot.renderProgress);
+        if (snapshot.summary) setSummary(snapshot.summary);
+        if (snapshot.status === "completed") {
+          void refreshCandidateReview(sid).catch((error) => {
+            setCandidateReviewError(error.message || "Could not verify the final MP3");
+            setStatus("manual_review_required");
+          });
+        }
+      },
       onLog: (message) => {
         if (isActiveRequest()) addLog(`📡 ${message}`);
       },
@@ -614,7 +739,19 @@ export default function App() {
         if (isActiveRequest()) metricsManager.setMetrics(data);
       },
       onCompleted: (data) => {
-        if (isActiveRequest() && data.summary) setSummary(data.summary);
+        if (!isActiveRequest()) return;
+        if (data.summary) setSummary(data.summary);
+        void refreshCandidateReview(sid).catch((error) => {
+          setCandidateReviewError(error.message || "Could not verify the final MP3");
+          setStatus("manual_review_required");
+        });
+      },
+      onManualReviewRequired: () => {
+        if (!isActiveRequest()) return;
+        void refreshCandidateReview(sid).catch((error) => {
+          setCandidateReviewError(error.message || "Could not load the rendered drafts");
+          setStatus("manual_review_required");
+        });
       },
     });
 
@@ -901,6 +1038,7 @@ export default function App() {
         }
 
         const toolResponses: any[] = [];
+        let toolBatchHadFailure = false;
 
         for (const call of functionCalls) {
           addLog(`🔧 Tool: ${call.name}`);
@@ -912,6 +1050,15 @@ export default function App() {
               allowLegacy: Boolean(resumeState),
             });
           } catch (error: any) {
+            toolBatchHadFailure = true;
+            const streak = modelFallback.incrementToolFailure();
+            logDetailedError(`Tool Validation: ${call.name}`, error, {
+              toolName: call.name,
+              toolId: call.id,
+              model: modelFallback.getCurrentModel(),
+              provider: config.provider,
+              toolFailureStreak: streak,
+            });
             toolResponses.push(redactSensitive({
               functionResponse: {
                 name: call.name,
@@ -919,6 +1066,14 @@ export default function App() {
                 response: { error: error.message || String(error) },
               },
             }));
+            if (
+              modelFallback.toolFailureStreakRef.current >=
+              MAX_TOOL_FAILURE_STREAK
+            ) {
+              await switchToNextModel(
+                `Repeated invalid arguments for tool "${call.name}" (${streak} times)`,
+              );
+            }
             continue;
           }
 
@@ -1425,18 +1580,32 @@ export default function App() {
               setCurrentPhase("FINISH — Rendering Final Clean Medley");
               addLog(`  🚀 Rendering an immutable final candidate`);
 
-              const candidateRes = await fetch("/api/render-review-candidate", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  sessionId: sid,
-                  legacy: true,
-                  contractVersion: args.contractVersion,
-                }),
-                signal,
-              });
-              const candidateData = await candidateRes.json();
-              if (!candidateRes.ok || !candidateData.success) {
+              let candidateData: any = null;
+              for (let registrationAttempt = 0; registrationAttempt < 2; registrationAttempt++) {
+                const candidateRes = await fetch(
+                  "/api/render-review-candidate",
+                  {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      sessionId: sid,
+                      legacy: true,
+                      contractVersion: args.contractVersion,
+                    }),
+                    signal,
+                  },
+                );
+                candidateData = await candidateRes.json().catch(() => ({}));
+                if (candidateRes.ok && candidateData.success) break;
+                if (
+                  registrationAttempt === 0 &&
+                  candidateData.registrationPending === true
+                ) {
+                  addLog(
+                    "  ♻️ Candidate audio is complete; retrying manifest registration without rerendering.",
+                  );
+                  continue;
+                }
                 throw new Error(
                   candidateData.error || "Candidate render failed",
                 );
@@ -1471,6 +1640,7 @@ export default function App() {
               };
             }
           } catch (e: any) {
+            toolBatchHadFailure = true;
             const streak4 = modelFallback.incrementToolFailure();
             logDetailedError(`Tool Execution: ${call.name}`, e, {
               toolName: call.name,
@@ -1531,9 +1701,9 @@ export default function App() {
           ),
         );
 
-        if (toolResponses.length > 0) {
-          // Reset streak: a successful round-trip means the model is functioning
-          modelFallback.resetToolFailure();
+        if (shouldSendManualToolResponses(loopFinished, toolResponses.length)) {
+          if (shouldResetManualToolFailure(toolBatchHadFailure))
+            modelFallback.resetToolFailure();
           result = await sendWithRetry(
             toolResponses.map((toolResponse: any) => ({
               name: toolResponse.functionResponse.name,
@@ -1546,7 +1716,7 @@ export default function App() {
               `   [Tokens] Prompt: ${result.usage.prompt_tokens ?? "?"}, Completion: ${result.usage.completion_tokens ?? "?"}, Total: ${result.usage.total_tokens}`,
             );
           }
-          if (!loopFinished) saveCheckpoint();
+          saveCheckpoint();
         }
       }
 
@@ -1604,11 +1774,11 @@ export default function App() {
     activeRequestSequenceRef.current++;
     cancelRunGeneration(runGenerationRef, abortRef.current);
     if (activeSid) {
-      fetch(`/api/session/${activeSid}/cancel`, { method: "POST" }).catch(
-        (err) => {
+      fetch(`/api/session/${activeSid}/cancel`, { method: "POST" })
+        .then(() => refreshCandidateReview(activeSid))
+        .catch((err) => {
           console.error("Failed to cancel active render process:", err);
-        },
-      );
+        });
     }
     disconnectSSE();
     metricsManager.setRenderProgress(null);
@@ -1655,6 +1825,9 @@ export default function App() {
     setLogs([]);
     setSummary(null);
     setErrorMessage(null);
+    setManualReviewData(null);
+    setCandidateReviewError(null);
+    setLegacyHistoryFinalSessionId(null);
     setSessionId(null);
     sessionIdRef.current = null;
     metricsManager.resetMetrics();
@@ -1671,7 +1844,9 @@ export default function App() {
     production: "PRODUCTION",
     review_candidate: "REVIEW CANDIDATE",
     quality_review: "QUALITY REVIEW",
+    candidate_options: "BUILDING OPTIONS",
     correction: "CORRECTIONS",
+    manual_review_required: "CHOOSE YOUR DRAFT",
     final_render: "FINAL RENDER",
     completed: "COMPLETED",
   };
@@ -1692,6 +1867,19 @@ export default function App() {
     const isActiveRequest = () =>
       activeRequestSequenceRef.current === requestSequence;
     connectSSE(sid, {
+      onSnapshot: (snapshot) => {
+        if (!isActiveRequest() || !snapshot) return;
+        if (snapshot.metrics) metricsManager.setMetrics(snapshot.metrics);
+        if (snapshot.renderProgress)
+          metricsManager.setRenderProgress(snapshot.renderProgress);
+        if (snapshot.summary) setSummary(snapshot.summary);
+        if (snapshot.status === "completed") {
+          void refreshCandidateReview(sid).catch((error) => {
+            setCandidateReviewError(error.message || "Could not verify the final MP3");
+            setStatus("manual_review_required");
+          });
+        }
+      },
       onLog: (message) => {
         if (isActiveRequest()) addLog(`📡 ${message}`);
       },
@@ -1702,15 +1890,31 @@ export default function App() {
         if (isActiveRequest()) metricsManager.setMetrics(data);
       },
       onCompleted: (data) => {
-        if (isActiveRequest() && data.summary) setSummary(data.summary);
+        if (!isActiveRequest()) return;
+        if (data.summary) setSummary(data.summary);
+        void refreshCandidateReview(sid).catch((error) => {
+          setCandidateReviewError(error.message || "Could not verify the final MP3");
+          setStatus("manual_review_required");
+        });
+      },
+      onManualReviewRequired: () => {
+        if (!isActiveRequest()) return;
+        void refreshCandidateReview(sid).catch((error) => {
+          setCandidateReviewError(error.message || "Could not load the rendered drafts");
+          setStatus("manual_review_required");
+        });
       },
     });
     try {
       const authorityResponse = await fetch("/api/medley-intelligence/design", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": `${sid}:session-creation`,
+        },
         body: JSON.stringify({
           sessionId: sid,
+          trackIds: lib.map((track) => track.id),
           userConstraints: {
             style: config.style,
             targetDurationMinutes: config.targetDuration,
@@ -1779,12 +1983,43 @@ export default function App() {
               `Provider payload ${audit.stage} #${audit.requestNumber}: ` +
                 `${audit.utf8Bytes.toLocaleString()} bytes, ${audit.estimatedTokens.toLocaleString()} estimated tokens`,
             );
+          } else if (audit.status === "failed") {
+            const routing = audit.routing;
+            const routeNote = routing
+              ? ` route=${routing.summary ?? routing.strategy ?? "reported"}`
+              : "";
+            const providerNote = audit.providerErrorType
+              ? ` provider=${audit.providerErrorType}`
+              : "";
+            addLog(
+              `Provider attempt failed during ${audit.stage}: ` +
+                `${audit.errorCategory ?? "unknown"}${providerNote} (${audit.model}, request ${audit.requestNumber})${routeNote}`,
+            );
+          } else if (audit.routing?.attempt && audit.routing.attempt > 1) {
+            addLog(
+              `OpenRouter recovered ${audit.stage} through routing attempt ${audit.routing.attempt}: ` +
+                `${audit.routing.summary ?? audit.model}`,
+            );
           }
         },
       });
       if (!isActiveRequest()) return;
       setSummary(result.summary);
-      setStatus("completed");
+      if (result.manualReviewRequired) {
+        await refreshCandidateReview(sid, signal);
+        setRunStartedAt(null);
+        await fetchCheckpoints();
+        return;
+      }
+      const completedView = await refreshCandidateReview(sid, signal);
+      if (
+        completedView.review.status !== "finalized" ||
+        !completedView.review.final?.integrityVerified
+      ) {
+        throw new Error(
+          "Rendering finished, but the final MP3 has not passed authoritative verification.",
+        );
+      }
       setRunStartedAt(null);
       await fetchCheckpoints();
     } catch (error: any) {
@@ -1806,6 +2041,73 @@ export default function App() {
     }
   };
 
+  const approveAndFinalizeCandidate = async (candidateId: string) => {
+    const sid = sessionIdRef.current;
+    const currentView = manualReviewData;
+    if (!sid || !currentView) return;
+    setCandidateReviewBusy(true);
+    setCandidateReviewError(null);
+    try {
+      const candidate = currentView.review.candidates.find(
+        (item) => item.candidateId === candidateId,
+      );
+      if (!candidate) throw new Error("This draft is no longer registered");
+      if (candidate.actions.includes("approve_candidate")) {
+        const reviewResponse = await fetch("/api/session/human-review", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": `${sid}:human-approve:${candidateId}`,
+          },
+          body: JSON.stringify({
+            sessionId: sid,
+            expectedRevision: currentView.review.stateRevision,
+            review: {
+              candidateId,
+              decision: "approved",
+              notes: ["Chosen as the final draft in Candidate Review."],
+              reviewedAt: new Date().toISOString(),
+            },
+          }),
+        });
+        const reviewData = await reviewResponse.json().catch(() => ({}));
+        if (!reviewResponse.ok) {
+          await refreshCandidateReview(sid).catch(() => {});
+          throw new Error(reviewData.error || "Could not approve this draft");
+        }
+      } else if (!candidate.actions.includes("resume_finalization")) {
+        throw new Error("This draft is not currently eligible for finalization");
+      }
+      const finalResponse = await fetch("/api/finalize-medley", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": `${sid}:human-finalize:${candidateId}`,
+        },
+        body: JSON.stringify({
+          sessionId: sid,
+          candidateId,
+          summary: `Draft ${candidateId} was chosen in Candidate Review.`,
+        }),
+      });
+      const finalData = await finalResponse.json().catch(() => ({}));
+      if (!finalResponse.ok) {
+        await refreshCandidateReview(sid).catch(() => {});
+        throw new Error(finalData.error || "Final promotion did not complete");
+      }
+      const verified = await refreshCandidateReview(sid);
+      if (verified.review.status !== "finalized" || !verified.review.final?.integrityVerified) {
+        throw new Error("The final copy was created, but authoritative verification is incomplete");
+      }
+      setSummary(verified.review.message);
+      await fetchCheckpoints();
+    } catch (error: any) {
+      setCandidateReviewError(error.message || "Could not finalize this draft");
+    } finally {
+      setCandidateReviewBusy(false);
+    }
+  };
+
   const resumeFromCheckpoint = async (rawCheckpoint: StoredCheckpoint) => {
     if (status !== "idle") return;
     if ((rawCheckpoint as AutomaticWorkflowCheckpoint).schemaVersion === 3) {
@@ -1819,6 +2121,24 @@ export default function App() {
         return;
       }
       const checkpoint = parsedCheckpoint.data;
+      const checkpointTrackIds =
+        checkpoint.selectedTrackIds ??
+        checkpoint.projectBrief?.recommendedOrderIds ??
+        checkpoint.arrangementPlan?.orderedTrackIds ??
+        [];
+      const checkpointLibrary = library.filter((entry) =>
+        checkpointTrackIds.includes(entry.id),
+      );
+      if (
+        checkpointTrackIds.length < 2 ||
+        checkpointLibrary.length !== new Set(checkpointTrackIds).size
+      ) {
+        setStatus("error");
+        setErrorMessage(
+          "This automatic checkpoint is not safely bound to all of its selected tracks. Start a new run or explicitly discard it.",
+        );
+        return;
+      }
       const compatibilityResponse = await fetch(
         `/api/checkpoint/${encodeURIComponent(checkpoint.sessionId)}/compatibility`,
       );
@@ -1842,14 +2162,17 @@ export default function App() {
       setRunStartedAt(Date.now());
       setCurrentPhase(stageLabels[checkpoint.stage]);
       try {
-        const design = await buildMedleyDesign(library, controller.signal);
+        const design = await buildMedleyDesign(
+          checkpointLibrary,
+          controller.signal,
+        );
         if (!isActiveRun()) {
           setStatus("idle");
           setRunStartedAt(null);
           return;
         }
         await runAutomaticWorkflow(
-          library,
+          checkpointLibrary,
           controller.signal,
           design,
           checkpoint,
@@ -1909,17 +2232,38 @@ export default function App() {
   const discardCheckpoint = async (sessionId: string) => {
     activeRequestSequenceRef.current++;
     cancelRunGeneration(runGenerationRef, abortRef.current);
-    await fetch(`/api/session/${encodeURIComponent(sessionId)}/discard`, {
+    const response = await fetch(`/api/session/${encodeURIComponent(sessionId)}/discard`, {
       method: "DELETE",
     });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      await refreshCandidateReview(sessionId).catch(() => {});
+      setCandidateReviewError(
+        payload.error || "This session could not be discarded because rendered drafts are preserved.",
+      );
+    }
     await fetchCheckpoints();
   };
 
   const loadFromHistory = (entry: HistoryEntry) => {
     setSessionId(entry.id);
+    sessionIdRef.current = entry.id;
     setSummary(entry.summary);
     metricsManager.setMetrics(entry.metrics ?? null);
-    setStatus("completed");
+    setManualReviewData(null);
+    setLegacyHistoryFinalSessionId(null);
+    void refreshCandidateReview(entry.id).catch(async () => {
+      const audio = await fetch(`/api/audio/${encodeURIComponent(entry.id)}`, {
+        headers: { Range: "bytes=0-0" },
+      }).catch(() => null);
+      if (audio?.ok) {
+        setLegacyHistoryFinalSessionId(entry.id);
+        setStatus("completed");
+      } else {
+        setErrorMessage("This history record exists, but its final MP3 is missing or unreadable.");
+        setStatus("error");
+      }
+    });
     setLogs([]);
     setActiveTab("workshop");
   };
@@ -2023,8 +2367,12 @@ export default function App() {
   };
 
   const startMedley = async () => {
-    if (library.length < 2) return;
+    const selectedLibrary = library.filter((file) => selectedTrackIds.includes(file.id));
+    if (selectedLibrary.length < 2) return;
     setNewSessionReady(false);
+    setManualReviewData(null);
+    setCandidateReviewError(null);
+    setLegacyHistoryFinalSessionId(null);
     const configurationError = getStartConfigurationError(config);
     if (configurationError) {
       setStatus("error");
@@ -2032,7 +2380,7 @@ export default function App() {
       return;
     }
     await runStartMedleyPipeline<LibraryFile, MedleyDesignPayload>({
-      library,
+      library: selectedLibrary,
       modelMode: config.modelMode,
       runGenerationCounter: runGenerationRef,
       getCurrentController: () => abortRef.current,
@@ -2057,7 +2405,8 @@ export default function App() {
       fetchFreshLibrary: async (signal) =>
         fetch("/api/library", { signal })
           .then((r) => r.json())
-          .catch(() => library),
+          .then((freshLibrary) => freshLibrary.filter((file: LibraryFile) => selectedTrackIds.includes(file.id)))
+          .catch(() => selectedLibrary),
       buildDesign: async (freshLib, signal) => {
         const design = await buildMedleyDesign(freshLib, signal);
         addLog(
@@ -2075,10 +2424,15 @@ export default function App() {
   const isIdle = status === "idle" || status === "error";
   const isUploading = status === "uploading";
   const isInputStage = isIdle || isUploading;
-  const canStart = library.length >= 2 && hasProviderKey && configLoaded;
+  const selectedLibrary = library.filter((file) => selectedTrackIds.includes(file.id));
+  const canStart = selectedLibrary.length >= 2 && hasProviderKey && configLoaded;
+  const isCandidateReviewView =
+    activeTab === "workshop" &&
+    (status === "manual_review_required" || status === "completed") &&
+    Boolean(manualReviewData?.review);
 
   return (
-    <div className="min-h-screen h-auto md:h-screen bg-[#060606] text-[#E0E0E0] font-sans flex flex-col overflow-y-auto overflow-x-hidden md:overflow-hidden selection:bg-[#00F0FF]/30">
+    <div className="min-h-[100dvh] md:h-[100dvh] bg-[#060606] text-[#E0E0E0] font-sans flex flex-col overflow-y-auto overflow-x-hidden md:overflow-hidden selection:bg-[#00F0FF]/30">
       <Header
         status={status}
         provider={
@@ -2103,19 +2457,35 @@ export default function App() {
         />
       )}
 
-      <main className="flex-1 flex flex-col md:flex-row overflow-visible md:overflow-hidden">
-        <LibrarySidebar
-          library={library}
-          status={status}
-          provider={
-            config.modelMode === "automatic" ? "openrouter" : config.provider
-          }
-          apiReady={hasProviderKey}
-          onRemove={removeFile}
-          onReorder={reorderLibrary}
-        />
+      <main className="flex-1 min-h-0 flex flex-col md:flex-row overflow-visible md:overflow-hidden">
+        {!isCandidateReviewView && (
+          <LibrarySidebar
+            library={library}
+            selectedTrackIds={selectedTrackIds}
+            status={status}
+            provider={
+              config.modelMode === "automatic" ? "openrouter" : config.provider
+            }
+            apiReady={hasProviderKey}
+            onRemove={removeFile}
+            onReorder={reorderLibrary}
+            onToggleSelected={(id) =>
+              commitSelectedTrackIds(
+                toggleSelectedTrackId(selectedTrackIdsRef.current, id),
+              )
+            }
+            onSelectAll={() =>
+              commitSelectedTrackIds(
+                selectedTrackIdsRef.current.length === library.length
+                  ? []
+                  : library.map((file) => file.id),
+              )
+            }
+            onRecover={recoverSavedTracks}
+          />
+        )}
 
-        <section className="flex-1 min-w-0 min-h-[70vh] md:min-h-0 flex flex-col bg-[#030303] overflow-hidden">
+        <section className="flex-1 min-w-0 min-h-[70vh] md:min-h-0 flex flex-col bg-[#030303] overflow-hidden shadow-[inset_1px_0_0_rgba(255,255,255,0.03)]">
           {/* Tab bar */}
           <div role="tablist" aria-label="Workspace views" className="min-h-11 border-b border-[#1A1A1A] flex items-center px-4 gap-1 shrink-0 bg-[#0A0A0A]">
             {(["workshop", "history"] as const).map((tab) => (
@@ -2353,13 +2723,18 @@ export default function App() {
 
               {/* Error display */}
               {status === "error" && errorMessage && (
-                <div role="alert" aria-live="assertive" className="mt-6 border border-red-500/30 bg-red-500/5 text-red-300 p-4 text-[11px] font-mono flex items-start gap-3 rounded-xl w-full max-w-lg">
-                  <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
-                  <div>
-                    <div className="font-bold uppercase">Error</div>
-                    <div className="mt-1 text-[10px] opacity-80">
-                      {errorMessage}
+                <div className="mt-6 w-full max-w-lg rounded-xl border border-red-500/30 bg-red-500/5 p-4 text-red-300">
+                  <div role="alert" aria-live="assertive" className="flex items-start gap-3 text-[11px] font-mono">
+                    <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+                    <div>
+                      <div className="font-bold uppercase">No final MP3 was created</div>
+                      <div className="mt-1 text-[10px] opacity-80">{errorMessage}</div>
                     </div>
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <button type="button" onClick={startMedley} disabled={!canStart || isUploading} className="min-h-11 rounded bg-red-300 px-4 text-[10px] font-bold uppercase text-black disabled:opacity-40">Retry AI</button>
+                    <button type="button" onClick={() => setShowConfig(true)} className="min-h-11 rounded border border-white/20 px-4 text-[10px] font-bold uppercase text-white">Change model</button>
+                    <button type="button" onClick={handleNewSession} className="min-h-11 rounded border border-white/20 px-4 text-[10px] font-bold uppercase text-[#BBB]">Cancel</button>
                   </div>
                 </div>
               )}
@@ -2428,6 +2803,19 @@ export default function App() {
                 </p>
               )}
             </div>
+          ) : (status === "manual_review_required" || status === "completed") && manualReviewData?.review ? (
+            <CandidateReviewPanel
+              projection={manualReviewData.review}
+              busy={candidateReviewBusy}
+              error={candidateReviewError}
+              onRefresh={() => {
+                setCandidateReviewBusy(true);
+                void refreshCandidateReview(sessionIdRef.current)
+                  .catch((error) => setCandidateReviewError(error.message || "Could not refresh candidate status"))
+                  .finally(() => setCandidateReviewBusy(false));
+              }}
+              onApprove={(candidateId) => void approveAndFinalizeCandidate(candidateId)}
+            />
           ) : (
             <LogPanel
               status={status}
@@ -2440,30 +2828,39 @@ export default function App() {
           </div>
         </section>
 
-        {sessionManager.design &&
-        activeTab === "workshop" &&
-        status !== "completed" &&
-        status !== "running" ? (
-          <MedleyMatchPanel design={sessionManager.design} />
-        ) : (
-          <MetricsSidebar
-            metrics={metricsManager.metrics}
-            summary={summary}
-            status={status}
-            sessionId={sessionId}
-          />
+        {!isCandidateReviewView && (
+          sessionManager.design &&
+          activeTab === "workshop" &&
+          status !== "completed" &&
+          status !== "running" ? (
+            <MedleyMatchPanel design={sessionManager.design} />
+          ) : (
+            <MetricsSidebar
+              metrics={metricsManager.metrics}
+              summary={summary}
+              status={status}
+              sessionId={sessionId}
+            />
+          )
         )}
       </main>
 
       {/* Footer Audio Player */}
-      <footer className="min-h-20 border-t border-[#1A1A1A] bg-[#0A0A0A] flex items-center px-3 md:px-6 gap-3 md:gap-6 shrink-0">
-        {status === "completed" && sessionId ? (
+      {!isCandidateReviewView && <footer className="min-h-16 border-t border-[#1A1A1A] bg-[#0A0A0A]/95 backdrop-blur flex items-center px-3 md:px-6 gap-3 md:gap-6 shrink-0">
+        {status === "completed" && sessionId && (
+          manualReviewData?.review.final?.integrityVerified ||
+          legacyHistoryFinalSessionId === sessionId
+        ) ? (
           <audio
             controls
             src={`/api/audio/${sessionId}`}
             className="w-full max-w-5xl h-10 mx-auto"
             style={{ filter: "invert(1) hue-rotate(180deg)", opacity: 0.8 }}
           />
+        ) : status === "manual_review_required" && manualReviewData?.review.candidateCount ? (
+          <div role="status" className="mx-auto text-center text-[11px] font-mono text-amber-200">
+            {manualReviewData.review.candidateCount} preserved draft{manualReviewData.review.candidateCount === 1 ? "" : "s"} available in Candidate Review above.
+          </div>
         ) : (
           <>
             <div className="flex items-center gap-4 text-[#AAA] pointer-events-none">
@@ -2485,7 +2882,7 @@ export default function App() {
             </div>
           </>
         )}
-      </footer>
+      </footer>}
 
       <style
         dangerouslySetInnerHTML={{

@@ -22,9 +22,9 @@ class FakeEventSource implements EventSourceLike {
     this.listeners.set(type, existing);
   }
 
-  emit(type: string, data: unknown) {
+  emit(type: string, data: unknown, lastEventId = "") {
     for (const listener of this.listeners.get(type) ?? []) {
-      listener({ data: JSON.stringify(data) } as MessageEvent);
+      listener({ data: JSON.stringify(data), lastEventId } as MessageEvent);
     }
   }
 }
@@ -33,6 +33,8 @@ const sources: Array<{ url: string; source: FakeEventSource }> = [];
 const timers: Array<() => void> = [];
 const statuses: string[] = [];
 const logs: string[] = [];
+const snapshots: unknown[] = [];
+const manualReviews: unknown[] = [];
 const controller = new SSEStreamController({
   createEventSource: (url) => {
     const source = new FakeEventSource();
@@ -52,14 +54,21 @@ const controller = new SSEStreamController({
   closedReadyState: 2,
 });
 
-controller.connect("run-a", { onLog: (message) => logs.push(message) });
+controller.connect("run-a", {
+  onLog: (message) => logs.push(message),
+  onSnapshot: (snapshot) => snapshots.push(snapshot),
+});
 assert.equal(sources.length, 1);
 const runA = sources[0].source;
 runA.close();
 runA.onerror?.();
 assert.equal(timers.length, 1);
 
-controller.connect("run-b", { onLog: (message) => logs.push(message) });
+controller.connect("run-b", {
+  onLog: (message) => logs.push(message),
+  onSnapshot: (snapshot) => snapshots.push(snapshot),
+  onManualReviewRequired: (data) => manualReviews.push(data),
+});
 assert.equal(sources.length, 2);
 const runB = sources[1].source;
 
@@ -70,17 +79,28 @@ assert.equal(sources[1].url, "/api/session/run-b/stream");
 
 runA.emit("log", { message: "late run a" });
 assert.deepEqual(logs, []);
-runB.emit("log", { message: "run b" });
+runB.emit("connected", { sequence: 4, snapshot: { status: "running" } });
+assert.deepEqual(snapshots, [{ status: "running" }]);
+runB.emit("log", { message: "run b" }, "5");
 assert.deepEqual(logs, ["run b"]);
-const timersBeforeHeartbeat = timers.length;
-runB.emit("heartbeat", { sequence: 1 });
-assert.equal(timers.length, timersBeforeHeartbeat);
-runB.emit("completed", { summary: "done" });
-assert.equal(runB.closed, true);
+runB.emit("manual_review_required", { reason: "choose a draft" }, "6");
+assert.deepEqual(manualReviews, [{ reason: "choose a draft" }]);
+runB.close();
+runB.onerror?.();
+const reconnect = timers.shift();
+reconnect?.();
+assert.equal(sources.at(-1)?.url, "/api/session/run-b/stream?lastEventId=6");
+const runBReconnected = sources.at(-1)!.source;
+runBReconnected.emit("heartbeat", { sequence: 5 });
+assert.equal(timers.length, 1);
+runBReconnected.emit("heartbeat", { sequence: 5 });
+assert.equal(timers.length, 1);
+runBReconnected.emit("completed", { summary: "done" }, "6");
+assert.equal(runBReconnected.closed, true);
 assert.equal(statuses.at(-1), "closed");
 
 controller.disconnect();
-assert.equal(runB.closed, true);
+assert.equal(runBReconnected.closed, true);
 assert.equal(statuses.at(-1), "closed");
 
 // Browser timer functions are receiver-sensitive. Verify the controller's

@@ -3,7 +3,11 @@ import {
   ArrangementPlanSchema,
   type SpecialistContext,
 } from "../types/specialistWorkflow";
-import { resolveAutomaticRenderTransitions } from "./transitionResolution";
+import {
+  isRecoveredCandidateCompatibleWithExecution,
+  resolveAutomaticRenderTransitions,
+  sanitizeResolvedTransitionsForManifest,
+} from "./transitionResolution";
 
 const plan = ArrangementPlanSchema.parse({
   schemaVersion: 1,
@@ -79,6 +83,62 @@ assert.equal(resolved.transitions[0].durationUsed, 4);
 assert.equal(
   resolved.transitions[0].outputPath,
   "workdir/session-1/transition.mp3",
+);
+const renderTimeTransition = {
+  ...resolved.transitions[0],
+  _resolvedFromExitSec: 79,
+  _resolvedToEntrySec: 12,
+};
+const persisted = sanitizeResolvedTransitionsForManifest([renderTimeTransition]);
+assert.equal(persisted.length, 1);
+assert.equal(persisted[0].actualFromExitSec, 79);
+assert.equal(persisted[0].actualToEntrySec, 12);
+assert.equal("_resolvedFromExitSec" in persisted[0], false);
+assert.equal("_resolvedToEntrySec" in persisted[0], false);
+
+assert.equal(
+  isRecoveredCandidateCompatibleWithExecution(
+    {
+      candidateId: "candidate-001",
+      candidateVersion: 1,
+      parentCandidateId: null,
+      arrangementVersion: 1,
+      executionVersion: 1,
+      resolvedTransitions: resolved.transitions,
+      outputPath: "workdir/session-1/candidate-001.mp3",
+      debugPaths: [],
+      previewPaths: [],
+      sizeBytes: 1,
+      sha256: "a".repeat(64),
+      durationSec: 1,
+      technicallyValid: true,
+      metrics: {},
+      reviewStatus: "pending",
+      warnings: [],
+      createdAt: new Date().toISOString(),
+    },
+    {
+      schemaVersion: 1,
+      executionVersion: 2,
+      arrangementVersion: 1,
+      attemptedTransitions: [
+        {
+          ...plan.transitions[0],
+          duration: 4,
+          style: "beat_aligned",
+          success: true,
+          actualFromExitSec: 79,
+          actualToEntrySec: 12,
+          previewPath: "workdir/session-1/new-preview.mp3",
+          error: null,
+        },
+      ],
+      technicalWarnings: [],
+      unresolvedFailures: [],
+      completedAt: new Date().toISOString(),
+    },
+  ),
+  true,
 );
 
 const forged = resolveAutomaticRenderTransitions({

@@ -7,10 +7,12 @@ export type SSEStreamStatus =
   | "failed";
 
 export type SSEStreamOptions = {
+  onSnapshot?: (data: any) => void;
   onLog?: (message: string) => void;
   onProgress?: (data: any) => void;
   onMetrics?: (data: any) => void;
   onCompleted?: (data: any) => void;
+  onManualReviewRequired?: (data: any) => void;
   heartbeatTimeoutMs?: number;
   maxReconnectAttempts?: number;
 };
@@ -89,9 +91,11 @@ export class SSEStreamController {
   connect(sessionId: string, options: SSEStreamOptions = {}) {
     const {
       onLog,
+      onSnapshot,
       onProgress,
       onMetrics,
       onCompleted,
+      onManualReviewRequired,
       heartbeatTimeoutMs = 45000,
       maxReconnectAttempts = 5,
     } = options;
@@ -101,6 +105,12 @@ export class SSEStreamController {
     this.clearHeartbeatTimer();
     this.clearReconnectTimer();
     const generation = ++this.generation;
+    let lastEventId = 0;
+
+    const rememberEventId = (event: MessageEvent) => {
+      const parsed = Number(event.lastEventId || 0);
+      if (Number.isFinite(parsed) && parsed > lastEventId) lastEventId = parsed;
+    };
 
     const scheduleReconnect = (attempt: () => void) => {
       if (this.generation !== generation) return;
@@ -121,7 +131,12 @@ export class SSEStreamController {
         this.reconnectAttempts === 0 ? "connecting" : "reconnecting",
       );
 
-      const source = this.createEventSource(`/api/session/${sessionId}/stream`);
+      const replayQuery = lastEventId
+        ? `?lastEventId=${encodeURIComponent(lastEventId)}`
+        : "";
+      const source = this.createEventSource(
+        `/api/session/${sessionId}/stream${replayQuery}`,
+      );
       this.setSource(source);
 
       const resetHeartbeat = () => {
@@ -141,8 +156,21 @@ export class SSEStreamController {
         resetHeartbeat();
       };
 
+      source.addEventListener("connected", (event: MessageEvent) => {
+        if (this.generation !== generation) return;
+        resetHeartbeat();
+        try {
+          const data = JSON.parse(event.data);
+          const sequence = Number(data?.sequence || 0);
+          if (Number.isFinite(sequence) && sequence > lastEventId)
+            lastEventId = sequence;
+          onSnapshot?.(data?.snapshot ?? null);
+        } catch {}
+      });
+
       source.addEventListener("log", (event: MessageEvent) => {
         if (this.generation !== generation) return;
+        rememberEventId(event);
         resetHeartbeat();
         try {
           const data = JSON.parse(event.data);
@@ -152,6 +180,7 @@ export class SSEStreamController {
 
       source.addEventListener("progress", (event: MessageEvent) => {
         if (this.generation !== generation) return;
+        rememberEventId(event);
         resetHeartbeat();
         try {
           onProgress?.(JSON.parse(event.data));
@@ -160,6 +189,7 @@ export class SSEStreamController {
 
       source.addEventListener("metrics", (event: MessageEvent) => {
         if (this.generation !== generation) return;
+        rememberEventId(event);
         resetHeartbeat();
         try {
           onMetrics?.(JSON.parse(event.data));
@@ -173,6 +203,7 @@ export class SSEStreamController {
 
       source.addEventListener("completed", (event: MessageEvent) => {
         if (this.generation !== generation) return;
+        rememberEventId(event);
         resetHeartbeat();
         try {
           onCompleted?.(JSON.parse(event.data));
@@ -181,6 +212,15 @@ export class SSEStreamController {
         source.close();
         this.setSource(null);
         this.setStatus("closed");
+      });
+
+      source.addEventListener("manual_review_required", (event: MessageEvent) => {
+        if (this.generation !== generation) return;
+        rememberEventId(event);
+        resetHeartbeat();
+        try {
+          onManualReviewRequired?.(JSON.parse(event.data));
+        } catch {}
       });
 
       source.onerror = () => {

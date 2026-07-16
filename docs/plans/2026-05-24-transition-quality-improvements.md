@@ -1,5 +1,9 @@
 # Transition Quality Improvements — Implementation Plan
 
+> **Historical plan — do not execute.** Retained for provenance. Current
+> workflow and active work are defined by `docs/current-operations.md`,
+> `AGENTS.md`, and `task_plan.md`; imperative instructions below are superseded.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Make the medley AI choose better, more musically coherent snippet pairs through four targeted improvements: wider matrix coverage with tuned scoring weights, an on-demand section-pair evaluation tool, a structured DESIGN→BUILD handoff tool, and strategy ordering that uses the specific sections from the transition matrix.

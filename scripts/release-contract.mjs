@@ -54,8 +54,8 @@ for (const value of [
   "Manual Model",
   "contained",
   "expert",
-  "meta-llama/llama-3.3-70b-instruct:free",
-  "gemini-2.5-flash",
+  "gemini-3.1-pro-preview",
+  "gemini-3.5-flash",
 ]) {
   assert.ok(
     operations.includes(value),

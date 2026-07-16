@@ -1,8 +1,10 @@
 import {
+  ResolvedTransitionSchema,
   TransitionExecutionRequestSchema,
   validateTransitionExecutionContext,
   type ArrangementPlan,
   type ExecutionReport,
+  type RenderCandidate,
   type ResolvedTransition,
   type SpecialistContext,
   type TransitionExecutionRequest,
@@ -21,6 +23,56 @@ export type ServerTransitionExecutionRecords = Record<
   string,
   ServerTransitionExecutionRecord | undefined
 >;
+
+/** Keeps render-only scratch timings out of strict persisted manifests. */
+export function sanitizeResolvedTransitionsForManifest(
+  transitions: unknown[],
+): ResolvedTransition[] {
+  return transitions.map((transition) => {
+    const record = transition as Record<string, unknown>;
+    const {
+      _resolvedFromExitSec: _ignoredFromExitSec,
+      _resolvedToEntrySec: _ignoredToEntrySec,
+      ...persistedTransition
+    } = record;
+    return ResolvedTransitionSchema.parse(persistedTransition);
+  });
+}
+
+/**
+ * A resumed automatic workflow may have a newer execution attempt even though
+ * its already-rendered candidate represents the same approved transition plan.
+ * This intentionally compares only audio-affecting transition facts; preview
+ * file paths and execution-version numbers are not part of the candidate audio.
+ */
+export function isRecoveredCandidateCompatibleWithExecution(
+  candidate: RenderCandidate,
+  executionReport: ExecutionReport | null | undefined,
+): boolean {
+  const resolved = candidate.resolvedTransitions;
+  const attempted = executionReport?.attemptedTransitions;
+  if (!resolved?.length || !attempted?.length || resolved.length !== attempted.length)
+    return false;
+  return resolved.every((transition, index) => {
+    const attempt = attempted[index];
+    return (
+      attempt.success &&
+      transition.transitionId === attempt.transitionId &&
+      transition.fromTrackId === attempt.fromTrackId &&
+      transition.fromSectionId === attempt.fromSectionId &&
+      transition.toTrackId === attempt.toTrackId &&
+      transition.toSectionId === attempt.toSectionId &&
+      transition.fromExitSec === attempt.fromExitSec &&
+      transition.toEntrySec === attempt.toEntrySec &&
+      transition.duration === attempt.duration &&
+      transition.style === attempt.style &&
+      transition.beatAlign === attempt.beatAlign &&
+      transition.actualFromExitSec === attempt.actualFromExitSec &&
+      transition.actualToEntrySec === attempt.actualToEntrySec &&
+      transition.durationUsed === attempt.duration
+    );
+  });
+}
 
 function assertFiniteSectionTime(
   errors: string[],

@@ -5,10 +5,15 @@
 The original goal of this document — instrumenting and measuring provider
 payload sizes — is done and now runs automatically:
 
-- `src/engine/providerPayloadAudit.test.ts` audits every provider request
-  shape (117 requests as of 2026-07-07) as part of `npm test`.
-- The largest observed request is ~13 KB / ~4.3k estimated tokens
-  (maximum-4-track `arrangement_repair`), dominated by `repairErrors`.
+- `src/engine/providerPayloadAudit.test.ts` audits all 12 current provider
+  request shapes as part of `npm test`.
+- The largest observed request is 12,187 bytes / 4,056 estimated tokens
+  (maximum-4-track `arrangement_repair`), with 9,445 bytes from `repairErrors`.
+- The audit writes its row-level report to an isolated operating-system
+  temporary directory. It never refreshes the protected historical artifact in
+  the repository's `workdir/`.
+- Automatic v4 has no context-brief or production-specialist provider request;
+  those responsibilities are local and deterministic.
 - Compact request payloads are enforced by commit `f0e424c`
   ("fix(provider): enforce compact request payloads").
 
@@ -21,4 +26,6 @@ payload sizes — is done and now runs automatically:
    minified. If UI load time becomes noticeable, add `manualChunks` or
    dynamic imports. Purely a UX nicety for a local app.
 
-See `EXPERIMENTS.md` and `EXPERIMENT_NOTES.md` for the measurement history.
+See `EXPERIMENTS.md`, `EXPERIMENT_NOTES.md`, and the historical
+`provider-payload-verification.md` report for provenance. Current runtime
+behavior is documented in `docs/current-operations.md`.

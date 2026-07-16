@@ -1,5 +1,9 @@
 # Claude Fable 5 Final Stabilization Review Package
 
+> **Historical review package — not current instructions.** This package was
+> prepared from the repository state on 2026-07-05. Current behavior is defined
+> by `docs/current-operations.md`, `AGENTS.md`, and `task_plan.md`.
+
 Prepared: 2026-07-05  
 Repository: `G:\ai-medley--main`  
 Branch: `payload-optimization`  

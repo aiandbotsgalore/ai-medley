@@ -14,9 +14,10 @@ assert.throws(
   () => validateUploadMetadata({ originalname: "song.wav", size: MAX_UPLOAD_FILE_BYTES + 1 }),
   /size limit/i,
 );
-assert.doesNotThrow(() => validateAudioProbe({ durationSec: 120, audioStreams: 1, channels: 2 }));
-assert.throws(() => validateAudioProbe({ durationSec: 0, audioStreams: 1, channels: 2 }), /duration/i);
-assert.throws(() => validateAudioProbe({ durationSec: 120, audioStreams: 0, channels: 0 }), /audio stream/i);
+assert.doesNotThrow(() => validateAudioProbe({ durationSec: 120, audioStreams: 1, channels: 2, codec: "mp3" }));
+assert.throws(() => validateAudioProbe({ durationSec: 0, audioStreams: 1, channels: 2, codec: "mp3" }), /duration/i);
+assert.throws(() => validateAudioProbe({ durationSec: 120, audioStreams: 0, channels: 0, codec: "mp3" }), /audio stream/i);
+assert.throws(() => validateAudioProbe({ durationSec: 120, audioStreams: 1, channels: 2, codec: "" }), /codec/i);
 assert.doesNotThrow(() => assertUploadCapacity({ availableBytes: 2 * 1024 ** 3, incomingBytes: 10 }));
 assert.throws(() => assertUploadCapacity({ availableBytes: 1024 ** 3, incomingBytes: 1 }), /reserve/i);
 assert.ok(findDuplicateUpload("abc", [{ sha256: "abc" }]));

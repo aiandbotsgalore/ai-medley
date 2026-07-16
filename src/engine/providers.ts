@@ -1,4 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
+import { FunctionCallingConfigMode, GoogleGenAI, Type } from "@google/genai";
 import type { MedleyConfig } from "../components/ConfigPanel";
 import {
   MAX_PROVIDER_REQUEST_BYTES,
@@ -11,7 +11,10 @@ import {
   buildOpenRouterRequest,
   classifyProviderFailure,
   ProviderRequestError,
+  OPENROUTER_ROUTING_METADATA_HEADER,
+  OPENROUTER_ROUTING_METADATA_VALUE,
   sanitizeProviderAssistantMessage,
+  extractOpenRouterRoutingAudit,
   type CategorizedProviderMessage,
   type ProviderMessageCategory,
   type ProviderRequestAudit,
@@ -53,6 +56,10 @@ type ProviderSession = {
 type ProviderAuditContext = {
   stage: string;
   role: string;
+  /** Force the single schema-bearing tool required by an Automatic stage. */
+  requiredToolName?: string;
+  /** Use OpenRouter strict JSON Schema output instead of a tool call. */
+  structuredOutput?: { name: string; schema: unknown };
   onRequestAudit?: (audit: ProviderRequestAudit) => void;
 };
 
@@ -66,6 +73,60 @@ type AnalyzeAudioOptions = {
 };
 
 const OPENROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions";
+
+/**
+ * The automatic specialists share their tool definitions with OpenRouter. The
+ * two providers use different envelopes, though: OpenRouter wraps each
+ * declaration in `{ type: "function", function: ... }`, while Gemini accepts
+ * the declaration itself. Sending the OpenRouter wrapper to Gemini makes the
+ * API reject the request before the model can make an arrangement decision.
+ */
+function toGeminiSchema(value: any): any {
+  if (!value || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map(toGeminiSchema);
+
+  const output: Record<string, unknown> = {};
+  if (value.type === "object" || value.type === Type.OBJECT)
+    output.type = Type.OBJECT;
+  else if (value.type === "array" || value.type === Type.ARRAY)
+    output.type = Type.ARRAY;
+  else if (
+    value.type === "number" ||
+    value.type === "integer" ||
+    value.type === Type.NUMBER
+  )
+    output.type = Type.NUMBER;
+  else if (value.type === "boolean" || value.type === Type.BOOLEAN)
+    output.type = Type.BOOLEAN;
+  else if (value.type === "string" || value.type === Type.STRING)
+    output.type = Type.STRING;
+
+  for (const key of ["description", "enum", "minimum", "maximum"] as const) {
+    if (value[key] !== undefined) output[key] = value[key];
+  }
+  if (value.required) output.required = value.required;
+  if (value.items) output.items = toGeminiSchema(value.items);
+  if (value.properties) {
+    output.properties = Object.fromEntries(
+      Object.entries(value.properties).map(([key, child]) => [
+        key,
+        toGeminiSchema(child),
+      ]),
+    );
+  }
+  return output;
+}
+
+function toGeminiFunctionDeclarations(tools: unknown[]) {
+  return tools.map((tool: any) => {
+    const declaration = tool?.type === "function" ? tool.function : tool;
+    return {
+      name: String(declaration?.name ?? ""),
+      description: String(declaration?.description ?? ""),
+      parameters: toGeminiSchema(declaration?.parameters ?? { type: "object" }),
+    };
+  });
+}
 
 function getActiveApiKey(config: MedleyConfig) {
   return config.provider === "gemini"
@@ -120,7 +181,8 @@ async function fetchOpenRouter(
             ? {}
             : {
                 "HTTP-Referer": window.location.origin,
-                "X-Title": "AI Medley Architect",
+                "X-OpenRouter-Title": "AI Medley Architect",
+                [OPENROUTER_ROUTING_METADATA_HEADER]: OPENROUTER_ROUTING_METADATA_VALUE,
               }),
         },
         body: request.serializedBody,
@@ -149,7 +211,7 @@ async function fetchOpenRouter(
       body: text,
       retryAfter: response.headers.get("Retry-After"),
     });
-    if (response.status === 429 && attempt === 0) {
+    if ((response.status === 429 || response.status === 503) && attempt === 0) {
       await new Promise<void>((resolve, reject) => {
         const timer = window.setTimeout(() => {
           signal?.removeEventListener("abort", abort);
@@ -203,8 +265,13 @@ async function abortablePromise<T>(
   promise: Promise<T>,
   signal: AbortSignal,
 ): Promise<T> {
-  if (signal.aborted)
+  if (signal.aborted) {
+    // The request may have synchronously observed cancellation before this
+    // wrapper attaches its normal handlers. Consume that late rejection so a
+    // cancelled provider attempt never becomes an unhandled browser error.
+    void promise.catch(() => {});
     throw signal.reason ?? new DOMException("Aborted", "AbortError");
+  }
   return new Promise<T>((resolve, reject) => {
     const abort = () =>
       reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
@@ -301,7 +368,19 @@ export function createProviderSession(
               contents: candidateMessages.map((item) => item.message) as any,
               config: {
                 systemInstruction: { parts: [{ text: systemInstruction }] },
-                tools: [{ functionDeclarations: tools as never[] }],
+                tools: [{ functionDeclarations: toGeminiFunctionDeclarations(tools) }],
+                // Gemini supports forcing a named function. Automatic stages
+                // cannot safely proceed with prose or an unrelated tool call.
+                ...(auditContext?.requiredToolName
+                  ? {
+                      toolConfig: {
+                        functionCallingConfig: {
+                          mode: FunctionCallingConfigMode.ANY,
+                          allowedFunctionNames: [auditContext.requiredToolName],
+                        },
+                      },
+                    }
+                  : {}),
                 temperature,
               },
             };
@@ -406,11 +485,17 @@ export function createProviderSession(
           }));
 
       requestNumber++;
+      const structuredOutput = auditContext?.structuredOutput;
+      const requestTools = structuredOutput ? [] : tools;
       const builtRequest = buildOpenRouterRequest({
         model: config.model,
         temperature,
         messages: [...messages, ...pending],
-        tools,
+        tools: requestTools,
+        requiredToolName: structuredOutput
+          ? undefined
+          : auditContext?.requiredToolName,
+        structuredOutput,
       });
       const requestId =
         options?.requestId ??
@@ -421,7 +506,7 @@ export function createProviderSession(
         role: auditContext?.role ?? "unknown",
         model: config.model,
         requestNumber,
-        tools: tools
+        tools: requestTools
           .map((tool: any) => String(tool?.function?.name ?? ""))
           .filter(Boolean),
         utf8Bytes: builtRequest.utf8Bytes,
@@ -439,6 +524,9 @@ export function createProviderSession(
         auditContext?.onRequestAudit?.({
           ...auditBase,
           errorCategory: classified.category,
+          providerErrorType: classified.providerErrorType,
+          providerCode: classified.providerCode,
+          routing: classified.routing,
           status: "failed",
         });
         if (request.signal.aborted && request.signal.reason)
@@ -491,6 +579,7 @@ export function createProviderSession(
       auditContext?.onRequestAudit?.({
         ...auditBase,
         actualPromptTokens: usage?.prompt_tokens,
+        routing: extractOpenRouterRoutingAudit(data),
         status: "completed",
       });
 

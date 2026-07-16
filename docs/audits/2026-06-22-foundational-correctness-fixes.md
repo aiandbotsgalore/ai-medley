@@ -1,5 +1,10 @@
 # Foundational Correctness Fixes
 
+> **Historical audit — not current instructions.** This file records fixes and
+> evidence from 2026-06-22. Current behavior is defined by
+> `docs/current-operations.md`, `AGENTS.md`, and `task_plan.md`; preserve the old
+> claims as evidence rather than treating them as an active task list.
+
 Date: 2026-06-22
 Scope: F-001 through F-004 from `docs/audits/2026-06-22-end-to-end-workflow-audit.md`
 

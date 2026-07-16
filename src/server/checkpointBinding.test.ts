@@ -21,5 +21,14 @@ assert.equal(
   compareResumeBinding(binding, buildResumeBinding(checkpoint, changed)).reason,
   "source-changed",
 );
+const selectedBinding = buildResumeBinding(
+  { ...checkpoint, selectedTrackIds: ["a"] },
+  library,
+);
+assert.notEqual(
+  selectedBinding.sourceFingerprint,
+  binding.sourceFingerprint,
+  "Explicit selected track IDs must be the authoritative resume source set",
+);
 
 console.log("checkpointBinding tests passed");

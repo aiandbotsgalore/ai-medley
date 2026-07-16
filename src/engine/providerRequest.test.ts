@@ -5,6 +5,7 @@ import {
   buildOpenRouterRequest,
   classifyProviderFailure,
   getManualProviderFailureDecision,
+  extractOpenRouterRoutingAudit,
   parseRetryAfterMs,
 } from "./providerRequest";
 
@@ -17,6 +18,55 @@ const openRouter = buildOpenRouterRequest({
 });
 assert.equal(openRouter.utf8Bytes, new TextEncoder().encode(openRouter.serializedBody).byteLength);
 assert.doesNotThrow(() => assertProviderRequestWithinBudget(openRouter));
+
+const forcedOpenRouter = buildOpenRouterRequest({
+  model: "test/model",
+  temperature: 0.1,
+  messages: [],
+  tools: [],
+  requiredToolName: "set_design_plan",
+});
+assert.equal(forcedOpenRouter.requestBody.tool_choice, "required");
+assert.equal("parallel_tool_calls" in forcedOpenRouter.requestBody, false);
+assert.equal("provider" in forcedOpenRouter.requestBody, false);
+
+const structuredOpenRouter = buildOpenRouterRequest({
+  model: "test/model",
+  temperature: 0.1,
+  messages: [],
+  tools: [],
+  requiredToolName: "set_design_plan",
+  structuredOutput: {
+    name: "set_design_plan",
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      properties: { status: { type: "string" } },
+      required: ["status"],
+    },
+  },
+});
+assert.deepEqual(structuredOpenRouter.requestBody.response_format, {
+  type: "json_schema",
+  json_schema: {
+    name: "set_design_plan",
+    strict: true,
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      properties: { status: { type: "string" } },
+      required: ["status"],
+    },
+  },
+});
+assert.deepEqual(structuredOpenRouter.requestBody.provider, {
+  require_parameters: true,
+});
+assert.deepEqual(structuredOpenRouter.requestBody.plugins, [
+  { id: "response-healing" },
+]);
+assert.equal("tools" in structuredOpenRouter.requestBody, false);
+assert.equal("tool_choice" in structuredOpenRouter.requestBody, false);
 
 const gemini = buildGeminiRequest({
   model: "gemini-test",
@@ -81,7 +131,43 @@ for (const trackCount of [2, 4, 10, 25, 100]) {
 }
 
 assert.equal(parseRetryAfterMs("2", 0), 2_000);
+assert.equal(parseRetryAfterMs("90", 0), 60_000);
 assert.equal(parseRetryAfterMs("invalid", 0), null);
+
+const routingAudit = extractOpenRouterRoutingAudit({
+  openrouter_metadata: {
+    requested: "test/model",
+    strategy: "fallback",
+    summary: "available=2, selected=Provider B",
+    attempt: 2,
+    endpoints: {
+      available: [
+        { provider: "Provider A", model: "test/model", selected: false },
+        { provider: "Provider B", model: "test/model", selected: true },
+      ],
+    },
+    attempts: [
+      { provider: "Provider A", model: "test/model", status: 529 },
+      { provider: "Provider B", model: "test/model", status: 200 },
+    ],
+    pipeline: [{ type: "response_healing", name: "response-healing", data: { ignored: true } }],
+  },
+});
+assert.deepEqual(routingAudit, {
+  requestedModel: "test/model",
+  strategy: "fallback",
+  summary: "available=2, selected=Provider B",
+  attempt: 2,
+  endpoints: [
+    { provider: "Provider A", model: "test/model", selected: false },
+    { provider: "Provider B", model: "test/model", selected: true },
+  ],
+  fallbackAttempts: [
+    { provider: "Provider A", model: "test/model", status: 529 },
+    { provider: "Provider B", model: "test/model", status: 200 },
+  ],
+  pipelineStages: [{ type: "response_healing", name: "response-healing" }],
+});
 
 const cases = [
   [401, "authentication", "reconfigure"],
@@ -102,5 +188,58 @@ for (const [status, category, action] of cases) {
   assert.equal(getManualProviderFailureDecision(error).action, action);
   assert.doesNotMatch(error.message, /secret/);
 }
+
+const openRouterFailure = classifyProviderFailure({
+  status: 429,
+  body: {
+    error: {
+      message: "retry later",
+      metadata: { error_type: "rate_limit_exceeded", provider_code: "upstream_429" },
+    },
+    openrouter_metadata: { strategy: "fallback", attempt: 2 },
+  },
+});
+assert.equal(openRouterFailure.providerErrorType, "rate_limit_exceeded");
+assert.equal(openRouterFailure.providerCode, "upstream_429");
+assert.equal(openRouterFailure.routing?.attempt, 2);
+
+const nestedProviderFailure = classifyProviderFailure({
+  status: 400,
+  body: {
+    error: {
+      message: "Provider returned error",
+      metadata: {
+        raw: JSON.stringify({
+          error: { message: "Tool calling is unavailable for this route" },
+        }),
+      },
+    },
+  },
+});
+assert.match(
+  nestedProviderFailure.message,
+  /Tool calling is unavailable for this route/,
+);
+
+const fakeOpenRouterKey = ["sk", "or", "v1", "example", "secret"].join("-");
+const secretBearingProviderFailure = classifyProviderFailure({
+  status: 400,
+  body: {
+    error: {
+      message: "Provider returned error",
+      metadata: {
+        raw: JSON.stringify({
+          error: {
+            message:
+              `Authorization: Bearer ${fakeOpenRouterKey}; api_key="another-secret"`,
+          },
+        }),
+      },
+    },
+  },
+});
+assert.equal(secretBearingProviderFailure.message.includes(fakeOpenRouterKey), false);
+assert.doesNotMatch(secretBearingProviderFailure.message, /another-secret/);
+assert.match(secretBearingProviderFailure.message, /\[REDACTED\]/);
 
 console.log("providerRequest tests passed");

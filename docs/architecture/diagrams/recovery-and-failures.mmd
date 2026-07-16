@@ -1,0 +1,15 @@
+flowchart TD
+  Interrupted[Interrupted boundary] --> State[Read revisioned session state]
+  State --> Finalization{Finalization journal incomplete?}
+  Finalization -->|yes| Reconcile[Classify finalization_incomplete]
+  Finalization -->|no| Candidate{Registered candidate exists?}
+  Candidate -->|yes| Verify[Verify path, size, SHA-256, and decode]
+  Candidate -->|no| Sidecar{Rendered MP3 and recovery sidecar exist?}
+  Sidecar -->|yes| RecoverCandidate[Recover manifest and technical evidence without rerender]
+  Sidecar -->|no| Legacy[Classify legacy, output-missing, or failed state]
+  Verify --> Review[Restore every draft in Candidate Review]
+  RecoverCandidate --> Review
+  Review --> Human[Require human choice before promotion]
+  Reconcile --> ResumeFinal[Resume idempotent promotion without overwrite]
+  ResumeFinal --> VerifyFinal[Verify final bytes, decode, journal, history, and wisdom]
+  Legacy --> Preserve[Preserve artifacts and report the honest recovery state]

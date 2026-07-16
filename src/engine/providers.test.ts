@@ -26,30 +26,96 @@ const response = (status: number, body: unknown, headers?: Record<string, string
   });
 
 const bodies: string[] = [];
+const requestHeaders: Headers[] = [];
+const successfulAudits: any[] = [];
 let attempts = 0;
 globalAny.fetch = async (_url: string, init: RequestInit) => {
   bodies.push(String(init.body));
+  requestHeaders.push(new Headers(init.headers));
   attempts++;
   if (attempts === 1)
     return response(429, { error: { message: "slow down" } }, { "Retry-After": "0" });
   return response(200, {
     choices: [{ message: { role: "assistant", content: "ok" } }],
     usage: { prompt_tokens: 12 },
+    openrouter_metadata: {
+      strategy: "fallback",
+      summary: "available=2, selected=Provider B",
+      attempt: 2,
+      attempts: [{ provider: "Provider A", model: "test/model", status: 529 }],
+    },
   });
 };
 
-const session = createProviderSession(config, "system", [], 0.1);
+const session = createProviderSession(config, "system", [], 0.1, [], {
+  stage: "arrangement",
+  role: "arrangement",
+  onRequestAudit: (audit) => successfulAudits.push(audit),
+});
 const result = await session.send("hello");
 assert.equal(result.text, "ok");
 assert.equal(attempts, 2);
 assert.equal(bodies[0], bodies[1], "transport retry must reuse the exact body");
+assert.equal(requestHeaders[0].get("X-OpenRouter-Metadata"), "enabled");
+assert.equal(requestHeaders[0].get("X-OpenRouter-Title"), "AI Medley Architect");
+assert.deepEqual(successfulAudits.at(-1)?.routing, {
+  strategy: "fallback",
+  summary: "available=2, selected=Provider B",
+  attempt: 2,
+  fallbackAttempts: [{ provider: "Provider A", model: "test/model", status: 529 }],
+});
 assert.deepEqual(
   session.getHistory().map((message: any) => message.role),
   ["user", "assistant"],
 );
 
+let unavailableAttempts = 0;
+const unavailableBodies: string[] = [];
+globalAny.fetch = async (_url: string, init: RequestInit) => {
+  unavailableAttempts++;
+  unavailableBodies.push(String(init.body));
+  if (unavailableAttempts === 1)
+    return response(503, { error: { message: "temporarily unavailable" } }, { "Retry-After": "0" });
+  return response(200, {
+    choices: [{ message: { role: "assistant", content: "recovered" } }],
+  });
+};
+const temporarilyUnavailable = createProviderSession(config, "system", [], 0.1);
+assert.equal((await temporarilyUnavailable.send("retry once")).text, "recovered");
+assert.equal(unavailableAttempts, 2);
+assert.equal(
+  unavailableBodies[0],
+  unavailableBodies[1],
+  "503 transport retry must reuse the exact body",
+);
+
+let exhaustedUnavailableAttempts = 0;
+globalAny.fetch = async () => {
+  exhaustedUnavailableAttempts++;
+  return response(
+    503,
+    { error: { message: "still temporarily unavailable" } },
+    { "Retry-After": "0" },
+  );
+};
+const exhaustedUnavailable = createProviderSession(config, "system", [], 0.1);
+await assert.rejects(
+  exhaustedUnavailable.send("stop after one retry"),
+  (error: unknown) =>
+    error instanceof ProviderRequestError && error.category === "server",
+);
+assert.equal(exhaustedUnavailableAttempts, 2, "503 retry budget must remain bounded");
+assert.deepEqual(exhaustedUnavailable.getHistory(), []);
+
 globalAny.fetch = async () =>
-  response(401, { error: { message: "bad key", apiKey: "secret-value" } });
+  response(401, {
+    error: {
+      message: "bad key",
+      apiKey: "secret-value",
+      metadata: { error_type: "authentication", provider_code: "invalid_key" },
+    },
+    openrouter_metadata: { strategy: "direct", attempt: 1 },
+  });
 const audits: any[] = [];
 const failed = createProviderSession(config, "system", [], 0.1, [], {
   stage: "manual",
@@ -66,6 +132,9 @@ await assert.rejects(
 assert.deepEqual(failed.getHistory(), []);
 assert.equal(audits.at(-1)?.status, "failed");
 assert.equal(audits.at(-1)?.errorCategory, "authentication");
+assert.equal(audits.at(-1)?.providerErrorType, "authentication");
+assert.equal(audits.at(-1)?.providerCode, "invalid_key");
+assert.equal(audits.at(-1)?.routing?.attempt, 1);
 
 for (const [status, category] of [
   [402, "quota"],
@@ -172,7 +241,94 @@ globalAny.fetch = async (url: string, init: RequestInit) => {
   proxyRequest = { url, init };
   return response(200, { text: "gemini proxied", functionCalls: [] });
 };
+const automaticTool = {
+  type: "function" as const,
+  function: {
+    name: "set_design_plan",
+    description: "Submit one constrained arrangement.",
+    parameters: {
+      type: "object",
+      additionalProperties: false,
+      required: ["transitionCandidateId"],
+      properties: { transitionCandidateId: { type: "string" } },
+    },
+  },
+};
+const nativeGeminiTool = {
+  name: "read_file",
+  description: "Read an authorized file.",
+  parameters: {
+    type: "OBJECT",
+    required: ["filePath"],
+    properties: { filePath: { type: "STRING" } },
+  },
+};
 const proxiedGemini = createProviderSession(
+  {
+    ...config,
+    provider: "gemini",
+    model: "gemini-test",
+    geminiApiKey: SERVER_MANAGED_API_KEY,
+  },
+  "system",
+  [automaticTool, nativeGeminiTool],
+  0.1,
+);
+assert.equal((await proxiedGemini.send("hello proxy")).text, "gemini proxied");
+assert.equal(proxyRequest!.url, "/api/provider/gemini");
+const geminiProxyBody = JSON.parse(String(proxyRequest!.init.body));
+assert.deepEqual(geminiProxyBody.config.tools[0].functionDeclarations, [
+  {
+    name: "set_design_plan",
+    description: "Submit one constrained arrangement.",
+    parameters: {
+      type: "OBJECT",
+      required: ["transitionCandidateId"],
+      properties: { transitionCandidateId: { type: "STRING" } },
+    },
+  },
+  nativeGeminiTool,
+]);
+
+const forcedGemini = createProviderSession(
+  {
+    ...config,
+    provider: "gemini",
+    model: "gemini-test",
+    geminiApiKey: SERVER_MANAGED_API_KEY,
+  },
+  "system",
+  [automaticTool],
+  0.1,
+  [],
+  { stage: "arrangement", role: "arrangement", requiredToolName: "set_design_plan" },
+);
+await forcedGemini.send("produce the arrangement");
+const forcedGeminiBody = JSON.parse(String(proxyRequest!.init.body));
+assert.deepEqual(forcedGeminiBody.config.toolConfig, {
+  functionCallingConfig: {
+    mode: "ANY",
+    allowedFunctionNames: ["set_design_plan"],
+  },
+});
+
+const forcedOpenRouter = createProviderSession(
+  { ...config, openrouterApiKey: SERVER_MANAGED_API_KEY },
+  "system",
+  [automaticTool],
+  0.1,
+  [],
+  { stage: "arrangement", role: "arrangement", requiredToolName: "set_design_plan" },
+);
+await forcedOpenRouter.send("produce the arrangement");
+const forcedOpenRouterBody = JSON.parse(String(proxyRequest!.init.body));
+assert.equal(forcedOpenRouterBody.tool_choice, "required");
+assert.equal("parallel_tool_calls" in forcedOpenRouterBody, false);
+assert.equal("provider" in forcedOpenRouterBody, false);
+
+globalAny.fetch = async () =>
+  response(400, { error: "Invalid tool schema: api_key=secret-value" });
+const rejectedGemini = createProviderSession(
   {
     ...config,
     provider: "gemini",
@@ -183,8 +339,19 @@ const proxiedGemini = createProviderSession(
   [],
   0.1,
 );
-assert.equal((await proxiedGemini.send("hello proxy")).text, "gemini proxied");
-assert.equal(proxyRequest!.url, "/api/provider/gemini");
+await assert.rejects(
+  rejectedGemini.send("explain failure"),
+  (error: unknown) =>
+    error instanceof ProviderRequestError &&
+    error.message.includes("Invalid tool schema") &&
+    !error.message.includes("secret-value"),
+);
+globalAny.fetch = async (_url: string, init: RequestInit) => {
+  fallbackBodies.push(JSON.parse(String(init.body)));
+  return response(200, {
+    choices: [{ message: { role: "assistant", content: "continued" } }],
+  });
+};
 const fallbackModel = createProviderSession(
   { ...config, model: "test/fallback" },
   "system",

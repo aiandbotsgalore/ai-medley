@@ -1,5 +1,10 @@
 # End-to-End Automatic Workflow Audit
 
+> **Historical audit — not current instructions.** This file records repository
+> behavior observed on 2026-06-22. Current behavior is defined by
+> `docs/current-operations.md`, `AGENTS.md`, and `task_plan.md`; do not execute
+> old provider, model, rendering, review, or finalization steps from this audit.
+
 Date: 2026-06-22
 Repository: `G:\ai-medley--main`
 Scope: active automatic specialist workflow only, with legacy/manual boundaries inspected where shared code can affect automatic behavior.

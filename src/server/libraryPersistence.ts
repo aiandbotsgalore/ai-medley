@@ -24,6 +24,21 @@ export type LibraryStoreOperations = {
   write: (data: LibraryEntry[]) => void;
 };
 
+export type LibraryDeletionRecord = {
+  schemaVersion: 1;
+  id: string;
+  originalPath: string | null;
+  quarantinePath: string | null;
+  status: "pending" | "quarantined";
+  requestedAt: string;
+  updatedAt: string;
+};
+
+export type LibraryDeletionStoreOperations = {
+  read: () => LibraryDeletionRecord[];
+  write: (data: LibraryDeletionRecord[]) => void;
+};
+
 function resolveStore(input: {
   dbPath?: string;
   store?: LibraryStoreOperations;
@@ -33,6 +48,22 @@ function resolveStore(input: {
   return {
     read: () => readJsonArrayFile<LibraryEntry>(input.dbPath!),
     write: (data) => writeJsonArrayFileAtomic(input.dbPath!, data),
+  };
+}
+
+function resolveDeletionStore(input: {
+  dbPath?: string;
+  deletionStore?: LibraryDeletionStoreOperations;
+}): LibraryDeletionStoreOperations {
+  if (input.deletionStore) return input.deletionStore;
+  if (!input.dbPath) throw new Error("Library deletion requires dbPath");
+  const deletionPath = `${input.dbPath}.deletions.json`;
+  return {
+    read: () =>
+      fs.existsSync(deletionPath)
+        ? readJsonArrayFile<LibraryDeletionRecord>(deletionPath)
+        : [],
+    write: (data) => writeJsonArrayFileAtomic(deletionPath, data),
   };
 }
 
@@ -79,8 +110,12 @@ export function deleteLibraryEntryTransactional(input: {
   dbPath?: string;
   id: string;
   store?: LibraryStoreOperations;
+  deletionStore?: LibraryDeletionStoreOperations;
+  now?: () => string;
 }) {
   const store = resolveStore(input);
+  const deletionStore = resolveDeletionStore(input);
+  const now = input.now ?? (() => new Date().toISOString());
   const library = store.read();
   const index = library.findIndex((entry) => entry.id === input.id);
   if (index === -1) return { deleted: false };
@@ -91,7 +126,26 @@ export function deleteLibraryEntryTransactional(input: {
   const quarantinePath = sourceExists
     ? `${sourcePath}.deleting-${randomUUID()}`
     : null;
-  if (quarantinePath) fs.renameSync(sourcePath, quarantinePath);
+  const requestedAt = now();
+  const existingDeletions = deletionStore.read();
+  const pending: LibraryDeletionRecord = {
+    schemaVersion: 1,
+    id: input.id,
+    originalPath: sourceExists ? sourcePath : null,
+    quarantinePath,
+    status: "pending",
+    requestedAt,
+    updatedAt: requestedAt,
+  };
+  // Write intent before moving source bytes. A crash at any later boundary
+  // leaves a recoverable record instead of silently deleting user audio.
+  deletionStore.write([...existingDeletions, pending]);
+  try {
+    if (quarantinePath) fs.renameSync(sourcePath, quarantinePath);
+  } catch (error) {
+    deletionStore.write(existingDeletions);
+    throw error;
+  }
 
   const nextLibrary = library.filter((_, entryIndex) => entryIndex !== index);
   try {
@@ -100,27 +154,21 @@ export function deleteLibraryEntryTransactional(input: {
     if (quarantinePath && fs.existsSync(quarantinePath)) {
       fs.renameSync(quarantinePath, sourcePath);
     }
+    deletionStore.write(existingDeletions);
     throw error;
   }
 
-  if (quarantinePath) {
-    try {
-      fs.rmSync(quarantinePath, { force: true });
-    } catch (deleteError) {
-      try {
-        if (fs.existsSync(quarantinePath)) {
-          fs.renameSync(quarantinePath, sourcePath);
-        }
-        store.write(library);
-      } catch (rollbackError) {
-        throw new AggregateError(
-          [deleteError, rollbackError],
-          `Failed to delete or roll back library source ${sourcePath}`,
-        );
-      }
-      throw deleteError;
-    }
+  const quarantined: LibraryDeletionRecord = {
+    ...pending,
+    status: "quarantined",
+    updatedAt: now(),
+  };
+  try {
+    deletionStore.write([...existingDeletions, quarantined]);
+  } catch {
+    // The pending intent and quarantined source are both retained. Startup
+    // reconciliation can safely classify this as a recoverable deletion.
   }
 
-  return { deleted: true };
+  return { deleted: true, quarantinePath };
 }

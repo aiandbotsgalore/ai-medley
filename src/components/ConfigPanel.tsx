@@ -13,12 +13,15 @@ export type AudioAnalysisMode = "local" | "clips" | "ask" | "cloud";
 export type ModelMode = "automatic" | "manual";
 
 export interface MedleyConfig {
-  configVersion: 3;
+  configVersion: 4;
   modelMode: ModelMode;
   provider: ProviderId;
   model: string;
   geminiApiKey: string;
   openrouterApiKey: string;
+  // Automatic v4 routes every AI request through OpenRouter. This is its
+  // arrangement model; server-side audio reviews use pinned OpenRouter models.
+  automaticOpenRouterFallbackModel?: string;
   audioAnalysisMode: AudioAnalysisMode;
   style: "dj-set" | "smooth-transitions" | "mashup" | "acoustic" | "custom";
   temperature: number;
@@ -29,12 +32,13 @@ export interface MedleyConfig {
 }
 
 export const DEFAULT_CONFIG: MedleyConfig = {
-  configVersion: 3,
+  configVersion: 4,
   modelMode: "automatic",
   provider: "openrouter",
-  model: "meta-llama/llama-3.3-70b-instruct:free",
+  model: "google/gemini-3.1-pro-preview",
   geminiApiKey: "",
   openrouterApiKey: "",
+  automaticOpenRouterFallbackModel: "google/gemini-3.1-pro-preview",
   audioAnalysisMode: "local",
   style: "smooth-transitions",
   temperature: 0.1,
@@ -68,7 +72,21 @@ const STYLES = [
   { id: "custom", label: "Custom", desc: "Describe your own approach" },
 ] as const;
 
+const PRIMARY_STYLES = STYLES.filter(
+  (style) => style.id !== "acoustic" && style.id !== "custom",
+);
+
 export const GEMINI_MODELS = [
+  {
+    id: "gemini-3.1-pro-preview",
+    label: "Gemini 3.1 Pro (Preview)",
+    desc: "Best automatic arrangement and whole-mix audio review",
+  },
+  {
+    id: "gemini-3.5-flash",
+    label: "Gemini 3.5 Flash",
+    desc: "Fast targeted audio-review follow-ups",
+  },
   {
     id: "gemini-2.5-flash",
     label: "Gemini 2.5 Flash",
@@ -82,7 +100,28 @@ export const GEMINI_MODELS = [
 ];
 
 export const OPENROUTER_MODELS = [
-  // Automatic specialist team
+  {
+    id: "google/gemini-3.1-pro-preview",
+    label: "Gemini 3.1 Pro (via OpenRouter)",
+    desc: "Automatic arrangement and whole-mix listening",
+  },
+  {
+    id: "google/gemini-3.5-flash",
+    label: "Gemini 3.5 Flash (via OpenRouter)",
+    desc: "Fast targeted audio-review follow-ups",
+  },
+  // Recommended paid defaults
+  {
+    id: "google/gemini-2.5-pro",
+    label: "Gemini 2.5 Pro",
+    desc: "Recommended for arrangement planning and quality review",
+  },
+  {
+    id: "google/gemini-2.5-flash",
+    label: "Gemini 2.5 Flash",
+    desc: "Recommended for fast routine work and retries",
+  },
+  // Automatic specialist team legacy options
   {
     id: "nvidia/nemotron-3-ultra-550b-a55b:free",
     label: "Nemotron 3 Ultra 550B (free)",
@@ -127,17 +166,7 @@ export const OPENROUTER_MODELS = [
     desc: "High-performance model built for agentic workloads & tool use. Strong at complex workflows. (Prompts & completions may be logged by provider to improve the model)",
   },
 
-  // Paid / higher quality options
-  {
-    id: "google/gemini-2.5-flash",
-    label: "Gemini 2.5 Flash",
-    desc: "Gemini routed through OpenRouter",
-  },
-  {
-    id: "google/gemini-2.5-pro",
-    label: "Gemini 2.5 Pro",
-    desc: "Higher quality Gemini via OpenRouter",
-  },
+  // Other paid / higher quality options
   {
     id: "openai/gpt-4o-mini",
     label: "GPT-4o Mini",
@@ -153,7 +182,7 @@ export const OPENROUTER_MODELS = [
 export function getDefaultModelForProvider(provider: ProviderId) {
   return provider === "gemini"
     ? GEMINI_MODELS[0].id
-    : "meta-llama/llama-3.3-70b-instruct:free";
+    : "google/gemini-3.1-pro-preview";
 }
 
 const ANALYSIS_MODES = [
@@ -177,6 +206,10 @@ export default function ConfigPanel({
     "idle" | "saving" | "saved" | "error"
   >("idle");
   const [keySaveError, setKeySaveError] = useState("");
+  const [preflightState, setPreflightState] = useState<
+    "idle" | "checking" | "available" | "error"
+  >("idle");
+  const [preflightMessage, setPreflightMessage] = useState("");
   const overlayRef = useRef<HTMLDivElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -245,13 +278,6 @@ export default function ConfigPanel({
     onUpdate(next);
   };
 
-  const setProvider = (provider: ProviderId) => {
-    update({ provider, model: getDefaultModelForProvider(provider) });
-  };
-
-  const models =
-    local.provider === "gemini" ? GEMINI_MODELS : OPENROUTER_MODELS;
-
   const saveOpenRouterKey = async () => {
     const apiKey = local.openrouterApiKey.trim();
     if (!apiKey || apiKey === SERVER_MANAGED_API_KEY) return;
@@ -273,6 +299,23 @@ export default function ConfigPanel({
     }
   };
 
+  const testOpenRouterConnection = async () => {
+    setPreflightState("checking");
+    setPreflightMessage("");
+    try {
+      const response = await fetch("/api/provider/openrouter/preflight", {
+        method: "POST",
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Connection check failed");
+      setPreflightState("available");
+      setPreflightMessage(`Connected to ${data.model} in ${data.latencyMs} ms.`);
+    } catch (error: any) {
+      setPreflightState("error");
+      setPreflightMessage(error.message || "Connection check failed");
+    }
+  };
+
   return (
     <div
       ref={overlayRef}
@@ -286,9 +329,9 @@ export default function ConfigPanel({
         role="dialog"
         aria-modal="true"
         aria-labelledby="configuration-title"
-        className="bg-[#111] border border-[#333] rounded-xl w-full max-w-xl mx-3 p-4 sm:p-6 shadow-2xl max-h-[90vh] overflow-y-auto custom-scrollbar"
+        className="bg-[#111] border border-[#333] rounded-2xl w-full max-w-2xl mx-3 shadow-2xl max-h-[calc(100dvh-1rem)] flex flex-col overflow-hidden"
       >
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center justify-between px-4 sm:px-6 py-3 border-b border-white/10 shrink-0 bg-[#131313]">
           <h2 id="configuration-title" className="text-[15px] font-bold text-white uppercase tracking-wider">
             Configuration
           </h2>
@@ -303,161 +346,77 @@ export default function ConfigPanel({
           </button>
         </div>
 
-        {local.modelMode === "manual" && (
-          <div className="mb-5">
-            <div className="block text-[11px] uppercase tracking-widest text-[#999] mb-2 font-semibold">
-              Manual Tool Capability
+        <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar px-4 sm:px-6 py-5">
+
+        {local.modelMode === "manual" ? (
+          <div className="mb-5 border border-amber-400/25 bg-amber-400/5 rounded-lg p-3">
+            <div className="text-[10px] uppercase tracking-widest text-amber-200 font-semibold">
+              Manual configuration is active
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2" role="group" aria-label="Manual tool capability">
-              {(["contained", "expert"] as const).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  aria-pressed={local.manualCapabilityMode === mode}
-                  onClick={() => update({ manualCapabilityMode: mode })}
-                  className={`p-3 rounded-lg border text-left ${local.manualCapabilityMode === mode ? "border-[#00F0FF] bg-[#00F0FF]/5" : "border-[#222] bg-[#0A0A0A]"}`}
-                >
-                  <div className="text-[10px] font-bold text-[#AAA]">
-                    {mode === "contained" ? "Contained" : "Expert Shell"}
-                  </div>
-                  <div className="text-[9px] text-[#555] mt-1">
-                    {mode === "contained"
-                      ? "Session files and read-only directory diagnostics only."
-                      : "Allows arbitrary shell commands with your account permissions."}
-                  </div>
-                </button>
-              ))}
+            <p className="mt-1 text-[10px] text-[#BBB]">
+              Switch to the streamlined automatic mix to use the server-managed OpenRouter route.
+            </p>
+            <button
+              type="button"
+              onClick={() =>
+                update({
+                  modelMode: "automatic",
+                  provider: "openrouter",
+                  model: "google/gemini-3.1-pro-preview",
+                  audioAnalysisMode: "local",
+                  manualCapabilityMode: "contained",
+                })
+              }
+              className="mt-3 min-h-11 px-3 rounded-lg border border-[#00F0FF]/35 bg-[#00F0FF]/5 text-[10px] font-mono font-bold uppercase tracking-wider text-[#8BEAF2] hover:text-white hover:border-[#00F0FF]/70 transition-colors"
+            >
+              Use recommended automatic mix
+            </button>
+          </div>
+        ) : (
+          <div className="mb-5 border border-[#222] bg-[#0A0A0A] rounded-lg p-3">
+            <div className="text-[10px] uppercase tracking-widest text-[#8BEAF2] font-semibold">
+              Automatic mix
             </div>
+            <p className="mt-1 text-[10px] text-[#AAA]">
+              Direct Gemini Pro plans and reviews the whole mix; Gemini Flash handles targeted follow-up reviews. Rendering stays local.
+            </p>
+            <p className="mt-2 text-[10px] text-amber-100/80">
+              Automatic review sends the rendered candidate to Gemini. If it finds a problem, only the affected transition previews are sent for follow-up; original library tracks stay local.
+            </p>
           </div>
         )}
 
-        <div className="mb-5">
-          <div className="block text-[11px] uppercase tracking-widest text-[#999] mb-2 font-semibold">
-            Workflow Mode
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2" role="group" aria-label="Workflow mode">
-            {(
-              [
-                {
-                  id: "automatic",
-                  label: "Specialist Team",
-                  desc: "Super analyzes, Ultra arranges, Nex produces",
-                },
-                {
-                  id: "manual",
-                  label: "Manual Model",
-                  desc: "Use one selected model for the full run",
-                },
-              ] as const
-            ).map((mode) => (
-              <button
-                key={mode.id}
-                type="button"
-                aria-pressed={local.modelMode === mode.id}
-                onClick={() => update({ modelMode: mode.id })}
-                className={`p-3 rounded-lg border text-left transition-all ${local.modelMode === mode.id ? "border-[#00F0FF] bg-[#00F0FF]/5" : "border-[#222] bg-[#0A0A0A] hover:border-[#444]"}`}
-              >
-                <div
-                  className={`text-[11px] font-bold ${local.modelMode === mode.id ? "text-[#00F0FF]" : "text-[#AAA]"}`}
-                >
-                  {mode.label}
-                </div>
-                <div className="text-[9px] text-[#555] mt-0.5">{mode.desc}</div>
-              </button>
-            ))}
-          </div>
-        </div>
-
         {local.modelMode === "manual" && (
-          <div className="mb-5">
-            <div className="block text-[11px] uppercase tracking-widest text-[#999] mb-2 font-semibold">
-              Provider
+          <div className="mb-5 border border-[#222] bg-[#0A0A0A] rounded-lg p-3">
+            <div className="text-[10px] uppercase tracking-widest text-[#777] font-semibold mb-2">
+              Model provider
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2" role="group" aria-label="AI provider">
+            <div className="grid grid-cols-2 gap-2" role="group" aria-label="Model provider">
               {(["gemini", "openrouter"] as const).map((provider) => (
                 <button
                   key={provider}
                   type="button"
                   aria-pressed={local.provider === provider}
-                  onClick={() => setProvider(provider)}
-                  className={`p-3 rounded-lg border text-left transition-all ${local.provider === provider ? "border-[#00F0FF] bg-[#00F0FF]/5" : "border-[#222] bg-[#0A0A0A] hover:border-[#444]"}`}
+                  onClick={() => update({ provider, model: getDefaultModelForProvider(provider) })}
+                  className={`min-h-11 rounded-lg border px-3 text-left text-[11px] font-semibold transition-colors ${local.provider === provider ? "border-[#00F0FF] bg-[#00F0FF]/5 text-[#8BEAF2]" : "border-[#333] text-[#AAA] hover:border-[#555]"}`}
                 >
-                  <div
-                    className={`text-[11px] font-bold ${local.provider === provider ? "text-[#00F0FF]" : "text-[#AAA]"}`}
-                  >
-                    {provider === "gemini" ? "Gemini Direct" : "OpenRouter"}
-                  </div>
-                  <div className="text-[9px] text-[#555] mt-0.5">
-                    {provider === "gemini"
-                      ? "Use Google Gemini API directly"
-                      : "Use a model through OpenRouter"}
-                  </div>
+                  {provider === "gemini" ? "Google Gemini" : "OpenRouter"}
                 </button>
               ))}
             </div>
-          </div>
-        )}
-
-        {local.modelMode === "automatic" ? (
-          <div className="mb-5 border border-[#222] bg-[#0A0A0A] rounded-lg p-3">
-            <div className="text-[10px] uppercase tracking-widest text-[#666] font-semibold mb-2">
-              Automatic Specialists
-            </div>
-            <div className="space-y-1 text-[10px]">
-              <div className="flex justify-between gap-3">
-                <span className="text-[#777]">Context</span>
-                <span className="text-[#CCC]">Nemotron 3 Super</span>
-              </div>
-              <div className="flex justify-between gap-3">
-                <span className="text-[#777]">Arrangement / Review</span>
-                <span className="text-[#CCC]">Nemotron 3 Ultra</span>
-              </div>
-              <div className="flex justify-between gap-3">
-                <span className="text-[#777]">Production</span>
-                <span className="text-[#CCC]">Nex-N2-Pro</span>
-              </div>
-            </div>
-            <p className="mt-2 text-[9px] text-[#555]">
-              Automatic mode always uses OpenRouter and local audio analysis.
-            </p>
-          </div>
-        ) : (
-          <div className="mb-5">
-            <div className="block text-[11px] uppercase tracking-widest text-[#999] mb-2 font-semibold">
-              AI Model
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2" role="group" aria-label="AI model">
-              {models.map((m) => (
-                <button
-                  key={m.id}
-                  type="button"
-                  aria-pressed={local.model === m.id}
-                  onClick={() => update({ model: m.id })}
-                  className={`p-3 rounded-lg border text-left transition-all ${local.model === m.id ? "border-[#00F0FF] bg-[#00F0FF]/5" : "border-[#222] bg-[#0A0A0A] hover:border-[#444]"}`}
-                >
-                  <div
-                    className={`text-[11px] font-bold ${local.model === m.id ? "text-[#00F0FF]" : "text-[#AAA]"}`}
-                  >
-                    {m.label}
-                  </div>
-                  <div className="text-[9px] text-[#555] mt-0.5">{m.desc}</div>
-                </button>
+            <label htmlFor="config-model" className="block mt-3 text-[10px] text-[#AAA] mb-1">
+              Model
+            </label>
+            <select
+              id="config-model"
+              value={local.model}
+              onChange={(event) => update({ model: event.target.value })}
+              className="w-full min-h-11 bg-[#0A0A0A] border border-[#444] rounded-lg px-3 text-[11px] text-[#CCC] focus:border-[#00F0FF]/50 focus:outline-none"
+            >
+              {(local.provider === "gemini" ? GEMINI_MODELS : OPENROUTER_MODELS).map((model) => (
+                <option key={model.id} value={model.id}>{model.label}</option>
               ))}
-            </div>
-            {local.provider === "openrouter" && (
-              <div className="mt-2">
-                <label htmlFor="config-custom-model" className="block text-[11px] uppercase tracking-widest text-[#999] mb-2 font-semibold">
-                  Custom OpenRouter Model
-                </label>
-                <input
-                  id="config-custom-model"
-                  value={local.model}
-                  onChange={(e) => update({ model: e.target.value })}
-                  placeholder="e.g. google/gemini-2.5-pro"
-                  className="w-full min-h-11 bg-[#0A0A0A] border border-[#444] rounded-lg px-3 py-2.5 text-[11px] text-[#CCC] placeholder:text-[#888] focus:border-[#00F0FF]/50 focus:outline-none"
-                />
-              </div>
-            )}
+            </select>
           </div>
         )}
 
@@ -502,7 +461,8 @@ export default function ConfigPanel({
               ? " A server-managed credential is available."
               : ""}
           </div>
-          {(local.modelMode === "automatic" || local.provider === "openrouter") && (
+          {local.modelMode === "manual" && local.provider === "openrouter" && (
+            <>
             <div className="mt-2 flex items-center gap-3">
               <button
                 type="button"
@@ -516,43 +476,119 @@ export default function ConfigPanel({
               >
                 {keySaveState === "saving" ? "Saving…" : "Save on this computer"}
               </button>
+              <button
+                type="button"
+                onClick={testOpenRouterConnection}
+                disabled={
+                  preflightState === "checking" ||
+                  local.openrouterApiKey !== SERVER_MANAGED_API_KEY
+                }
+                className="min-h-11 px-3 rounded-lg border border-[#8BEAF2]/35 bg-[#8BEAF2]/5 text-[10px] font-mono font-bold uppercase tracking-wider text-[#8BEAF2] hover:text-white hover:border-[#8BEAF2]/70 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                {preflightState === "checking" ? "Checking…" : "Test connection"}
+              </button>
               <span
                 role="status"
                 aria-live="polite"
-                className={`text-[10px] ${keySaveState === "error" ? "text-red-300" : "text-emerald-300"}`}
+                className={`text-[10px] ${keySaveState === "error" || preflightState === "error" ? "text-red-300" : "text-emerald-300"}`}
               >
                 {keySaveState === "saved"
                   ? "Saved server-side for future sessions."
-                  : keySaveError}
+                  : keySaveError || preflightMessage}
               </span>
             </div>
+            {local.openrouterApiKey !== SERVER_MANAGED_API_KEY && (
+              <p className="mt-1 text-[9px] text-[#777]">
+                Save the key on this computer before running the server-managed connection check.
+              </p>
+            )}
+            </>
           )}
         </div>
 
-        <div className="mb-5">
-          <div className="block text-[11px] uppercase tracking-widest text-[#999] mb-2 font-semibold">
-            Audio Analysis
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2" role="group" aria-label="Audio analysis mode">
-            {ANALYSIS_MODES.map((mode) => (
+        {local.modelMode === "automatic" && (
+          <div className="mb-5 border border-[#222] bg-[#0A0A0A] rounded-lg p-3">
+            <div className="text-[10px] uppercase tracking-widest text-[#8BEAF2] font-semibold">
+              Automatic route: OpenRouter
+            </div>
+            <p className="mt-1 text-[10px] text-[#AAA]">
+              Every Automatic AI request uses OpenRouter. Gemini 3.1 Pro handles arrangement and the whole-mix review; Gemini 3.5 Flash handles targeted review.
+            </p>
+            <label htmlFor="automatic-openrouter-fallback-model" className="block mt-3 text-[10px] text-[#AAA] mb-1">
+              Arrangement model
+            </label>
+            <select
+              id="automatic-openrouter-fallback-model"
+              value={local.automaticOpenRouterFallbackModel ?? getDefaultModelForProvider("openrouter")}
+              onChange={(event) => update({ automaticOpenRouterFallbackModel: event.target.value })}
+              className="w-full min-h-11 bg-[#0A0A0A] border border-[#444] rounded-lg px-3 text-[11px] text-[#CCC] focus:border-[#00F0FF]/50 focus:outline-none"
+            >
+              {OPENROUTER_MODELS.map((model) => (
+                <option key={model.id} value={model.id}>{model.label}</option>
+              ))}
+            </select>
+            <label htmlFor="automatic-openrouter-api-key" className="block mt-3 text-[10px] text-[#AAA] mb-1">
+              OpenRouter API Key
+            </label>
+            <input
+              id="automatic-openrouter-api-key"
+              type="password"
+              value={local.openrouterApiKey === SERVER_MANAGED_API_KEY ? "" : local.openrouterApiKey}
+              onChange={(event) => update({ openrouterApiKey: event.target.value })}
+              placeholder="sk-or-v1-..."
+              className="w-full min-h-11 bg-[#0A0A0A] border border-[#444] rounded-lg px-3 py-2.5 text-[11px] text-[#CCC] placeholder:text-[#888] focus:border-[#00F0FF]/50 focus:outline-none"
+            />
+            <p className="mt-1 text-[9px] text-[#555]">
+              {local.openrouterApiKey === SERVER_MANAGED_API_KEY
+                ? "A server-managed OpenRouter credential is available for the fallback."
+                : "Add or save an OpenRouter key to enable the automatic fallback."}
+            </p>
+            <div className="mt-2 flex items-center gap-3">
               <button
-                key={mode.id}
                 type="button"
-                aria-pressed={local.audioAnalysisMode === mode.id}
-                onClick={() => update({ audioAnalysisMode: mode.id })}
-                className={`p-3 rounded-lg border text-left transition-all ${local.audioAnalysisMode === mode.id ? "border-[#00F0FF] bg-[#00F0FF]/5" : "border-[#222] bg-[#0A0A0A] hover:border-[#444]"}`}
+                onClick={saveOpenRouterKey}
+                disabled={
+                  keySaveState === "saving" ||
+                  !local.openrouterApiKey ||
+                  local.openrouterApiKey === SERVER_MANAGED_API_KEY
+                }
+                className="min-h-11 px-3 rounded-lg border border-[#00F0FF]/35 bg-[#00F0FF]/5 text-[10px] font-mono font-bold uppercase tracking-wider text-[#8BEAF2] hover:text-white hover:border-[#00F0FF]/70 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
               >
-                <div
-                  className={`text-[10px] font-bold ${local.audioAnalysisMode === mode.id ? "text-[#00F0FF]" : "text-[#AAA]"}`}
-                >
-                  {mode.label}
-                </div>
-                <div className="text-[9px] text-[#555] mt-0.5 leading-snug">
-                  {mode.desc}
-                </div>
+                {keySaveState === "saving" ? "Saving…" : "Save on this computer"}
               </button>
-            ))}
+              <button
+                type="button"
+                onClick={testOpenRouterConnection}
+                disabled={
+                  preflightState === "checking" ||
+                  local.openrouterApiKey !== SERVER_MANAGED_API_KEY
+                }
+                className="min-h-11 px-3 rounded-lg border border-[#8BEAF2]/35 bg-[#8BEAF2]/5 text-[10px] font-mono font-bold uppercase tracking-wider text-[#8BEAF2] hover:text-white hover:border-[#8BEAF2]/70 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                {preflightState === "checking" ? "Checking…" : "Test connection"}
+              </button>
+              <span
+                role="status"
+                aria-live="polite"
+                className={`text-[10px] ${keySaveState === "error" || preflightState === "error" ? "text-red-300" : "text-emerald-300"}`}
+              >
+                {keySaveState === "saved"
+                  ? "Saved server-side for future sessions."
+                  : keySaveError || preflightMessage}
+              </span>
+            </div>
           </div>
+        )}
+
+        <div className="mb-5 border border-[#222] bg-[#0A0A0A] rounded-lg p-3">
+          <div className="text-[10px] uppercase tracking-widest text-[#777] font-semibold">
+            Audio analysis
+          </div>
+          <p className="mt-1 text-[10px] text-[#AAA]">
+            {local.audioAnalysisMode === "local"
+              ? "Local-only analysis is on. Your music stays on this computer."
+              : "Your advanced audio-analysis preference is active."}
+          </p>
         </div>
 
         {/* Style Presets */}
@@ -560,14 +596,14 @@ export default function ConfigPanel({
           <div className="block text-[11px] uppercase tracking-widest text-[#999] mb-2 font-semibold">
             Medley Style
           </div>
-          <div className="space-y-1.5" role="group" aria-label="Medley style">
-            {STYLES.map((s) => (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2" role="group" aria-label="Medley style">
+            {PRIMARY_STYLES.map((s) => (
               <button
                 key={s.id}
                 type="button"
                 aria-pressed={local.style === s.id}
                 onClick={() => update({ style: s.id as any })}
-                className={`w-full p-2.5 rounded-lg border text-left transition-all flex items-center gap-3 ${local.style === s.id ? "border-[#00F0FF] bg-[#00F0FF]/5" : "border-[#222] bg-[#0A0A0A] hover:border-[#444]"}`}
+                className={`w-full min-h-0 p-3 rounded-lg border text-left transition-all flex items-start gap-2 ${local.style === s.id ? "border-[#00F0FF] bg-[#00F0FF]/5" : "border-[#222] bg-[#0A0A0A] hover:border-[#444]"}`}
               >
                 <div
                   aria-hidden="true"
@@ -634,6 +670,57 @@ export default function ConfigPanel({
           </div>
         </div>
 
+        <details
+          className="mb-5 border border-[#222] bg-[#0A0A0A] rounded-lg p-3"
+          open={
+            local.audioAnalysisMode !== "local" ||
+            local.style === "acoustic" ||
+            local.style === "custom"
+          }
+        >
+          <summary className="cursor-pointer text-[10px] uppercase tracking-widest text-[#777] font-semibold">
+            Advanced controls
+          </summary>
+          <div className="mt-3 space-y-5">
+            <div>
+              <div className="text-[10px] text-[#AAA] mb-2">Audio analysis</div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2" role="group" aria-label="Audio analysis mode">
+                {ANALYSIS_MODES.map((mode) => (
+                  <button
+                    key={mode.id}
+                    type="button"
+                    aria-pressed={local.audioAnalysisMode === mode.id}
+                    onClick={() => update({ audioAnalysisMode: mode.id })}
+                    className={`p-3 rounded-lg border text-left transition-all ${local.audioAnalysisMode === mode.id ? "border-[#00F0FF] bg-[#00F0FF]/5" : "border-[#333] hover:border-[#555]"}`}
+                  >
+                    <div className="text-[10px] font-bold text-[#CCC]">{mode.label}</div>
+                    <div className="text-[9px] text-[#666] mt-0.5 leading-snug">{mode.desc}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div className="text-[10px] text-[#AAA] mb-2">Other styles</div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2" role="group" aria-label="Other medley styles">
+                {STYLES.filter(
+                  (style) => !PRIMARY_STYLES.some((primary) => primary.id === style.id),
+                ).map((style) => (
+                  <button
+                    key={style.id}
+                    type="button"
+                    aria-pressed={local.style === style.id}
+                    onClick={() => update({ style: style.id })}
+                    className={`p-3 rounded-lg border text-left transition-all ${local.style === style.id ? "border-[#00F0FF] bg-[#00F0FF]/5" : "border-[#333] hover:border-[#555]"}`}
+                  >
+                    <div className="text-[10px] font-bold text-[#CCC]">{style.label}</div>
+                    <div className="text-[9px] text-[#666] mt-0.5">{style.desc}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </details>
+
         {/* Custom Instructions */}
         {local.style === "custom" && (
           <div className="mb-5">
@@ -651,13 +738,16 @@ export default function ConfigPanel({
           </div>
         )}
 
-        <button
-          type="button"
-          onClick={onClose}
-          className="w-full min-h-11 py-2.5 bg-[#00F0FF] text-black text-[11px] font-bold uppercase rounded-lg hover:bg-white transition-colors"
-        >
-          Apply Configuration
-        </button>
+        </div>
+        <div className="shrink-0 border-t border-white/10 bg-[#131313] px-4 sm:px-6 py-3">
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-full min-h-11 py-2.5 bg-[#00F0FF] text-black text-[11px] font-bold uppercase rounded-lg hover:bg-white transition-colors"
+          >
+            Apply Configuration
+          </button>
+        </div>
       </div>
     </div>
   );

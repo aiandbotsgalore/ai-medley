@@ -32,6 +32,31 @@ assert.equal(getStartConfigurationError(migrated), null);
 const ready = { ...DEFAULT_CONFIG, openrouterApiKey: "openrouter-key" };
 assert.equal(getStartConfigurationError(ready), null);
 
+const automaticUpgrade = migrateMedleyConfigWithNotices({
+  ...DEFAULT_CONFIG,
+  configVersion: 3,
+  modelMode: "automatic",
+  provider: "openrouter",
+  model: "google/gemini-2.5-pro",
+  openrouterApiKey: "openrouter-key",
+  geminiApiKey: "gemini-key",
+} as any);
+assert.equal(automaticUpgrade.config.provider, "openrouter");
+assert.equal(automaticUpgrade.config.model, "google/gemini-3.1-pro-preview");
+assert.equal(
+  automaticUpgrade.config.automaticOpenRouterFallbackModel,
+  "google/gemini-3.1-pro-preview",
+);
+assert.match(automaticUpgrade.notices.join(" "), /OpenRouter/i);
+
+const openRouterOnlyAutomatic = migrateMedleyConfig({
+  ...DEFAULT_CONFIG,
+  modelMode: "automatic",
+  geminiApiKey: "",
+  openrouterApiKey: "openrouter-key",
+});
+assert.equal(getStartConfigurationError(openRouterOnlyAutomatic), null);
+
 const incompatible = migrateMedleyConfigWithNotices({
   ...DEFAULT_CONFIG,
   configVersion: 2,

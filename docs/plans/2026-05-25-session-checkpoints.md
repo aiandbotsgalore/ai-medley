@@ -1,5 +1,9 @@
 # Session Checkpoints Implementation Plan
 
+> **Historical plan — do not execute.** Retained for provenance. Current
+> workflow and active work are defined by `docs/current-operations.md`,
+> `AGENTS.md`, and `task_plan.md`; imperative instructions below are superseded.
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Persist the AI loop's chat history and counters after every iteration so a crashed or cancelled session can be resumed from the last completed model turn.

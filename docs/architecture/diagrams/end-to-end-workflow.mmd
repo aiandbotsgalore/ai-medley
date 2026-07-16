@@ -1,0 +1,17 @@
+flowchart LR
+  Library[Selected library tracks] --> Analysis[Local analysis]
+  Analysis --> Design[Deterministic v4 design snapshot]
+  Design --> Arrangement[OpenRouter chooses measured transition candidates]
+  Arrangement --> Compile[Deterministic FFmpeg compiler]
+  Compile --> Candidate[Candidate MP3 and append-only manifest]
+  Candidate --> Technical[Technical quality gate]
+  Technical -->|passes| Musical[OpenRouter reviews rendered audio]
+  Technical -->|invalid but preserved| Review[Candidate Review]
+  Musical -->|safe correction| Compile
+  Musical -->|recommended or no safe correction| Options{Need another distinct option?}
+  Options -->|yes and capacity remains| Arrangement
+  Options -->|no or limit reached| Review
+  Review --> Human[Human chooses a technically valid draft]
+  Human --> Promotion[Journaled final MP3 promotion]
+  Promotion --> History[History and wisdom projections]
+  History --> Verified[Verified final MP3 and completed state]

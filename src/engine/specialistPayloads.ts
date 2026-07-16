@@ -176,14 +176,29 @@ export function buildArrangementStageData(
       transition,
     );
   }
-  for (const transition of design.transitionMatrixSummary.slice(0, 8)) {
-    selected.set(
-      `${transition.fromTrackId}:${transition.fromSectionId}:${transition.toTrackId}:${transition.toSectionId}`,
-      transition,
+  const candidatesByPair = new Map<
+    string,
+    (typeof design.transitionMatrixSummary)[number][]
+  >();
+  for (const transition of design.transitionMatrixSummary) {
+    const key = `${transition.fromTrackId}:${transition.toTrackId}`;
+    candidatesByPair.set(key, [...(candidatesByPair.get(key) ?? []), transition]);
+  }
+  for (const candidates of candidatesByPair.values()) {
+    const byScore = [...candidates].sort((a, b) => b.score - a.score);
+    const byEarlyExit = [...candidates].sort(
+      (a, b) => a.fromExitSec - b.fromExitSec,
     );
+    for (const transition of [byScore[0], byEarlyExit[0]]) {
+      if (!transition) continue;
+      selected.set(
+        `${transition.fromTrackId}:${transition.fromSectionId}:${transition.toTrackId}:${transition.toSectionId}`,
+        transition,
+      );
+    }
   }
   return {
-    task: "Create one exact, musically coherent arrangement using only supplied IDs and timestamps.",
+    task: "Create one exact, musically coherent arrangement using only supplied transition candidates. Copy every selected candidate ID, track, section, and timestamp exactly. Meet the requested target duration within 10 percent before rendering.",
     projectBrief: {
       ...projectBrief,
       trackSummaries: projectBrief.trackSummaries.map((track) => ({
@@ -211,6 +226,7 @@ export function buildArrangementStageData(
       name: strategy.title,
       orderedTrackIds: strategy.orderedTracks.map((track) => track.trackId),
       score: strategy.score,
+      estimatedDurationSec: strategy.estimatedDurationSec,
       tradeoffs: strategy.tradeoffs.slice(0, 3),
       warnings: strategy.warnings.slice(0, 3),
     })),

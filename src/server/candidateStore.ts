@@ -4,15 +4,21 @@ import path from "path";
 import { isDeepStrictEqual } from "node:util";
 import {
   CandidateManifestSchema,
+  CandidateHumanReviewSchema,
+  CandidateTechnicalEvaluationSchema,
   MAX_COMPLETE_CANDIDATES,
+  RenderCandidateSchema,
   chooseBestCandidate,
   type CandidateManifest,
   type QualityReview,
   type RenderCandidate,
 } from "../types/specialistWorkflow";
+import { sanitizeResolvedTransitionsForManifest } from "./transitionResolution";
+import { withSessionTransaction } from "./sessionTransaction";
+import { stableHash } from "./sessionIdempotency";
 
 const SESSION_ID_PATTERN = /^[a-zA-Z0-9_-]{3,80}$/;
-const manifestLocks = new Map<string, Promise<void>>();
+export const MAX_SESSION_ARTIFACT_BYTES = 2 * 1024 * 1024 * 1024;
 
 export function validateSessionId(sessionId: string) {
   if (!SESSION_ID_PATTERN.test(sessionId)) {
@@ -44,23 +50,7 @@ function manifestPath(workDir: string, sessionId: string) {
 export async function withSessionLock<T>(
   sessionId: string,
   operation: () => Promise<T>,
-): Promise<T> {
-  const previous = manifestLocks.get(sessionId) ?? Promise.resolve();
-  let release!: () => void;
-  const current = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const queued = previous.then(() => current);
-  manifestLocks.set(sessionId, queued);
-  await previous;
-  try {
-    return await operation();
-  } finally {
-    release();
-    if (manifestLocks.get(sessionId) === queued)
-      manifestLocks.delete(sessionId);
-  }
-}
+): Promise<T> { return withSessionTransaction(sessionId, operation); }
 
 export function createEmptyManifest(sessionId: string): CandidateManifest {
   return {
@@ -71,6 +61,9 @@ export function createEmptyManifest(sessionId: string): CandidateManifest {
     finalizedCandidateId: null,
     finalOutputPath: null,
     candidates: [],
+    technicalEvaluations: [],
+    musicalReviews: [],
+    humanReviews: [],
     updatedAt: new Date().toISOString(),
   };
 }
@@ -252,6 +245,36 @@ export function assertCandidateStorageAvailable(
   }
 }
 
+function sessionArtifactBytes(directory: string): number {
+  let total = 0;
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const target = path.join(directory, entry.name);
+    if (entry.isDirectory()) total += sessionArtifactBytes(target);
+    else if (entry.isFile()) total += fs.statSync(target).size;
+  }
+  return total;
+}
+
+/** Refuse new artifacts before rendering; never evict existing evidence. */
+export function assertSessionArtifactBudget(
+  workDir: string,
+  sessionId: string,
+  estimatedBytes: number,
+  maximumBytes = MAX_SESSION_ARTIFACT_BYTES,
+) {
+  const sessionDir = getSessionDirectory(workDir, sessionId);
+  ensureDirectory(sessionDir);
+  const existingBytes = sessionArtifactBytes(sessionDir);
+  if (!Number.isFinite(estimatedBytes) || estimatedBytes < 0) {
+    throw new Error("Session artifact estimate is invalid");
+  }
+  if (existingBytes + estimatedBytes > maximumBytes) {
+    throw new Error(
+      `SESSION_ARTIFACT_LIMIT: ${existingBytes + estimatedBytes} bytes would exceed the ${maximumBytes}-byte session limit`,
+    );
+  }
+}
+
 export function validateLegacyFinalOutput(
   workDir: string,
   sessionId: string,
@@ -292,6 +315,28 @@ export function nextCandidateIdentity(manifest: CandidateManifest) {
   };
 }
 
+/** Hash only authoritative transition facts that can change rendered audio. */
+export function computeCandidatePlanHash(
+  transitions: RenderCandidate["resolvedTransitions"],
+) {
+  if (!transitions?.length) return null;
+  return stableHash(
+    transitions.map((transition) => ({
+      transitionId: transition.transitionId,
+      transitionCandidateId: transition.transitionCandidateId ?? null,
+      fromTrackId: transition.fromTrackId,
+      fromSectionId: transition.fromSectionId,
+      toTrackId: transition.toTrackId,
+      toSectionId: transition.toSectionId,
+      actualFromExitSec: transition.actualFromExitSec,
+      actualToEntrySec: transition.actualToEntrySec,
+      durationUsed: transition.durationUsed,
+      style: transition.style,
+      beatAlign: transition.beatAlign,
+    })),
+  );
+}
+
 export function registerCandidate(
   workDir: string,
   sessionId: string,
@@ -315,6 +360,18 @@ export function registerCandidate(
   if (manifest.candidates.length >= MAX_COMPLETE_CANDIDATES) {
     throw new Error(`Candidate limit reached (${MAX_COMPLETE_CANDIDATES})`);
   }
+  const planHash = candidate.planHash ?? computeCandidatePlanHash(candidate.resolvedTransitions);
+  if (
+    planHash &&
+    manifest.candidates.some(
+      (item) =>
+        (item.planHash ?? computeCandidatePlanHash(item.resolvedTransitions)) === planHash,
+    )
+  ) {
+    throw new Error(
+      "Duplicate candidate plan rejected; the existing rendered draft was preserved",
+    );
+  }
   const next: CandidateManifest = {
     ...manifest,
     workflowMode: workflowMode ?? manifest.workflowMode,
@@ -323,6 +380,151 @@ export function registerCandidate(
   };
   writeCandidateManifestAtomic(workDir, sessionId, next);
   return next;
+}
+
+export function recoverUnregisteredRenderedCandidate(options: {
+  workDir: string;
+  sessionId: string;
+  candidateId: string;
+  candidateVersion: number;
+  arrangementVersion: number;
+  executionVersion: number;
+  parentCandidateId: string | null;
+  workflowMode: "automatic" | "legacy";
+  isExecutionVersionCompatible?: (candidate: RenderCandidate) => boolean;
+}) {
+  const {
+    workDir,
+    sessionId,
+    candidateId,
+    candidateVersion,
+    arrangementVersion,
+    executionVersion,
+    parentCandidateId,
+    workflowMode,
+    isExecutionVersionCompatible,
+  } = options;
+  const sessionDir = getSessionDirectory(workDir, sessionId);
+  const outputPath = path.join(sessionDir, `${candidateId}.mp3`);
+  const validationPath = path.join(
+    sessionDir,
+    `${candidateId}-validation.json`,
+  );
+  if (!fs.existsSync(outputPath) && !fs.existsSync(validationPath)) return null;
+  if (!fs.existsSync(outputPath) || !fs.existsSync(validationPath)) {
+    throw new Error(
+      `Incomplete unregistered candidate ${candidateId} was preserved for inspection`,
+    );
+  }
+  for (const filePath of [outputPath, validationPath]) {
+    const stat = fs.lstatSync(filePath);
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw new Error(`Unregistered candidate artifact is not a regular file`);
+    }
+    if (fs.realpathSync.native(path.dirname(filePath)) !== fs.realpathSync.native(sessionDir)) {
+      throw new Error("Unregistered candidate artifact escapes its session directory");
+    }
+  }
+  const validation = JSON.parse(fs.readFileSync(validationPath, "utf8"));
+  const candidate = validation?.candidate;
+  const normalizedCandidate =
+    candidate &&
+    typeof candidate === "object" &&
+    Array.isArray(candidate.resolvedTransitions)
+      ? {
+          ...candidate,
+          resolvedTransitions: sanitizeResolvedTransitionsForManifest(
+            candidate.resolvedTransitions,
+          ),
+        }
+      : candidate;
+  const parsed = RenderCandidateSchema.parse(normalizedCandidate);
+  if (
+    parsed.candidateId !== candidateId ||
+    parsed.candidateVersion !== candidateVersion ||
+    parsed.arrangementVersion !== arrangementVersion ||
+    (parsed.executionVersion !== executionVersion &&
+      !isExecutionVersionCompatible?.(parsed)) ||
+    parsed.parentCandidateId !== parentCandidateId ||
+    path.resolve(parsed.outputPath) !== path.resolve(outputPath)
+  ) {
+    throw new Error(
+      `Unregistered candidate ${candidateId} does not match the active render request`,
+    );
+  }
+  const stat = fs.statSync(outputPath);
+  if (stat.size !== parsed.sizeBytes || sha256File(outputPath) !== parsed.sha256) {
+    throw new Error(`Unregistered candidate ${candidateId} failed integrity validation`);
+  }
+  const manifest = registerCandidate(
+    workDir,
+    sessionId,
+    parsed,
+    workflowMode,
+  );
+  return {
+    candidate: parsed,
+    manifest,
+    quality: validation?.quality ?? null,
+    qualityGate: validation?.qualityGate ?? null,
+  };
+}
+
+/**
+ * If registration committed but the immediately following technical-evidence
+ * write was interrupted, complete that narrow missing boundary. This avoids
+ * treating a valid, registered MP3 as a reason to render candidate N+1.
+ */
+export function recoverRegisteredCandidateTechnicalEvaluation(options: {
+  workDir: string;
+  sessionId: string;
+  arrangementVersion: number;
+  executionVersion: number;
+}) {
+  const manifest = readCandidateManifest(options.workDir, options.sessionId);
+  const candidate = manifest.candidates.at(-1);
+  if (!candidate ||
+      candidate.arrangementVersion !== options.arrangementVersion ||
+      candidate.executionVersion !== options.executionVersion ||
+      manifest.technicalEvaluations.some((item) => item.candidateId === candidate.candidateId)) {
+    return null;
+  }
+  const sessionDir = getSessionDirectory(options.workDir, options.sessionId);
+  const validationPath = path.join(sessionDir, `${candidate.candidateId}-validation.json`);
+  if (!fs.existsSync(validationPath)) {
+    throw new Error("Registered candidate is missing its technical validation sidecar");
+  }
+  const validation = JSON.parse(fs.readFileSync(validationPath, "utf8"));
+  const validatedCandidate = RenderCandidateSchema.parse(validation?.candidate);
+  if (!isDeepStrictEqual(validatedCandidate, candidate)) {
+    throw new Error("Registered candidate validation sidecar does not match the manifest");
+  }
+  if (!fs.existsSync(candidate.outputPath) || sha256File(candidate.outputPath) !== candidate.sha256) {
+    throw new Error("Registered candidate audio failed integrity validation");
+  }
+  const qualityGate = validation?.qualityGate;
+  if (!qualityGate || typeof qualityGate !== "object") {
+    throw new Error("Registered candidate validation sidecar has no technical quality result");
+  }
+  const updatedManifest = appendCandidateTechnicalEvaluation(
+    options.workDir,
+    options.sessionId,
+    {
+      candidateId: candidate.candidateId,
+      candidateVersion: candidate.candidateVersion,
+      technicallyValid: Boolean(qualityGate.technicallyValid),
+      blockingIssues: Array.isArray(qualityGate.blockingIssues) ? qualityGate.blockingIssues : [],
+      warnings: Array.isArray(qualityGate.warnings) ? qualityGate.warnings : [],
+      policyVersion: 1,
+      evaluatedAt: new Date().toISOString(),
+    },
+  );
+  return {
+    candidate,
+    manifest: updatedManifest,
+    quality: validation?.quality ?? null,
+    qualityGate,
+  };
 }
 
 export function applyCandidateReview(
@@ -360,7 +562,68 @@ export function applyCandidateReview(
   const next: CandidateManifest = {
     ...manifest,
     candidates,
+    musicalReviews: [...manifest.musicalReviews, review],
     selectedCandidateId: selected?.candidateId ?? null,
+    updatedAt: new Date().toISOString(),
+  };
+  writeCandidateManifestAtomic(workDir, sessionId, next);
+  return next;
+}
+
+/** Append a human decision without replacing any AI or technical evidence. */
+export function applyCandidateHumanReview(
+  workDir: string,
+  sessionId: string,
+  review: unknown,
+) {
+  const parsed = CandidateHumanReviewSchema.parse(review);
+  const manifest = readCandidateManifest(workDir, sessionId);
+  const candidate = manifest.candidates.find(
+    (item) => item.candidateId === parsed.candidateId,
+  );
+  if (!candidate) throw new Error("Human-reviewed candidate is not registered");
+  if (parsed.decision === "approved" && !candidate.technicallyValid) {
+    throw new Error("A technically invalid candidate cannot be human-approved");
+  }
+  if (manifest.humanReviews.some(
+    (item) => item.candidateId === parsed.candidateId && item.reviewedAt === parsed.reviewedAt,
+  )) return manifest;
+  const candidates = manifest.candidates.map((item) => {
+    if (item.candidateId !== parsed.candidateId) return item;
+    const reviewStatus: RenderCandidate["reviewStatus"] =
+      parsed.decision === "approved" ? "approved" : "changes_requested";
+    return { ...item, reviewStatus };
+  });
+  const next: CandidateManifest = {
+    ...manifest,
+    candidates,
+    humanReviews: [...manifest.humanReviews, parsed],
+    selectedCandidateId:
+      parsed.decision === "approved" ? parsed.candidateId : manifest.selectedCandidateId,
+    updatedAt: new Date().toISOString(),
+  };
+  writeCandidateManifestAtomic(workDir, sessionId, next);
+  return next;
+}
+
+export function appendCandidateTechnicalEvaluation(
+  workDir: string,
+  sessionId: string,
+  evaluation: unknown,
+) {
+  const parsed = CandidateTechnicalEvaluationSchema.parse(evaluation);
+  const manifest = readCandidateManifest(workDir, sessionId);
+  if (!manifest.candidates.some((candidate) => candidate.candidateId === parsed.candidateId)) {
+    throw new Error("Technical evaluation candidate is not registered");
+  }
+  if (manifest.technicalEvaluations.some(
+    (item) => item.candidateId === parsed.candidateId && item.evaluatedAt === parsed.evaluatedAt,
+  )) {
+    return manifest;
+  }
+  const next: CandidateManifest = {
+    ...manifest,
+    technicalEvaluations: [...manifest.technicalEvaluations, parsed],
     updatedAt: new Date().toISOString(),
   };
   writeCandidateManifestAtomic(workDir, sessionId, next);
@@ -373,6 +636,7 @@ export function promoteCandidate(
   candidateId: string,
   options: {
     requireApproved?: boolean;
+    requireHumanApproval?: boolean;
     requireSelected?: boolean;
   } = {},
 ) {
@@ -383,8 +647,27 @@ export function promoteCandidate(
   if (!candidate) {
     throw new Error("Candidate is missing or technically invalid");
   }
+  if (
+    manifest.finalizedCandidateId &&
+    manifest.finalizedCandidateId !== candidateId
+  ) {
+    throw new Error(
+      `Session is already finalized with ${manifest.finalizedCandidateId}`,
+    );
+  }
   if (options.requireApproved && candidate.reviewStatus !== "approved") {
     throw new Error("Automatic finalization requires an approved candidate");
+  }
+  if (
+    options.requireHumanApproval &&
+    !manifest.humanReviews.some(
+      (review) =>
+        review.candidateId === candidateId && review.decision === "approved",
+    )
+  ) {
+    throw new Error(
+      "Automatic finalization requires an explicit human approval",
+    );
   }
   if (options.requireSelected && manifest.selectedCandidateId !== candidateId) {
     throw new Error("Automatic finalization requires the selected candidate");
@@ -431,14 +714,30 @@ export function promoteCandidate(
     return { manifest, finalPath, idempotent: true };
   }
   const partPath = path.join(sessionDir, "medley_final.mp3.part");
-  fs.copyFileSync(source, partPath);
-  const copiedSize = fs.statSync(partPath).size;
-  const copiedHash = sha256File(partPath);
-  if (copiedSize !== sizeBytes || copiedHash !== sourceHash) {
-    fs.rmSync(partPath, { force: true });
-    throw new Error("Final copy integrity check failed");
+  let recoveredInterruptedPromotion = false;
+  if (fs.existsSync(finalPath)) {
+    const existing = fs.lstatSync(finalPath);
+    if (
+      existing.isSymbolicLink() ||
+      !existing.isFile() ||
+      existing.size !== sizeBytes ||
+      sha256File(finalPath) !== sourceHash
+    ) {
+      throw new Error(
+        "A different final output already exists; refusing to overwrite it",
+      );
+    }
+    recoveredInterruptedPromotion = true;
+  } else {
+    fs.copyFileSync(source, partPath);
+    const copiedSize = fs.statSync(partPath).size;
+    const copiedHash = sha256File(partPath);
+    if (copiedSize !== sizeBytes || copiedHash !== sourceHash) {
+      fs.rmSync(partPath, { force: true });
+      throw new Error("Final copy integrity check failed");
+    }
+    fs.renameSync(partPath, finalPath);
   }
-  fs.renameSync(partPath, finalPath);
   const next: CandidateManifest = {
     ...manifest,
     selectedCandidateId: candidateId,
@@ -447,33 +746,17 @@ export function promoteCandidate(
     updatedAt: new Date().toISOString(),
   };
   writeCandidateManifestAtomic(workDir, sessionId, next);
-  return { manifest: next, finalPath, idempotent: false };
+  return {
+    manifest: next,
+    finalPath,
+    idempotent: recoveredInterruptedPromotion,
+  };
 }
 
 export function cleanupRejectedCandidates(workDir: string, sessionId: string) {
-  const manifest = readCandidateManifest(workDir, sessionId);
-  const selected = manifest.finalizedCandidateId;
-  for (const candidate of manifest.candidates) {
-    if (candidate.candidateId === selected) continue;
-    const registered = [
-      candidate.outputPath,
-      ...candidate.debugPaths,
-      ...candidate.previewPaths,
-    ];
-    for (const filePath of registered) {
-      try {
-        const safe = assertRegisteredSafeFile(
-          workDir,
-          sessionId,
-          filePath,
-          registered,
-        );
-        fs.rmSync(safe, { force: true });
-      } catch {
-        // Cleanup is best-effort and must not invalidate successful finalization.
-      }
-    }
-  }
+  // Historical API retained for compatibility. Candidate evidence is now
+  // append-only: rejected drafts remain playable and recoverable.
+  return readCandidateManifest(workDir, sessionId);
 }
 
 export function discardAutomaticSessionFiles(
@@ -483,13 +766,13 @@ export function discardAutomaticSessionFiles(
 ) {
   const sessionDir = getSessionDirectory(workDir, sessionId);
   const manifest = readCandidateManifest(workDir, sessionId);
+  if (manifest.candidates.length > 0) {
+    throw new Error(
+      "Session has rendered drafts and cannot be discarded; open Candidate Review instead",
+    );
+  }
   const historyProtected = manifest.finalOutputPath;
   const registered = [
-    ...manifest.candidates.flatMap((candidate) => [
-      candidate.outputPath,
-      ...candidate.debugPaths,
-      ...candidate.previewPaths,
-    ]),
     ...additionalRegisteredPaths,
   ];
   for (const filePath of registered) {

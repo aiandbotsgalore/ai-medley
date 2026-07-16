@@ -38,22 +38,31 @@ export function migrateMedleyConfigWithNotices(
 ): { config: MedleyConfig; notices: string[] } {
   const source = stored ?? {};
   const hasStoredConfig = Object.keys(source).length > 0;
-  const provider: ProviderId =
+  const storedProvider: ProviderId =
     source.provider === "gemini" || source.provider === "openrouter"
       ? source.provider
       : DEFAULT_CONFIG.provider;
-  const normalized = normalizeProviderModel(provider, source.model);
   const modelMode =
     source.modelMode === "automatic" || source.modelMode === "manual"
       ? source.modelMode
       : hasStoredConfig
         ? "manual"
         : DEFAULT_CONFIG.modelMode;
+  // Automatic v4 routes every AI request through OpenRouter. Manual mode
+  // retains its explicit provider choice for backwards compatibility.
+  const provider: ProviderId = modelMode === "automatic" ? "openrouter" : storedProvider;
+  const automaticMigration = modelMode === "automatic" &&
+    (storedProvider !== "openrouter" || source.model !== "google/gemini-3.1-pro-preview");
+  const normalized = modelMode === "automatic"
+    ? { model: "google/gemini-3.1-pro-preview", notice: automaticMigration
+      ? "Automatic workflow was upgraded to OpenRouter-routed Gemini 3.1 Pro; Manual provider settings were preserved."
+      : null }
+    : normalizeProviderModel(provider, source.model);
   return {
     config: {
       ...DEFAULT_CONFIG,
       ...source,
-      configVersion: 3,
+      configVersion: 4,
       modelMode,
       provider,
       model: normalized.model,
@@ -65,6 +74,12 @@ export function migrateMedleyConfigWithNotices(
         source.openrouterApiKey ||
         serverConfig.openrouterApiKey ||
         (serverConfig.hasOpenrouterApiKey ? SERVER_MANAGED_API_KEY : ""),
+      automaticOpenRouterFallbackModel: normalizeProviderModel(
+        "openrouter",
+        source.automaticOpenRouterFallbackModel === "google/gemini-2.5-pro"
+          ? "google/gemini-3.1-pro-preview"
+          : source.automaticOpenRouterFallbackModel,
+      ).model,
     },
     notices: normalized.notice ? [normalized.notice] : [],
   };
@@ -83,7 +98,8 @@ export function migrateMedleyConfig(
 }
 
 export function getProviderKey(config: MedleyConfig) {
-  if (config.modelMode === "automatic") return config.openrouterApiKey.trim();
+  if (config.modelMode === "automatic")
+    return config.openrouterApiKey.trim();
   return (
     config.provider === "gemini" ? config.geminiApiKey : config.openrouterApiKey
   ).trim();
@@ -94,7 +110,7 @@ export function getStartConfigurationError(
 ): string | null {
   if (getProviderKey(config)) return null;
   if (config.modelMode === "automatic") {
-    return "Automatic Specialist Team requires an OpenRouter API key. Add one in Configuration or switch to Manual Model mode.";
+    return "Automatic Medley requires an OpenRouter API key. Add OPENROUTER_API_KEY to the server configuration.";
   }
   return config.provider === "gemini"
     ? "Add a Gemini API key in Configuration before starting."

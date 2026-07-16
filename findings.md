@@ -1,4 +1,119 @@
-# Findings: Provider API Key Settings
+# AI Medley Architect Findings
+
+## 2026-07-15 — Repository-wide documentation audit
+
+> Current reconciliation note: the active-document defects listed below were
+> the audit inputs. `README.md`, `CLAUDE.md`, the architecture guide and
+> diagrams, the plan index, Candidate Review acceptance wording, and the Master
+> Plan superseding rules have now been corrected in the working tree. The
+> remaining work is historical labeling, payload-experiment archival, and
+> verification.
+
+- The tracked `.claude/skills/clean-workdir/SKILL.md` was an active safety
+  contradiction: it instructed recursive deletion of every `workdir/` session.
+  It is now a read-only audit skill and explicitly forbids wildcard deletion.
+- All relative Markdown links resolve across the 45 tracked/current Markdown
+  and Mermaid files. Historical references remain available without becoming
+  active instructions.
+- `npm run test:e2e` is deliberately not a mocked-only command: it discovers a
+  catalog-listed OpenRouter audio/tool model whose ID ends in `:free`, generates
+  isolated tone fixtures, and performs the audio-review acceptance call. The
+  active command documentation now states this explicitly so operators know
+  exactly which test scripts access the network.
+- The final tracked change set is documentation/instruction material only. It
+  changes no application source, dependency, build output, environment file,
+  library/workdir artifact, candidate, manifest, final, history, wisdom,
+  checkpoint, or protected provider-payload audit artifact.
+
+- `AGENTS.md` and `docs/current-operations.md` now describe the current
+  OpenRouter-only Automatic v4 route, bounded provider recovery, immutable
+  candidates, mandatory human selection, and verified final promotion.
+- At audit start, `CLAUDE.md` incorrectly said Automatic mode used Gemini
+  Direct; it is corrected in the current working tree.
+- At audit start, the architecture guide and `end-to-end-workflow.mmd` /
+  `decision-process.mmd` allowed musical AI approval to flow directly into
+  promotion; they now require the human choice.
+- At audit start, `task_plan.md` claimed `AGENTS.md` and `.planning/` were
+  uncommitted and instructed publishing an already-published implementation
+  commit; the ledger has been replaced with the current documentation phase.
+- The completed Master Plan's original mocked happy path ends at AI musical
+  approval; a dated superseding rule is needed so historical phase text remains
+  intact while current acceptance always requires human approval.
+- `final_verification.md` and `provider-payload-verification.md` describe
+  specific historical sessions and obsolete provider roles but are not clearly
+  labeled as historical evidence.
+- `repo-context.txt`, `repomix-output.txt`, and `payload-optimization/` documents
+  are generated/experimental snapshots containing old Gemini 2.5, context,
+  production-specialist, automatic-finalization, and retry descriptions.
+- Dated files under `docs/plans/`, `docs/audits/`, `.aider.chat.history.md`, and
+  `.planning/debug/` must preserve their original facts. They need clear
+  non-authoritative labeling/indexing, not factual rewriting.
+- `README.md` and `docs/api-routes.md` are broadly current; the route inventory
+  remains contract-tested.
+- `docs/plans/README.md` already classified dated plans as historical; its stale
+  root-ledger description has now been corrected.
+- `docs/plans/candidate-review-experience-plan.md` is complete. Its acceptance
+  criterion now requires explicit human selection after AI recommendation.
+- The Master Plan is a completed foundation record. Its original transition
+  matrix and mocked happy path predate `generating_options` and mandatory human
+  choice; a superseding implementation addendum should be added without
+  rewriting the original phase record.
+- `payload-optimization/PLAN.md` and `README.md` incorrectly say the old payload
+  experiment is active/awaiting instrumentation. Two experiment files contain
+  only `PLACEHOLDER`; the directory should become a clearly completed archive.
+- `.aider.chat.history.md`, `repo-context.txt`, `repomix-output.txt`, and
+  `final_verification.md` are untracked local historical/generated artifacts.
+  They should receive unmistakable local headers where safe, but should not be
+  added to Git merely to make old generated content appear current.
+- All seven tracked audit files lack a standard non-authoritative banner; one is
+  misleadingly named `current-workflow-root-cause-audit.md` despite describing
+  commit `546287cf` from June 23. Standard historical banners are needed.
+- Five May plans still begin with imperative execution instructions and three
+  other plan/tracker files claim “starting,” “ongoing,” or “draft.” The plan
+  index classifies them as historical, but each file should also say so directly.
+- `README.md` correctly says Automatic mode requires OpenRouter, but its opening
+  sentence blurs Automatic and Manual provider boundaries and omits mandatory
+  human selection.
+
+## 2026-07-14 — Candidate Review Experience approval and baseline
+
+- The user approved the Candidate Review Experience implementation.
+- Existing server foundations provide Automatic v4 state, candidate manifests,
+  append-only reviews, per-session locking, candidate integrity, and transactional finalization.
+- `LogPanel` currently renders `Target Achieved` for every state that is not
+  `running`, including idle, error, and `manual_review_required`.
+- `App.tsx` exposes only a bare approve-and-finalize button for technically valid
+  candidates; it has no candidate audio, review reason, comparison, file path,
+  or useful empty/recovery state.
+- Manual-review data is fetched only when the active orchestration call returns
+  `manualReviewRequired`; refresh/restart needs authoritative projection hydration.
+- `GET /api/session/:sessionId/state` already returns state plus manifest and is
+  the safest compatibility point for a typed UI projection.
+- At the 2026-07-14 baseline, user-authored `AGENTS.md` was preserved unstaged
+  while overlapping implementation work proceeded. As of 2026-07-15 it is the
+  tracked, aligned, authoritative project rule set.
+
+
+## 2026-07-13 Master Plan completion findings
+
+- Confirmed and fixed a false-failure path: `replayAutomaticSessionIdempotent`
+  previously saved its replay record using the revision from before a successful
+  state transition. It now rereads the durable state before recording the
+  idempotent result.
+- Confirmed and fixed a strict-schema path matching reported user failures:
+  automatic transition preview metadata was being written into a strict locked
+  arrangement, causing the next execution-report validation to reject the app's
+  own mutated object. Automatic v4 keeps preview/timing facts in execution
+  records; legacy manual behavior remains separate.
+- Confirmed and fixed automatic-v4 session classification in server memory so
+  candidate rendering uses authoritative transition resolution rather than the
+  legacy selection branch.
+- The complete mocked v4 acceptance case passed with exact candidate/final
+  SHA-256 equality. Test provider audits remain mocked (78 bounded request
+  shapes; largest measured request 12,186 bytes / 4,056 estimated tokens).
+- Disposable production startup passed after a normal isolated install. The
+  `--ignore-scripts` variant is not a valid FFmpeg smoke setup because it
+  prevents `ffmpeg-static` from downloading its bundled executable.
 
 ## Stabilization continuation — 2026-07-04
 
@@ -240,3 +355,257 @@ Sources:
 - Binding to `127.0.0.1` removes local-network access while preserving normal use through `localhost`.
 - Local-origin validation now accepts the app's HTTP port on `localhost`, `127.0.0.1`, and IPv6 loopback only.
 - Mutating requests with a cross-site browser signal are rejected even when the request omits an Origin header.
+## 2026-07-10 — Empty library diagnosis
+
+- Active `library/db.json` contains an empty JSON array, which is why the UI
+  has no source tracks.
+- `library/db.json.bak` contains one record and `library/db.backup.json`
+  contains four, but all referenced audio files are absent. They must be
+  preserved as evidence, not restored as broken entries.
+- `library/audio/` contains three intact orphaned MP3s. The recovery path is to
+  reconstruct valid library metadata from those existing files without deleting
+  or changing any source audio.
+# 2026-07-11 — End-to-end medley workflow audit
+
+- The starting worktree is intentionally dirty with prior in-scope workflow
+  changes. Preserve and audit them in place; do not reset or overwrite them.
+- Current uncommitted areas include library recovery/per-mix selection,
+  OpenRouter preflight/config UI, model fallback, candidate transition
+  sanitization, documentation, and planning records.
+- The full offline test script already covers most workflow boundaries with
+  direct TypeScript test executables; provider tests are mocked and must remain
+  offline.
+- Baseline `npm test` passes (78 provider-payload request shapes audited); no
+  real provider call was made. Baseline `dist/` SHA-256 fingerprints were
+  captured before any controlled build.
+- Confirmed high-impact selection failure: `runAutomaticWorkflow` supplies a
+  `sessionId` to `/api/medley-intelligence/design`, and that route selects the
+  entire persisted library whenever `sessionId` is present. The selected UI
+  subset is therefore discarded before automatic context/arrangement work.
+- Confirmed false-failure path in Manual mode: after candidate promotion sets
+  the UI to completed, the loop still makes one more provider request to report
+  the tool result. If that unnecessary request fails, the outer catch changes
+  the already-completed run to `error` even though the final MP3 exists.
+- Confirmed retry-state failure in Manual mode: tool execution exceptions
+  increment the failure streak, but the batch unconditionally resets that
+  streak before the next model turn. Repeated invalid tool output therefore
+  cannot reach the intended fallback threshold.
+- Confirmed SSE recovery gap: the server emits a connected snapshot and keeps
+  a replay journal, but the client ignores the snapshot and creates reconnect
+  URLs without the last event ID. A reconnect can miss progress/completion and
+  leave UI state behind server state.
+- Confirmed candidate transaction gap: rendering renames the `.part` output to
+  immutable `candidate-NNN.mp3` before strict manifest registration. A
+  registration/write failure preserves an unregistered MP3 but reports that no
+  medley was written; the next correction attempts a new render instead of
+  recovering the completed candidate.
+- Confirmed final overwrite risk: if `medley_final.mp3` exists but the manifest
+  write was interrupted, promotion blindly replaces the path. It should recover
+  an identical file and reject a different pre-existing file.
+- Confirmed retention violation: successful finalization calls
+  `cleanupRejectedCandidates`, silently deleting non-selected candidate audio
+  and diagnostics. Candidate artifacts are protected and should be preserved.
+- Confirmed wisdom attribution bug: both legacy and candidate finalization
+  recorded only each transition's `fromTrackId`, omitting the final destination
+  track. Completion wisdom now records the unique union of both endpoints.
+- Final verification passed: full `npm test` (including 78 mocked/offline
+  provider request shapes), `npm run lint`, `git diff --check`, controlled
+  `npm run build`, and isolated `npm run test:production-start`.
+- The controlled build was restored exactly: all four baseline `dist/` paths,
+  sizes, and SHA-256 hashes match the pre-build snapshot.
+- Isolated runtime smoke used three generated 24-second WAVs and a temporary
+  `AI_MEDLEY_DATA_ROOT`: three uploads succeeded, only two selected tracks
+  entered server-authoritative design, FFmpeg rendered and registered
+  `candidate-001`, and final promotion produced an exact candidate/final hash
+  match. The owned server and temporary root were removed afterward.
+# 2026-07-11 — Release-plan reconciliation
+
+- Git is active at `G:/ai-medley--main` on `payload-optimization`; the archived
+  “not a git repository” statement was historical.
+- `dist/`, `.env*`, `workdir/`, and `library/audio/` are ignored, but protected
+  library JSON files and several old workdir artifacts are already tracked.
+  Safe correction requires explicit user-authorized index-only de-tracking plus local
+  hash verification; ignore rules alone are insufficient.
+- `npm test` invokes the provider payload audit and Phase 34 security suites.
+  The active plan now names them explicitly and adds a canary secret-leak gate.
+- Historical payload coverage was 117 requests; the current bounded two-model
+  roster produces 78. The 16,000-token regression target and 24,000-token/
+  100-KiB hard limits remain authoritative.
+- `dist/` is ignored and untracked. Future release builds should run in a
+  disposable copy rather than repeatedly mutating/restoring workspace `dist/`.
+
+# 2026-07-11 — Release verification findings
+
+- React Strict Mode can invoke functional state updaters more than once. The
+  prior library refresh path mutated selection refs inside such an updater, so
+  a normal initial refresh could show `0/3 selected`. Selection reconciliation
+  now happens before the updater and commits state/ref authority together.
+- Vite middleware mode still injects its client when HMR is disabled, and the
+  client can fall back to port 24678. Express and Vite now share one Node HTTP
+  server, keeping dev HMR on the owned loopback listener without a stray socket.
+- Clean mocked browser acceptance completed Automatic Specialist Team mode with
+  exactly two selected tracks, truthful completed state, history, and download,
+  with zero console errors. Manual completion/no-post-final-provider behavior,
+  fallback, correction, resume, and SSE branches are covered by focused mocked
+  contract tests rather than paid/live calls.
+- The current payload matrix contains 78 requests because the bounded roster is
+  two models rather than the historical three-model/117-request matrix. The
+  largest current request is 12,964 bytes / 4,314 estimated tokens, below the
+  16,000-token regression target and hard pre-network limits.
+- Disposable install/build/start and the real-FFmpeg synthetic end-to-end test
+  passed. No real provider request was made. Protected data remained unchanged:
+  489 stable hashes match, with the same complete 491-path inventory.
+
+# 2026-07-12 — Protected source-audio integrity blocker
+
+- A post-gate comparison detected two library source MP3s whose SHA-256 and
+  length no longer match the release baseline. Both are valid MP3s and are 521
+  bytes longer; the appended bytes do not begin with standard ID3/TAG metadata.
+  The UUID files are untracked and have no Git history, so Git cannot recover
+  their earlier bytes. A bounded read-only exact-name `G:` search found no
+  duplicate before it was stopped to avoid an unbounded scan. The source of the
+  mutation remains undetermined, and release handoff must remain blocked until
+  the current bytes are explicitly accepted or a verified backup is supplied.
+
+# 2026-07-13 — Candidate registration diagnosis
+
+- The visible Automatic Specialist Team error belonged to preserved session
+  `bknfa639`. Its candidate MP3 and validation sidecar exist, but its manifest
+  does not. The server error sidecar records a `ZodError` rejecting exactly
+  `_resolvedFromExitSec` and `_resolvedToEntrySec` inside two
+  `resolvedTransitions` objects during recovery.
+- The initial registration path already removed those internal render-only
+  fields, but `recoverUnregisteredRenderedCandidate` parsed the sidecar directly
+  with the strict schema. Applying the existing narrow sanitizer before that
+  parse restores recoverability without allowing arbitrary extra keys.
+- The real preserved session was not retried, rerendered, or mutated during
+  diagnosis. The regression uses a temporary candidate artifact and reproduces
+  the exact scratch keys.
+
+- A server restart loaded that first fix. The next error was different: the
+  persisted candidate was execution version 4 while the resumed checkpoint had
+  version 6, so the existing exact-version guard refused recovery. The candidate
+  and resumed report have identical audio-affecting transition facts, proving
+  the MP3 represents the same planned medley. Recovery now accepts that narrow,
+  verified older-attempt case only; it still rejects different transitions.
+
+# 2026-07-13 — Correction-limit root cause
+
+- The candidate was not rejected because recovery failed. Its deterministic
+  timeline is 493.6 seconds (about 8 minutes), while the saved project target is
+  240 seconds (4 minutes). The candidate quality gate correctly refused approval.
+- The prior workflow sent this arrangement-level failure back to the production
+  specialist three times. Production can alter execution details but cannot
+  shorten the locked section boundaries, so the same failure repeated until the
+  correction limit. Arrangement validation now estimates the exact render
+  timeline from the selected sections and final tail, then rejects a plan outside
+  the requested duration tolerance before rendering.
+- The Vite WebSocket console line is only the browser's development auto-refresh
+  connection retry during server restart; it is separate from candidate rendering
+  and finalization.
+- A 5% target-duration tolerance made a 260-second result fail a 240-second
+  request despite being only 20 seconds over. The gate now uses a 10% tolerance,
+  while still rejecting the 493.6-second candidate. Arrangement payloads retain
+  a compact per-track-pair best-score and earliest-exit choice so the model can
+  select a valid shorter transition without inventing timestamps.
+
+# 2026-07-13 — Invalid-arrangement and timeout fallback
+
+- The reported transition-ID mismatch and 72.8-second result occur during the
+  arrangement specialist's repair output, before FFmpeg. The AI was changing
+  locked transition facts while attempting to repair the plan. A provider 504
+  is a separate availability failure at the same request.
+- The provider-free fallback uses only analyzed, authoritative
+  local transition candidates and chooses a target-matched combination before
+  any production or FFmpeg work begins.
+- The fallback rethrows cancellation so stopping a session cannot start a local
+  plan in the background. Resumed plans are revalidated using the saved target;
+  an old invalid plan is replaced locally before it can call a provider or
+  reach FFmpeg.
+
+# 2026-07-13 — Cross-drive upload failure
+
+- Multer stages browser uploads in the Windows temp directory (`C:`), while
+  this workspace's library is on `G:`. The upload route used `renameSync`,
+  which Windows rejects across drives with `EXDEV` before any library entry is
+  written.
+- Upload transfer now uses rename when possible and falls back only for EXDEV:
+  exclusive copy to the intended new library path, then removal of the source
+  temporary file. A failed temporary-file removal rolls the new copy back, so
+  an unregistered library file is not silently left behind.
+
+# 2026-07-13 — Missing context tool call
+
+- The reported `Expected tool call submit_project_brief` error occurs before
+  arrangement or rendering: an OpenRouter model returned ordinary text (or no
+  call) where the context stage requires a structured project-brief tool call.
+- Automatic mode now uses a provider-free project brief after its context-model
+  fallbacks fail. It copies the current locally analyzed track facts and
+  sections exactly, uses the best locally ranked order when available, and is
+  validated against the same session facts before it is saved.
+
+# Master Plan Phase 0 — Baseline audit
+
+- Baseline branch is `payload-optimization` at `1268448`; working tree and
+  index were clean before this master-plan work began. Protected fingerprints
+  were written only to the operating-system temporary directory under run ID
+  `ff012373-8768-4e32-9413-f7902dafa868`.
+- `.gitignore` excludes `library/`, `workdir/`, `dist/`, and `.env*`. No
+  cleanup, reset, or source-audio mutation was performed.
+- The current test suite predominantly uses OS-temporary roots and the
+  production smoke sets an isolated `AI_MEDLEY_DATA_ROOT`. The provider-payload
+  audit also writes its generated report outside the workspace.
+- The current automatic implementation still contains context and production
+  provider calls in `src/engine/specialistOrchestrator.ts`. This is a known
+  master-plan gap for the later deterministic v4 phases, not something Phase 0
+  changes.
+
+# Master Plan Phase 1 — Schema definitions
+
+- Added isolated `automaticWorkflowV4` Zod contracts without changing current
+  v3 runtime persistence. The contracts distinguish `schemaVersion: 1` from
+  `workflowVersion: 4`, include monotonic `stateRevision`, idempotency records,
+  design/arrangement records, append-only review evidence arrays, and manual
+  review state.
+
+# 2026-07-14 — Candidate Review Experience final audit
+
+## Prioritized confirmed issues
+
+1. **Rendered drafts became a dead end.** The server had authoritative manifest
+   evidence, but React exposed no complete, recoverable review projection. A
+   rendered MP3 could therefore exist while the UI showed a generic error or
+   misleading completion. The new projection preserves every draft and derives
+   legal actions from state, append-only evidence, path/size/SHA integrity, and
+   finalization-journal truth.
+2. **Automatic correction could waste candidates.** Provider output was not
+   bound tightly enough to one exact server-offered correction. Automatic v4 now
+   accepts one named preset for one named transition, rejects duplicate plan
+   hashes, caps the session at one original plus two distinct corrections, and
+   never auto-deletes an earlier candidate.
+3. **Final success was insufficiently strict.** Promotion verified bytes but did
+   not prove the promoted MP3 could be fully decoded before committing history,
+   wisdom, and completion. Finalization now adds full FFmpeg decode verification
+   inside the resumable transaction and the UI reports success only from the
+   completed, integrity-verified journal.
+4. **Refresh could hide work.** Startup recovery depended on checkpoints and the
+   first static recovery route was shadowed by `/api/session/:id`. The route is
+   now `/api/sessions/reviewable`; unfinished drafts and verified finals restore
+   from authoritative state even after checkpoints are gone. Recovery is now a
+   startup-only effect, so a later checkpoint refresh cannot reopen an old final
+   after the user explicitly chooses New session.
+5. **Provider failure could silently lower musical quality.** Automatic
+   arrangement failure no longer renders a deterministic substitute. The user
+   gets Retry, Change Model, or Cancel before any candidate is rendered; a later
+   audio-review failure preserves the rendered draft in Candidate Review.
+
+## Safety evidence
+
+- All implementation tests used OS-temporary `AI_MEDLEY_DATA_ROOT` locations;
+  browser acceptance finalized only generated six-second fixture MP3s.
+- The old Phase 0 fingerprint was created before later real app activity. Its
+  current delta is limited to history/wisdom projections, session
+  `xok0d0ee/candidate-001-error.json`, and the removed `xok0d0ee` checkpoint.
+  Those protected artifacts were neither used nor modified by this task.
+- The configured OpenRouter key appears in neither the scoped diff nor the
+  isolated production build. `.env` and `.env.local` remain ignored/untracked.

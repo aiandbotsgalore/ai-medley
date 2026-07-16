@@ -1,4 +1,5 @@
 import express from "express";
+import http from "node:http";
 import multer from "multer";
 import fs from "fs";
 import path from "path";
@@ -6,7 +7,7 @@ import os from "os";
 import cors from "cors";
 import dotenv from "dotenv";
 import { v4 as uuidv4 } from "uuid";
-import { exec, execFile, spawn } from "child_process";
+import { exec, execFile, spawn, spawnSync } from "child_process";
 import { createServer as createViteServer } from "vite";
 import ffmpegPath from "ffmpeg-static";
 import MusicTempo from "music-tempo";
@@ -20,6 +21,7 @@ import {
   commitUploadedFiles,
   deleteLibraryEntryTransactional,
 } from "./src/server/libraryPersistence";
+import { recoverOrphanedLibraryAudio } from "./src/server/libraryRecovery";
 import {
   buildMedleyDesignPayload,
   buildTrackIntelligence,
@@ -33,6 +35,7 @@ import {
 import {
   ArrangementPlanSchema,
   AutomaticWorkflowCheckpointSchema,
+  CandidateHumanReviewSchema,
   ExecutionReportSchema,
   ProjectBriefSchema,
   QualityReviewSchema,
@@ -69,6 +72,7 @@ import {
   validateAudioProbe,
   validateUploadMetadata,
 } from "./src/server/uploadPolicy";
+import { moveUploadedAudioFile } from "./src/server/uploadTransfer";
 import { redactSensitive } from "./src/server/redaction";
 import {
   appendBoundedLog,
@@ -80,15 +84,26 @@ import {
   type ArtifactReference,
 } from "./src/server/artifactInventory";
 import { resolveServerStartupConfig } from "./src/server/startupConfig";
+import { selectLibraryEntriesById } from "./src/utils/librarySelection";
+import {
+  OpenRouterPreflightError,
+  runOpenRouterPreflight,
+} from "./src/server/openRouterPreflight";
 import {
   applyCandidateReview,
+  applyCandidateHumanReview,
+  appendCandidateTechnicalEvaluation,
+  assertRegisteredSafeFile,
   assertCandidateStorageAvailable,
-  cleanupRejectedCandidates,
+  assertSessionArtifactBudget,
+  computeCandidatePlanHash,
   discardAutomaticSessionFiles,
   getSessionDirectory,
   nextCandidateIdentity,
   promoteCandidate,
   readCandidateManifest,
+  recoverRegisteredCandidateTechnicalEvaluation,
+  recoverUnregisteredRenderedCandidate,
   registerCandidate,
   sha256File,
   validateLegacyFinalOutput,
@@ -96,6 +111,12 @@ import {
   withSessionLock,
   writeCandidateManifestAtomic,
 } from "./src/server/candidateStore";
+import {
+  AUTOMATIC_OPENROUTER_MODELS,
+  OpenRouterAudioReviewError,
+  reviewCandidateAudioWithOpenRouter,
+  toQualityReviewFromAudioDecision,
+} from "./src/server/geminiAudioReview";
 import {
   getLocalAccessDenial,
   isAllowedLocalOrigin,
@@ -105,6 +126,33 @@ import {
   selectSessionTrackIntelligence,
 } from "./src/server/automaticSessionGuard";
 import { selectRenderTransitions } from "./src/server/renderTransitionSelection";
+import { replayIdempotent, stableHash } from "./src/server/sessionIdempotency";
+import {
+  AUTOMATIC_WORKFLOW_VERSION,
+} from "./src/types/automaticWorkflowV4";
+import {
+  DETERMINISTIC_DESIGN_ALGORITHM_VERSION,
+  TRANSITION_SCORING_POLICY_VERSION,
+  canonicalSha256,
+  createDesignSnapshotV4,
+} from "./src/server/automaticDesignV4";
+import {
+  readDesignSnapshotV4,
+  writeArrangementVersionV1,
+  writeDesignSnapshotV4,
+} from "./src/server/automaticSessionArtifacts";
+import {
+  cancelAutomaticSessionState,
+  readAutomaticIdempotencyResult,
+  readAutomaticSessionState,
+  replayAutomaticSessionIdempotent,
+  transitionAutomaticSessionState,
+  writeAutomaticSessionState,
+} from "./src/server/automaticSessionState";
+import {
+  isRecoveredCandidateCompatibleWithExecution,
+  sanitizeResolvedTransitionsForManifest,
+} from "./src/server/transitionResolution";
 import {
   buildCanonicalAcrossfade,
   getTransitionStyleConfig,
@@ -119,7 +167,7 @@ import {
   hashAnalysisSource,
   isReusableLocalAnalysis,
 } from "./src/server/analysisContract";
-import { AnalysisJobRegistry } from "./src/server/analysisJobRegistry";
+import { AnalysisJobRegistry, type AnalysisJob } from "./src/server/analysisJobRegistry";
 import {
   SessionEventJournal,
   encodeSseEvent,
@@ -130,9 +178,16 @@ import {
 } from "./src/server/checkpointBinding";
 import { persistOpenRouterApiKey } from "./src/server/credentialStore";
 import {
+  collectTransitionTrackIds,
   executeFinalizationTransaction,
-  listFinalizationJournals,
+  readFinalizationJournal,
 } from "./src/server/finalizationTransaction";
+import { buildCandidateReviewProjection } from "./src/server/candidateReviewProjection";
+import {
+  bindAutomaticCorrectionPolicy,
+  getAllowedCorrectionPresets,
+} from "./src/server/correctionPolicy";
+import { reconcileStartupState } from "./src/server/startupReconciliation";
 
 const localEnvPath = path.join(process.cwd(), ".env.local");
 dotenv.config({ path: [localEnvPath, path.join(process.cwd(), ".env")] });
@@ -1087,6 +1142,7 @@ async function probeUploadedAudio(filePath: string) {
   const output = await execFfmpeg(["-i", filePath], 30_000);
   const durationSec = parseDuration(output);
   const audioLines = output.split(/\r?\n/).filter((line) => /Audio:/i.test(line));
+  const codec = audioLines[0]?.match(/Audio:\s*([^,\s]+)/i)?.[1] || "";
   const layout = audioLines[0]?.match(/\b(mono|stereo|\d+\.\d+)\b/i)?.[1]?.toLowerCase();
   const channels =
     layout === "mono"
@@ -1096,7 +1152,7 @@ async function probeUploadedAudio(filePath: string) {
         : layout?.includes(".")
           ? layout.split(".").reduce((sum, value) => sum + Number(value), 0)
           : 2;
-  const probe = { durationSec, audioStreams: audioLines.length, channels };
+  const probe = { durationSec, audioStreams: audioLines.length, channels, codec };
   validateAudioProbe(probe);
   return probe;
 }
@@ -1116,7 +1172,7 @@ function updateLibraryEntry(id: string, updates: Partial<any>) {
 const sessions: Record<
   string,
   {
-    status: "running" | "completed" | "error";
+    status: "running" | "completed" | "cancelled" | "error";
     logs: string[];
 
     finalAudioPath?: string;
@@ -1154,6 +1210,7 @@ const sessionEventJournals: Record<string, SessionEventJournal> = {};
 // Active FFmpeg render processes per session — enables cancel support
 const activeRenderProcesses: Record<string, any> = {};
 const analysisJobs = new AnalysisJobRegistry();
+const activeAnalysisJobs: Record<string, Set<AnalysisJob>> = {};
 
 function getCurrentTrackIntelligence(): TrackIntelligence[] {
   return getLibrary()
@@ -1236,6 +1293,16 @@ function buildSpecialistContext(sessionId?: string): SpecialistContext {
 
 function broadcastToSession(sessionId: string, event: string, data: any) {
   const safeData = redactSensitive(data);
+  const status = sessions[sessionId]?.status;
+  if (
+    (status === "cancelled" || status === "completed") &&
+    (event === "progress" || event === "metrics")
+  ) {
+    return;
+  }
+  // SSE is a projection only. Durable/request-owned code updates the session
+  // before publishing an event, so a delayed FFmpeg callback cannot overwrite
+  // cancellation or completion state merely by emitting stale progress.
   const journal =
     sessionEventJournals[sessionId] ||
     (sessionEventJournals[sessionId] = new SessionEventJournal());
@@ -1271,6 +1338,23 @@ app.put("/api/config/openrouter-key", (req, res) => {
   }
 });
 
+app.post("/api/provider/openrouter/preflight", async (_req, res) => {
+  try {
+    const result = await runOpenRouterPreflight({
+      apiKey: openrouterApiKey,
+      referer: `http://${HOST}:${PORT}`,
+    });
+    res.json({ status: "available", ...result });
+  } catch (error) {
+    if (error instanceof OpenRouterPreflightError)
+      return res.status(error.status).json({ status: error.code, error: error.message });
+    res.status(502).json({
+      status: "unavailable",
+      error: "OpenRouter could not complete the connection check.",
+    });
+  }
+});
+
 app.post(
   "/api/provider/openrouter",
   express.text({ type: "text/plain", limit: "105kb" }),
@@ -1284,7 +1368,8 @@ app.post(
           Authorization: `Bearer ${openrouterApiKey}`,
           "Content-Type": "application/json",
           "HTTP-Referer": `http://${HOST}:${PORT}`,
-          "X-Title": "AI Medley Architect",
+          "X-OpenRouter-Title": "AI Medley Architect",
+          "X-OpenRouter-Metadata": "enabled",
         },
         body: String(req.body || ""),
         signal: AbortSignal.timeout(120_000),
@@ -1316,9 +1401,159 @@ app.post("/api/provider/gemini", async (req, res) => {
       candidateContent: (result as any)?.candidates?.[0]?.content ?? null,
     });
   } catch (error: any) {
+    // Keep the exact provider reason available to this local UI. It is vital
+    // for distinguishing a malformed tool schema from a quota/model-account
+    // issue, but redact and bound it so provider errors cannot disclose keys.
+    const providerDetail = String(redactSensitive(String(error?.message ?? "")))
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 500);
     res.status(Number(error?.status) || 502).json({
-      error: "Server Gemini provider request failed",
+      error: providerDetail
+        ? `Gemini provider request failed: ${providerDetail}`
+        : "Gemini provider request failed",
     });
+  }
+});
+
+/**
+ * Automatic v4 audio review. This endpoint is deliberately server-only: it
+ * accepts a registered candidate identity, not an arbitrary browser path, and
+ * sends only that candidate (or its registered transition previews) through
+ * the server-managed OpenRouter credential.
+ */
+app.post("/api/session/audio-review", async (req, res) => {
+  const { sessionId, candidateId, mode, transitionIds } = req.body || {};
+  try {
+    validateSessionId(sessionId);
+    if (!openrouterApiKey) {
+      return res.status(503).json({
+        error: "Automatic audio review needs a server OpenRouter credential. The candidate was preserved for manual review.",
+      });
+    }
+    if (mode !== "whole_mix" && mode !== "targeted") {
+      return res.status(400).json({ error: "Audio review mode must be whole_mix or targeted" });
+    }
+    return await withSessionLock(sessionId, async () => {
+      const manifest = readCandidateManifest(workDir, sessionId);
+      const candidate = manifest.candidates.find(
+        (item) => item.candidateId === candidateId,
+      );
+      if (!candidate) throw new Error("Candidate is not registered");
+      if (!candidate.technicallyValid) {
+        throw new Error("A technically invalid candidate cannot be sent for audio approval");
+      }
+      const registeredPaths = [
+        candidate.outputPath,
+        ...candidate.debugPaths,
+        ...candidate.previewPaths,
+      ];
+      const candidatePath = assertRegisteredSafeFile(
+        workDir,
+        sessionId,
+        candidate.outputPath,
+        registeredPaths,
+      );
+      if (!fs.existsSync(candidatePath)) throw new Error("Registered candidate audio is missing");
+      const resolvedTransitions = candidate.resolvedTransitions ?? [];
+      const knownTransitions = resolvedTransitions.map((transition) => ({
+        transitionId: transition.transitionId,
+        fromTrackId: transition.fromTrackId,
+        toTrackId: transition.toTrackId,
+        style: transition.style,
+        allowedCorrectionPresets: getAllowedCorrectionPresets({
+          duration: transition.durationUsed,
+          style: transition.style,
+          executionPermissions: transition.executionPermissions,
+        }),
+      }));
+      if (!knownTransitions.length) {
+        throw new Error("Automatic audio review requires the candidate's locked transition evidence");
+      }
+      const requestedIds = Array.isArray(transitionIds)
+        ? [...new Set(transitionIds.map((value) => String(value)))].slice(0, 3)
+        : [];
+      if (mode === "targeted" && !requestedIds.length) {
+        throw new Error("Targeted audio review requires one to three locked transition IDs");
+      }
+      const clips = requestedIds.map((transitionId) => {
+        const transition = resolvedTransitions.find(
+          (item) => item.transitionId === transitionId,
+        );
+        if (!transition?.outputPath) {
+          throw new Error("Requested transition preview is not registered");
+        }
+        return {
+          transitionId,
+          filePath: assertRegisteredSafeFile(
+            workDir,
+            sessionId,
+            transition.outputPath,
+            registeredPaths,
+          ),
+        };
+      });
+      const liveTestModel = process.env.NODE_ENV === "test" &&
+        String(process.env.OPENROUTER_LIVE_TEST_MODEL || "").endsWith(":free")
+        ? String(process.env.OPENROUTER_LIVE_TEST_MODEL)
+        : null;
+      const model = liveTestModel ?? (mode === "whole_mix"
+        ? AUTOMATIC_OPENROUTER_MODELS.wholeMixReview
+        : AUTOMATIC_OPENROUTER_MODELS.targetedReview);
+      const decision = await reviewCandidateAudioWithOpenRouter({
+        model,
+        candidate,
+        candidateFilePath: mode === "whole_mix" ? candidatePath : undefined,
+        transitions: knownTransitions,
+        mode,
+        transitionClips: clips,
+        readAudio: (filePath) => fs.promises.readFile(filePath),
+        request: async (body) => {
+          const upstream = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${openrouterApiKey}`,
+              "Content-Type": "application/json",
+              "HTTP-Referer": `http://${HOST}:${PORT}`,
+              "X-OpenRouter-Title": "AI Medley Architect",
+              "X-OpenRouter-Metadata": "enabled",
+            },
+            body: JSON.stringify(body),
+            signal: AbortSignal.timeout(120_000),
+          });
+          const text = await upstream.text();
+          if (!upstream.ok) {
+            let detail = "Provider returned error";
+            try {
+              const parsed = JSON.parse(text);
+              detail = String(parsed?.error?.message || detail);
+            } catch {}
+            throw new OpenRouterAudioReviewError(
+              `OpenRouter audio review failed (${upstream.status}): ${String(redactSensitive(detail)).slice(0, 500)}`,
+            );
+          }
+          try {
+            return JSON.parse(text);
+          } catch {
+            throw new OpenRouterAudioReviewError("OpenRouter audio review returned malformed JSON.");
+          }
+        },
+      });
+      return res.json({
+        review: toQualityReviewFromAudioDecision({
+          candidate,
+          decision,
+          model,
+          reviewSource: "openrouter_audio",
+        }),
+        model,
+      });
+    });
+  } catch (error: any) {
+    const message = error instanceof OpenRouterAudioReviewError
+      ? error.message
+      : String(error?.message || "Automatic audio review failed");
+    res.status(400).json({ error: message });
   }
 });
 
@@ -1332,7 +1567,7 @@ function logToSession(sessionId: string, msg: string) {
 }
 
 // SSE endpoint for real-time session streaming
-app.get("/api/session/:id/stream", (req, res) => {
+app.get("/api/session/:id/stream", async (req, res) => {
   const sessionId = req.params.id;
   try {
     validateSessionId(sessionId);
@@ -1342,7 +1577,9 @@ app.get("/api/session/:id/stream", (req, res) => {
   // The UI intentionally opens progress streaming before its first workflow
   // request. Establish the pending session here so startup order cannot race
   // the design/tool endpoints and produce a spurious 404.
-  if (!sessions[sessionId]) sessions[sessionId] = { status: "running", logs: [] };
+  await withSessionLock(sessionId, async () => {
+    if (!sessions[sessionId]) sessions[sessionId] = { status: "running", logs: [] };
+  });
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
@@ -1360,6 +1597,7 @@ app.get("/api/session/:id/stream", (req, res) => {
       snapshot: {
         status: sessions[sessionId].status,
         metrics: sessions[sessionId].metrics || null,
+        renderProgress: sessions[sessionId].renderProgress || null,
         summary: sessions[sessionId].summary || null,
         workflowStage: sessions[sessionId].workflowStage || null,
       },
@@ -1401,29 +1639,85 @@ app.get("/api/session/:id/stream", (req, res) => {
 });
 
 // Cancel active render for a session
-app.post("/api/session/:id/cancel", (req, res) => {
+app.post("/api/session/:id/cancel", async (req, res) => {
   const sessionId = req.params.id;
-  const proc = activeRenderProcesses[sessionId];
-  if (proc && !proc.killed) {
-    console.log(
-      `[Cancel] Killing active FFmpeg render for session ${sessionId}`,
-    );
-    proc.kill("SIGKILL");
-    delete activeRenderProcesses[sessionId];
-    if (sessions[sessionId]) {
-      sessions[sessionId].status = "error";
-      logToSession(sessionId, "[finalize-medley] Render cancelled by user.");
-    }
-    return res.json({ success: true, message: "Render process terminated." });
+  try {
+    validateSessionId(sessionId);
+    const idempotencyKey = String(
+      req.get("Idempotency-Key") || req.body?.idempotencyKey || "",
+    ).trim();
+    return await withSessionLock(sessionId, async () => {
+      const execute = async () => {
+      const proc = activeRenderProcesses[sessionId];
+      const activeAnalyses = activeAnalysisJobs[sessionId];
+      const automaticState = readAutomaticSessionState(workDir, sessionId);
+      if (sessions[sessionId]?.status === "completed" || automaticState?.state === "completed") {
+        return { success: true, message: "Session is already completed; cancellation was not applied." };
+      }
+      if (proc && !proc.killed) {
+        console.log(`[Cancel] Killing active FFmpeg render for session ${sessionId}`);
+        proc.kill("SIGKILL");
+        delete activeRenderProcesses[sessionId];
+      }
+      if (activeAnalyses?.size) {
+        for (const job of activeAnalyses) analysisJobs.cancel(job);
+      }
+      if (automaticState) cancelAutomaticSessionState({ workDir, sessionId });
+      if (sessions[sessionId]) {
+        sessions[sessionId].status = "cancelled";
+        sessions[sessionId].workflowStage = "cancelled";
+        logToSession(sessionId, "[session] Cancelled by user.");
+      }
+      broadcastToSession(sessionId, "cancelled", { sessionId });
+      return {
+        success: true,
+        message: proc
+          ? "Render process terminated."
+          : activeAnalyses?.size
+            ? "Active local analysis cancelled."
+            : "Session cancelled.",
+      };
+      };
+      const automaticState = readAutomaticSessionState(workDir, sessionId);
+      const replay = idempotencyKey && automaticState
+        ? await replayAutomaticSessionIdempotent({
+            workDir,
+            sessionId,
+            operation: "cancellation",
+            key: idempotencyKey,
+            request: {},
+            execute,
+          })
+        : idempotencyKey
+          ? await replayIdempotent({
+              sessionId,
+              operation: "cancellation",
+              key: idempotencyKey,
+              request: {},
+              execute,
+            })
+          : { replayed: false, result: await execute() };
+      return res.json({ ...replay.result, idempotent: replay.replayed });
+    });
+  } catch (error: any) {
+    return res.status(400).json({ success: false, error: error.message });
   }
-  res.json({
-    success: false,
-    message: "No active render process found for this session.",
-  });
 });
 
 app.get("/api/library", (req, res) => {
   res.json(getLibrary());
+});
+
+app.post("/api/library/recover", (_req, res) => {
+  try {
+    const recovered = recoverOrphanedLibraryAudio({
+      audioDir,
+      store: { read: getLibrary, write: saveLibrary },
+    });
+    res.json({ success: true, recovered });
+  } catch (error: any) {
+    res.status(500).json({ error: `Could not recover saved tracks: ${error?.message || String(error)}` });
+  }
 });
 
 app.post("/api/library", (req, res) => {
@@ -1458,7 +1752,7 @@ app.post("/api/library", (req, res) => {
           throw new Error(`Duplicate audio content: ${file.originalname}`);
         incomingHashes.add(sha256);
         const permanentPath = path.join(audioDir, file.filename);
-        fs.renameSync(file.path, permanentPath);
+        moveUploadedAudioFile(file.path, permanentPath);
         file.path = permanentPath;
         (file as any).sha256 = sha256;
       }
@@ -1496,7 +1790,7 @@ app.delete("/api/library/:id", (req, res) => {
   try {
     const result = deleteLibraryEntryTransactional({
       id: req.params.id,
-      store: { read: getLibrary, write: saveLibrary },
+      dbPath,
     });
     res.json({ success: true, deleted: result.deleted });
   } catch (error: any) {
@@ -1723,93 +2017,99 @@ app.post("/api/session/finish", async (req, res) => {
   }
   try {
     validateSessionId(sessionId);
-    const manifest = readCandidateManifest(workDir, sessionId);
-    if (
-      requiresAutomaticCandidateApproval({
+    return await withSessionLock(sessionId, async () => {
+      const manifest = readCandidateManifest(workDir, sessionId);
+      if (
+        requiresAutomaticCandidateApproval({
+          sessionId,
+          session: sessions[sessionId],
+          manifest,
+          checkpointDir,
+        })
+      ) {
+        return res.status(409).json({
+          error:
+            "Automatic sessions must finalize through an approved selected candidate.",
+        });
+      }
+      const validated = validateLegacyFinalOutput(
+        workDir,
         sessionId,
-        session: sessions[sessionId],
-        manifest,
-        checkpointDir,
-      })
-    ) {
-      return res.status(409).json({
-        error:
-          "Automatic sessions must finalize through an approved selected candidate.",
-      });
-    }
-    const validated = validateLegacyFinalOutput(
-      workDir,
-      sessionId,
-      finalAudioPath,
-    );
-    const normalizedSummary = typeof summary === "string" ? summary : "";
-    const sessionData = sessions[sessionId] || ({} as any);
-    let finalQuality: any = null;
-    try {
-      finalQuality = await analyzeMedleyQuality(validated.finalPath, workDir);
-    } catch {
-      // The contained regular file is authoritative; quality remains optional here.
-    }
-    const transaction = executeFinalizationTransaction({
-      workDir,
-      sessionId,
-      candidateId: "legacy-output",
-      summary: normalizedSummary,
-      promote: () => ({
-        finalPath: validated.finalPath,
-        manifestVersion: null,
-        sha256: validated.sha256,
-      }),
-      readHistory: getHistory,
-      writeHistory: saveHistory,
-      readWisdom: getWisdom,
-      writeWisdom: saveWisdom,
-      createHistoryEntry: (resolvedPath) => ({
-        id: sessionId,
-        completedAt: new Date().toISOString(),
-        summary: normalizedSummary,
-        finalAudioPath: resolvedPath,
-        metrics: sessionData.metrics,
-        designPlan: sessionData.designPlan || null,
-        candidateId: "legacy-output",
-      }),
-      createWisdomEntry: (resolvedPath) => ({
-        type: "completed_medley",
+        finalAudioPath,
+      );
+      const normalizedSummary = typeof summary === "string" ? summary : "";
+      const sessionData = sessions[sessionId] || ({} as any);
+      let finalQuality: any = null;
+      try {
+        finalQuality = await analyzeMedleyQuality(validated.finalPath, workDir);
+      } catch {
+        // The contained regular file is authoritative; quality remains optional here.
+      }
+      const transaction = executeFinalizationTransaction({
+        workDir,
         sessionId,
-        summary: normalizedSummary,
-        metrics: sessionData.metrics || null,
-        designPlan: sessionData.designPlan || null,
-        finalAudioPath: resolvedPath,
         candidateId: "legacy-output",
-        tracksInvolved:
-          sessionData.designPlan?.transitions?.map((t: any) => t.fromTrackId) ||
-          [],
-        ...(finalQuality ? { finalQuality } : {}),
-      }),
-      deleteCheckpoint: () =>
-        fs.rmSync(path.join(checkpointDir, `${sessionId}.json`), {
-          force: true,
+        summary: normalizedSummary,
+        promote: () => ({
+          finalPath: validated.finalPath,
+          manifestVersion: null,
+          sha256: validated.sha256,
         }),
+        verifyFinalAudio: verifyFinalAudioWithFfmpeg,
+        readHistory: getHistory,
+        writeHistory: saveHistory,
+        readWisdom: getWisdom,
+        writeWisdom: saveWisdom,
+        createHistoryEntry: (resolvedPath) => ({
+          id: sessionId,
+          completedAt: new Date().toISOString(),
+          summary: normalizedSummary,
+          finalAudioPath: resolvedPath,
+          metrics: sessionData.metrics,
+          designPlan: sessionData.designPlan || null,
+          candidateId: "legacy-output",
+        }),
+        createWisdomEntry: (resolvedPath) => ({
+          type: "completed_medley",
+          sessionId,
+          summary: normalizedSummary,
+          metrics: sessionData.metrics || null,
+          designPlan: sessionData.designPlan || null,
+          finalAudioPath: resolvedPath,
+          candidateId: "legacy-output",
+          tracksInvolved: collectTransitionTrackIds(
+            sessionData.designPlan?.transitions,
+          ),
+          ...(finalQuality ? { finalQuality } : {}),
+        }),
+        deleteCheckpoint: () =>
+          fs.rmSync(path.join(checkpointDir, `${sessionId}.json`), {
+            force: true,
+          }),
+      });
+      sessions[sessionId] = {
+        ...(sessions[sessionId] || { logs: [] }),
+        status: "completed",
+        finalAudioPath: transaction.finalPath,
+        summary: normalizedSummary,
+        workflowStage: "completed",
+      };
+      broadcastToSession(sessionId, "completed", {
+        summary: normalizedSummary,
+      });
+      return res.json({ success: true, idempotent: transaction.idempotent });
     });
-    sessions[sessionId] = {
-      ...(sessions[sessionId] || { logs: [] }),
-      status: "completed",
-      finalAudioPath: transaction.finalPath,
-      summary: normalizedSummary,
-      workflowStage: "completed",
-    };
-    broadcastToSession(sessionId, "completed", {
-      summary: normalizedSummary,
-    });
-    return res.json({ success: true, idempotent: transaction.idempotent });
   } catch (error: any) {
     return res.status(400).json({ error: error.message });
   }
 });
 
 // Update metrics endpoint
-app.post("/api/session/metrics", (req, res) => {
+app.post("/api/session/metrics", async (req, res) => {
   const { sessionId, metrics } = req.body;
+  try {
+    validateSessionId(sessionId);
+    return await withSessionLock(sessionId, async () => {
   if (sessions[sessionId]) {
     sessions[sessionId].metrics = {
       ...sessions[sessionId].metrics,
@@ -1829,7 +2129,11 @@ app.post("/api/session/metrics", (req, res) => {
       console.warn("[session-metrics] Wisdom logging failed:", wisdomError);
     }
   }
-  res.json({ success: true });
+  return res.json({ success: true });
+    });
+  } catch (error: any) {
+    return res.status(400).json({ success: false, error: error.message });
+  }
 });
 
 app.get("/api/session/:id", (req, res) => {
@@ -1922,6 +2226,15 @@ app.post("/api/audio-analysis/local", async (req, res) => {
     );
   } catch (error: any) {
     return res.status(429).json({ error: error.message });
+  }
+  if (typeof sessionId === "string") {
+    try {
+      validateSessionId(sessionId);
+      (activeAnalysisJobs[sessionId] ||= new Set()).add(job);
+    } catch (error: any) {
+      analysisJobs.finish(job);
+      return res.status(400).json({ error: error.message });
+    }
   }
   const cancelDisconnectedRequest = () => {
     if (!res.writableEnded) analysisJobs.cancel(job);
@@ -2016,13 +2329,52 @@ app.post("/api/audio-analysis/local", async (req, res) => {
     req.removeListener("aborted", cancelDisconnectedRequest);
     res.removeListener("close", cancelDisconnectedRequest);
     analysisJobs.finish(job);
+    if (typeof sessionId === "string") {
+      const active = activeAnalysisJobs[sessionId];
+      active?.delete(job);
+      if (active?.size === 0) delete activeAnalysisJobs[sessionId];
+    }
   }
 });
 
-app.post("/api/medley-intelligence/design", (req, res) => {
-  const { library: requestLibrary, userConstraints, sessionId } = req.body || {};
-  const source =
-    sessionId || !Array.isArray(requestLibrary) ? getLibrary() : requestLibrary;
+app.post("/api/medley-intelligence/design", async (req, res) => {
+  const {
+    library: requestLibrary,
+    trackIds: requestedTrackIds,
+    userConstraints,
+    sessionId,
+  } = req.body || {};
+  const persistedLibrary = getLibrary();
+  let source =
+    sessionId || !Array.isArray(requestLibrary)
+      ? persistedLibrary
+      : requestLibrary;
+  if (sessionId && !Array.isArray(requestedTrackIds)) {
+    return res.status(400).json({
+      error: "Automatic design requires explicit selected track IDs.",
+    });
+  }
+  if (sessionId) {
+    const trackIds: string[] = (requestedTrackIds as unknown[]).filter(
+      (value: unknown): value is string => typeof value === "string",
+    );
+    const uniqueIds = [...new Set(trackIds)];
+    if (
+      uniqueIds.length !== requestedTrackIds.length ||
+      uniqueIds.length < 2 ||
+      uniqueIds.length > 25
+    ) {
+      return res.status(400).json({
+        error: "Automatic design requires 2 to 25 unique selected track IDs.",
+      });
+    }
+    source = selectLibraryEntriesById(persistedLibrary, uniqueIds);
+    if (source.length !== uniqueIds.length) {
+      return res.status(400).json({
+        error: "One or more selected tracks are no longer in the library.",
+      });
+    }
+  }
   const tracks = source
     .map((entry: any) => {
       if (entry.medleyIntelligence) return entry.medleyIntelligence;
@@ -2060,15 +2412,127 @@ app.post("/api/medley-intelligence/design", (req, res) => {
 
   if (sessionId) {
     validateSessionId(sessionId);
+    try {
+      await withSessionLock(sessionId, async () => {
+        const existingState = readAutomaticSessionState(workDir, sessionId);
+        const selectedTrackIds = source.map((entry: any) => String(entry.id));
+        const selectionHash = stableHash(selectedTrackIds);
+        if (existingState && existingState.selectionHash !== selectionHash) {
+          throw new Error("Session is already pinned to a different selected-track set.");
+        }
+      const sourceAudioSha256 = Object.fromEntries(
+        source.map((entry: any) => [
+          entry.id,
+          typeof entry.sha256 === "string" && /^[a-f0-9]{64}$/.test(entry.sha256)
+            ? entry.sha256
+            : sha256UploadFile(String(entry.path)),
+        ]),
+      );
+      const now = new Date().toISOString();
+        const existingSnapshot = readDesignSnapshotV4(workDir, sessionId);
+        const snapshot = existingSnapshot || createDesignSnapshotV4({
+          schemaVersion: 1,
+          workflowVersion: AUTOMATIC_WORKFLOW_VERSION,
+          deterministicAlgorithmVersion: DETERMINISTIC_DESIGN_ALGORITHM_VERSION,
+          sessionId,
+          selectedTrackIds,
+          selectionHash,
+          sourceAudioSha256,
+          analysisSchemaVersions: Object.fromEntries(source.map((entry: any) => [
+            entry.id,
+            String(entry.localAnalysis?.schemaVersion || "local_audio_analysis_v2"),
+          ])),
+          analyzerVersions: Object.fromEntries(source.map((entry: any) => [
+            entry.id,
+            String(entry.localAnalysis?.analyzerVersion || "local-audio-analysis-v2"),
+          ])),
+          targetDurationSec: Math.max(1, Number(userConstraints?.targetDurationMinutes || 3) * 60),
+          maximumTransitions: 32,
+          workflowConstraints: {
+            selectedTracksOnly: true,
+            crossfadeDurationSeconds: Number(userConstraints?.crossfadeDurationSeconds || 0),
+          },
+          transitionScoringPolicyVersion: TRANSITION_SCORING_POLICY_VERSION,
+          wisdomSnapshotHash: canonicalSha256(getWisdom()),
+          canonicalBrief: {
+            selectedTrackIds,
+            userConstraints: userConstraints || {},
+            designSchemaVersion: design.schemaVersion,
+          },
+          canonicalTransitionCandidates: Array.isArray(design.transitionMatrixSummary)
+            ? design.transitionMatrixSummary.map((candidate: any) => ({ ...candidate }))
+            : [],
+          createdAt: now,
+        });
+        writeDesignSnapshotV4(workDir, snapshot);
+        if (!existingState) {
+          writeAutomaticSessionState(workDir, {
+            schemaVersion: 1,
+            workflowVersion: AUTOMATIC_WORKFLOW_VERSION,
+            sessionId,
+            state: "created",
+            stateRevision: 0,
+            selectedTrackIds,
+            selectionHash,
+            designHash: snapshot.designHash,
+            activeArrangementVersion: null,
+            activeExecutionGeneration: 0,
+            currentCandidateId: null,
+            idempotencyRecords: [],
+            recoverableError: null,
+            createdAt: now,
+            updatedAt: now,
+          }, -1);
+          // The local analysis is already complete when this route is called,
+          // but preserve the state-machine boundaries rather than jumping from
+          // creation directly into planning.
+          transitionAutomaticSessionState({ workDir, sessionId, to: "analyzing" });
+          transitionAutomaticSessionState({ workDir, sessionId, to: "planning" });
+        } else if (existingState.designHash !== snapshot.designHash) {
+          writeAutomaticSessionState(workDir, {
+            ...existingState,
+            designHash: snapshot.designHash,
+          }, existingState.stateRevision);
+        }
+      });
+    } catch (error: any) {
+      return res.status(409).json({ error: error.message });
+    }
     if (!sessions[sessionId]) sessions[sessionId] = { status: "running", logs: [] };
+    // v4 is automatic even though it deliberately has no legacy,
+    // model-authored project brief. Preserve that authority boundary for the
+    // in-memory portion of the workflow until server restart reconciliation.
+    sessions[sessionId].workflowMode = "automatic";
     sessions[sessionId].trackIntelligence = structuredClone(tracks);
     sessions[sessionId].medleyDesign = structuredClone(design);
   }
 
-  res.json({
+  const responsePayload = {
     success: true,
     design,
-  });
+  };
+  const idempotencyKey = String(
+    req.get("Idempotency-Key") || req.body?.idempotencyKey || "",
+  ).trim();
+  if (sessionId && idempotencyKey) {
+    try {
+      const replay = await replayAutomaticSessionIdempotent({
+        workDir,
+        sessionId,
+        operation: "session_creation",
+        key: idempotencyKey,
+        request: {
+          selectedTrackIds: source.map((entry: any) => entry.id),
+          userConstraints: userConstraints || {},
+        },
+        execute: async () => responsePayload,
+      });
+      return res.json({ ...replay.result, idempotent: replay.replayed });
+    } catch (error: any) {
+      return res.status(409).json({ success: false, error: error.message });
+    }
+  }
+  return res.json(responsePayload);
 });
 
 // Section pair evaluation (uses the cache populated by the design route)
@@ -2127,53 +2591,83 @@ app.post("/api/medley-quality", async (req, res) => {
   }
 });
 
-app.post("/api/session/project-brief", (req, res) => {
+app.post("/api/session/project-brief", async (req, res) => {
   const { sessionId, brief } = req.body || {};
   try {
     validateSessionId(sessionId);
-    let parsed = ProjectBriefSchema.parse(brief);
-    if (parsed.projectId !== sessionId) {
-      return res.status(400).json({ error: "projectId must match sessionId" });
-    }
-    const specialistContext = buildSpecialistContext(sessionId);
-    parsed = bindLegacyProjectBriefAuthority(parsed, specialistContext);
-    const contextualErrors = validateProjectBriefContext(parsed, specialistContext);
-    if (contextualErrors.length) {
-      return res.status(400).json({ error: contextualErrors.join("; ") });
-    }
-    if (!sessions[sessionId])
-      sessions[sessionId] = { status: "running", logs: [] };
-    sessions[sessionId].projectBrief = parsed;
-    const existingSessionTracks = getSessionTrackIntelligence(sessionId);
-    sessions[sessionId].trackIntelligence = selectSessionTrackIntelligence(
-      existingSessionTracks,
-      getCurrentTrackIntelligence(),
-      parsed.recommendedOrderIds,
-    );
-    sessions[sessionId].workflowMode = "automatic";
-    sessions[sessionId].workflowStage = "arrangement";
-    res.json({ success: true, brief: parsed });
+    const idempotencyKey = String(
+      req.get("Idempotency-Key") || req.body?.idempotencyKey || "",
+    ).trim();
+    return await withSessionLock(sessionId, async () => {
+      const execute = async () => {
+      let parsed = ProjectBriefSchema.parse(brief);
+      if (parsed.projectId !== sessionId) {
+        throw new Error("projectId must match sessionId");
+      }
+      const specialistContext = buildSpecialistContext(sessionId);
+      parsed = bindLegacyProjectBriefAuthority(parsed, specialistContext);
+      const contextualErrors = validateProjectBriefContext(parsed, specialistContext);
+      if (contextualErrors.length) {
+        throw new Error(contextualErrors.join("; "));
+      }
+      if (!sessions[sessionId])
+        sessions[sessionId] = { status: "running", logs: [] };
+      sessions[sessionId].projectBrief = parsed;
+      const existingSessionTracks = getSessionTrackIntelligence(sessionId);
+      sessions[sessionId].trackIntelligence = selectSessionTrackIntelligence(
+        existingSessionTracks,
+        getCurrentTrackIntelligence(),
+        parsed.recommendedOrderIds,
+      );
+      sessions[sessionId].workflowMode = "automatic";
+      sessions[sessionId].workflowStage = "arrangement";
+      return { success: true, brief: parsed };
+      };
+      const automaticState = readAutomaticSessionState(workDir, sessionId);
+      const replay = idempotencyKey && automaticState
+        ? await replayAutomaticSessionIdempotent({
+            workDir,
+            sessionId,
+            operation: "project_brief",
+            key: idempotencyKey,
+            request: brief,
+            execute,
+          })
+        : idempotencyKey
+          ? await replayIdempotent({
+              sessionId,
+              operation: "project_brief",
+              key: idempotencyKey,
+              request: brief,
+              execute,
+            })
+          : { replayed: false, result: await execute() };
+      return res.json({ ...replay.result, idempotent: replay.replayed });
+    });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
 });
 
-app.post("/api/session/execution-report", (req, res) => {
+app.post("/api/session/execution-report", async (req, res) => {
   const { sessionId, report } = req.body || {};
   try {
     validateSessionId(sessionId);
+    const idempotencyKey = String(
+      req.get("Idempotency-Key") || req.body?.idempotencyKey || "",
+    ).trim();
+    return await withSessionLock(sessionId, async () => {
+    const execute = async () => {
     const parsed = ExecutionReportSchema.parse(report);
     const planResult = ArrangementPlanSchema.safeParse(
       sessions[sessionId]?.designPlan,
     );
     if (!planResult.success) {
-      return res
-        .status(400)
-        .json({ error: "No valid locked arrangement exists for this session" });
+      throw new Error("No valid locked arrangement exists for this session");
     }
     const contextualErrors = validateExecutionContext(parsed, planResult.data);
     if (contextualErrors.length)
-      return res.status(400).json({ error: contextualErrors.join("; ") });
+      throw new Error(contextualErrors.join("; "));
     if (sessions[sessionId]?.projectBrief) {
       const authoritative =
         sessions[sessionId]?.executionResults?.[parsed.executionVersion] || {};
@@ -2232,65 +2726,147 @@ app.post("/api/session/execution-report", (req, res) => {
         }
       }
       if (authorityErrors.length)
-        return res.status(400).json({ error: authorityErrors.join("; ") });
+        throw new Error(authorityErrors.join("; "));
     }
     sessions[sessionId].executionReport = parsed;
     sessions[sessionId].workflowStage = "review_candidate";
-    res.json({ success: true, report: parsed });
+    return { success: true, report: parsed };
+    };
+    const automaticState = readAutomaticSessionState(workDir, sessionId);
+    const replay = idempotencyKey && automaticState
+      ? await replayAutomaticSessionIdempotent({
+          workDir,
+          sessionId,
+          operation: "execution_compilation",
+          key: idempotencyKey,
+          request: report,
+          execute,
+        })
+      : idempotencyKey
+        ? await replayIdempotent({
+            sessionId,
+            operation: "execution_compilation",
+            key: idempotencyKey,
+            request: report,
+            execute,
+          })
+        : { replayed: false, result: await execute() };
+    return res.json({ ...replay.result, idempotent: replay.replayed });
+    });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
 });
 
-app.post("/api/session/quality-review", (req, res) => {
+app.post("/api/session/quality-review", async (req, res) => {
   const { sessionId, review } = req.body || {};
   try {
     validateSessionId(sessionId);
-    const parsed = QualityReviewSchema.parse(review);
-    const existingManifest = readCandidateManifest(workDir, sessionId);
-    const reviewedCandidate = existingManifest.candidates.find(
-      (item) => item.candidateId === parsed.candidateId,
-    );
-    if (!reviewedCandidate) {
-      return res
-        .status(400)
-        .json({ error: "Reviewed candidate is not registered" });
-    }
-    if (
-      reviewedCandidate.candidateVersion !== parsed.candidateVersion ||
-      reviewedCandidate.arrangementVersion !== parsed.arrangementVersion
-    ) {
-      return res.status(400).json({
-        error: "Review version does not match the registered candidate",
-      });
-    }
-    if (parsed.approved && parsed.blockingIssues.length) {
-      return res
-        .status(400)
-        .json({ error: "An approved review cannot contain blocking issues" });
-    }
-    const plan = ArrangementPlanSchema.safeParse(
-      sessions[sessionId]?.designPlan,
-    );
-    if (plan.success) {
-      const transitionIds = new Set(
-        plan.data.transitions.map((item) => item.transitionId),
+    const idempotencyKey = String(
+      req.get("Idempotency-Key") || req.body?.idempotencyKey || "",
+    ).trim();
+    return await withSessionLock(sessionId, async () => {
+      const execute = async () => {
+      const parsed = QualityReviewSchema.parse(review);
+      const existingManifest = readCandidateManifest(workDir, sessionId);
+      const reviewedCandidate = existingManifest.candidates.find(
+        (item) => item.candidateId === parsed.candidateId,
       );
-      const unknownCorrection = parsed.corrections.find(
-        (item) => !transitionIds.has(item.transitionId),
+      if (!reviewedCandidate) {
+        throw new Error("Reviewed candidate is not registered");
+      }
+      if (
+        reviewedCandidate.candidateVersion !== parsed.candidateVersion ||
+        reviewedCandidate.arrangementVersion !== parsed.arrangementVersion
+      ) {
+        throw new Error("Review version does not match the registered candidate");
+      }
+      if (parsed.approved && parsed.blockingIssues.length) {
+        throw new Error("An approved review cannot contain blocking issues");
+      }
+      const plan = ArrangementPlanSchema.safeParse(
+        sessions[sessionId]?.designPlan,
       );
-      if (unknownCorrection) {
-        return res.status(400).json({
-          error: `Unknown correction transition: ${unknownCorrection.transitionId}`,
+      if (plan.success) {
+        const transitionIds = new Set(
+          plan.data.transitions.map((item) => item.transitionId),
+        );
+        const unknownCorrection = parsed.corrections.find(
+          (item) => !transitionIds.has(item.transitionId),
+        );
+        if (unknownCorrection) {
+          throw new Error(
+            `Unknown correction transition: ${unknownCorrection.transitionId}`,
+          );
+        }
+        if (existingManifest.workflowMode === "automatic") {
+          if (new Set(parsed.corrections.map((item) => item.transitionId)).size > 1) {
+            throw new Error("Automatic correction may change only one transition per draft");
+          }
+          const disallowedCorrection = parsed.corrections.find((correction) => {
+            const transition = plan.data.transitions.find(
+              (item) => item.transitionId === correction.transitionId,
+            );
+            return !transition || !correction.correctionPreset ||
+              !getAllowedCorrectionPresets(transition).includes(correction.correctionPreset);
+          });
+          if (disallowedCorrection) {
+            throw new Error(
+              `Correction preset is not allowed for ${disallowedCorrection.transitionId}`,
+            );
+          }
+        }
+      }
+      const automaticState = existingManifest.workflowMode === "automatic"
+        ? readAutomaticSessionState(workDir, sessionId)
+        : null;
+      if (automaticState) {
+        if (automaticState.state === "technical_review") {
+          transitionAutomaticSessionState({ workDir, sessionId, to: "musical_review" });
+        }
+        const musicalState = readAutomaticSessionState(workDir, sessionId)!;
+        if (musicalState.state !== "musical_review") {
+          throw new Error(`Musical review is not valid while session state is ${musicalState.state}`);
+        }
+      }
+      const manifest = applyCandidateReview(workDir, sessionId, parsed);
+      sessions[sessionId].qualityReview = parsed;
+      sessions[sessionId].workflowStage = parsed.approved
+        ? "candidate_options"
+        : "correction";
+      const postReviewState = existingManifest.workflowMode === "automatic"
+        ? readAutomaticSessionState(workDir, sessionId)
+        : null;
+      if (postReviewState && !parsed.approved) {
+        transitionAutomaticSessionState({
+          workDir,
+          sessionId,
+          to: "correcting",
         });
       }
-    }
-    const manifest = applyCandidateReview(workDir, sessionId, parsed);
-    sessions[sessionId].qualityReview = parsed;
-    sessions[sessionId].workflowStage = parsed.approved
-      ? "final_render"
-      : "correction";
-    res.json({ success: true, review: parsed, manifest });
+      return { success: true, review: parsed, manifest };
+      };
+      const automaticState = readAutomaticSessionState(workDir, sessionId);
+      const replay = idempotencyKey && automaticState
+        ? await replayAutomaticSessionIdempotent({
+            workDir,
+            sessionId,
+            operation: "musical_review",
+            key: idempotencyKey,
+            request: review,
+            execute,
+          })
+        : idempotencyKey
+          ? await replayIdempotent({
+              sessionId,
+              operation: "musical_review",
+              key: idempotencyKey,
+              request: review,
+              execute,
+            })
+          : { replayed: false, result: await execute() };
+      return res.json({ ...replay.result, idempotent: replay.replayed });
+    });
   } catch (error: any) {
     res.status(400).json({ error: error.message });
   }
@@ -2305,16 +2881,315 @@ app.get("/api/session/:sessionId/candidates", (req, res) => {
   }
 });
 
-app.post("/api/session/design-plan", (req, res) => {
+function sendRegisteredCandidateAudio(
+  req: express.Request,
+  res: express.Response,
+  filePath: string,
+  sizeBytes: number,
+) {
+  const range = req.headers.range;
+  res.setHeader("Accept-Ranges", "bytes");
+  res.setHeader("Cache-Control", "private, no-store");
+  res.setHeader("Content-Type", "audio/mpeg");
+  res.setHeader("Content-Disposition", `inline; filename="${path.basename(filePath).replaceAll('"', "")}"`);
+  if (!range) {
+    res.setHeader("Content-Length", sizeBytes);
+    fs.createReadStream(filePath).pipe(res);
+    return;
+  }
+  const match = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
+  if (!match) {
+    res.status(416).setHeader("Content-Range", `bytes */${sizeBytes}`);
+    res.end();
+    return;
+  }
+  const requestedStart = match[1] ? Number(match[1]) : null;
+  const requestedEnd = match[2] ? Number(match[2]) : null;
+  let start: number;
+  let end: number;
+  if (requestedStart === null) {
+    const suffixLength = requestedEnd ?? 0;
+    if (!Number.isInteger(suffixLength) || suffixLength <= 0) {
+      res.status(416).setHeader("Content-Range", `bytes */${sizeBytes}`);
+      res.end();
+      return;
+    }
+    start = Math.max(0, sizeBytes - suffixLength);
+    end = sizeBytes - 1;
+  } else {
+    start = requestedStart;
+    end = requestedEnd ?? sizeBytes - 1;
+  }
+  if (
+    !Number.isInteger(start) ||
+    !Number.isInteger(end) ||
+    start < 0 ||
+    end < start ||
+    start >= sizeBytes
+  ) {
+    res.status(416).setHeader("Content-Range", `bytes */${sizeBytes}`);
+    res.end();
+    return;
+  }
+  end = Math.min(end, sizeBytes - 1);
+  res.status(206);
+  res.setHeader("Content-Range", `bytes ${start}-${end}/${sizeBytes}`);
+  res.setHeader("Content-Length", end - start + 1);
+  fs.createReadStream(filePath, { start, end }).pipe(res);
+}
+
+app.get("/api/session/:sessionId/candidates/:candidateId/audio", (req, res) => {
+  try {
+    const { sessionId, candidateId } = req.params;
+    validateSessionId(sessionId);
+    const manifest = readCandidateManifest(workDir, sessionId);
+    const candidate = manifest.candidates.find((item) => item.candidateId === candidateId);
+    if (!candidate) return res.status(404).json({ error: "Candidate is not registered" });
+    const registered = manifest.candidates.flatMap((item) => [
+      item.outputPath,
+      ...item.debugPaths,
+      ...item.previewPaths,
+    ]);
+    const audioPath = assertRegisteredSafeFile(
+      workDir,
+      sessionId,
+      candidate.outputPath,
+      registered,
+    );
+    if (!fs.existsSync(audioPath)) {
+      return res.status(404).json({ error: "Candidate audio is missing" });
+    }
+    const stat = fs.lstatSync(audioPath);
+    if (
+      !stat.isFile() ||
+      stat.isSymbolicLink() ||
+      stat.size !== candidate.sizeBytes ||
+      sha256File(audioPath) !== candidate.sha256
+    ) {
+      return res.status(409).json({ error: "Candidate audio failed its integrity check" });
+    }
+    return sendRegisteredCandidateAudio(req, res, audioPath, stat.size);
+  } catch (error: any) {
+    return res.status(400).json({ error: error.message });
+  }
+});
+
+app.get("/api/session/:sessionId/state", (req, res) => {
+  try {
+    validateSessionId(req.params.sessionId);
+    const state = readAutomaticSessionState(workDir, req.params.sessionId);
+    if (!state) return res.status(404).json({ error: "Automatic v4 session state not found" });
+    const manifest = readCandidateManifest(workDir, req.params.sessionId);
+    let journal = null;
+    try {
+      journal = readFinalizationJournal(workDir, req.params.sessionId);
+    } catch {
+      // The projection reports an unverified final instead of hiding candidates.
+    }
+    return res.json({
+      success: true,
+      state,
+      manifest,
+      review: buildCandidateReviewProjection({ workDir, state, manifest, journal }),
+    });
+  } catch (error: any) {
+    return res.status(400).json({ error: error.message });
+  }
+});
+
+app.get("/api/sessions/reviewable", (_req, res) => {
+  const reviews = fs.existsSync(workDir)
+    ? fs.readdirSync(workDir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .flatMap((entry) => {
+          try {
+            validateSessionId(entry.name);
+            const state = readAutomaticSessionState(workDir, entry.name);
+            if (!state) return [];
+            const manifest = readCandidateManifest(workDir, entry.name);
+            if (!manifest.candidates.length) return [];
+            let journal = null;
+            try {
+              journal = readFinalizationJournal(workDir, entry.name);
+            } catch {}
+            return [buildCandidateReviewProjection({ workDir, state, manifest, journal })];
+          } catch {
+            return [];
+          }
+        })
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+    : [];
+  return res.json({ success: true, sessions: reviews });
+});
+
+app.post("/api/session/manual-review-required", async (req, res) => {
+  const { sessionId, reason } = req.body || {};
+  try {
+    validateSessionId(sessionId);
+    const normalizedReason = String(reason || "Manual review is required")
+      .trim()
+      .slice(0, 2_000);
+    if (!normalizedReason) throw new Error("Manual review reason is required");
+    const idempotencyKey = String(
+      req.get("Idempotency-Key") || req.body?.idempotencyKey || "",
+    ).trim();
+    return await withSessionLock(sessionId, async () => {
+      const execute = async () => {
+        const state = readAutomaticSessionState(workDir, sessionId);
+        if (!state) throw new Error("Automatic v4 session state is missing");
+        if (state.state === "manual_review_required") {
+          return { success: true, state, alreadyRequired: true };
+        }
+        // The authoritative transition matrix already defines which states
+        // may enter human review. Do not contradict it here: technical review,
+        // musical review, option generation, and correction are precisely the
+        // recoverable boundaries where a preserved draft must remain usable.
+        const next = transitionAutomaticSessionState({
+          workDir,
+          sessionId,
+          to: "manual_review_required",
+          recoverableError: normalizedReason,
+        });
+        return { success: true, state: next, alreadyRequired: false };
+      };
+      const replay = idempotencyKey
+        ? await replayAutomaticSessionIdempotent({
+            workDir,
+            sessionId,
+            operation: "correction_submission",
+            key: idempotencyKey,
+            request: { reason: normalizedReason },
+            execute,
+          })
+        : { replayed: false, result: await execute() };
+      return res.json({ ...replay.result, idempotent: replay.replayed });
+    });
+  } catch (error: any) {
+    return res.status(409).json({ success: false, error: error.message });
+  }
+});
+
+app.post("/api/session/prepare-comparison-option", async (req, res) => {
+  const { sessionId } = req.body || {};
+  try {
+    validateSessionId(sessionId);
+    const idempotencyKey = String(
+      req.get("Idempotency-Key") || req.body?.idempotencyKey || "",
+    ).trim();
+    return await withSessionLock(sessionId, async () => {
+      const execute = async () => {
+        const state = readAutomaticSessionState(workDir, sessionId);
+        if (!state) throw new Error("Automatic v4 session state is missing");
+        if (state.state === "generating_options") {
+          return { success: true, state, alreadyPreparing: true };
+        }
+        if (state.state !== "musical_review") {
+          throw new Error(
+            `A comparison option cannot be prepared while session state is ${state.state}`,
+          );
+        }
+        const next = transitionAutomaticSessionState({
+          workDir,
+          sessionId,
+          to: "generating_options",
+        });
+        return { success: true, state: next, alreadyPreparing: false };
+      };
+      const replay = idempotencyKey
+        ? await replayAutomaticSessionIdempotent({
+            workDir,
+            sessionId,
+            operation: "correction_submission",
+            key: idempotencyKey,
+            request: { prepareComparisonOption: true },
+            execute,
+          })
+        : { replayed: false, result: await execute() };
+      return res.json({ ...replay.result, idempotent: replay.replayed });
+    });
+  } catch (error: any) {
+    return res.status(409).json({ success: false, error: error.message });
+  }
+});
+
+app.post("/api/session/human-review", async (req, res) => {
+  const { sessionId, review, expectedRevision } = req.body || {};
+  try {
+    validateSessionId(sessionId);
+    const parsedReview = CandidateHumanReviewSchema.parse(review);
+    if (!Number.isInteger(expectedRevision) || expectedRevision < 0) {
+      throw new Error("expectedRevision is required for human approval");
+    }
+    const idempotencyKey = String(
+      req.get("Idempotency-Key") || req.body?.idempotencyKey || "",
+    ).trim();
+    return await withSessionLock(sessionId, async () => {
+      const execute = async () => {
+        const state = readAutomaticSessionState(workDir, sessionId);
+        if (!state) throw new Error("Automatic v4 session state is missing");
+        if (state.stateRevision !== expectedRevision) {
+          throw new Error(
+            `State revision conflict: expected ${expectedRevision}, found ${state.stateRevision}`,
+          );
+        }
+        if (state.state !== "manual_review_required") {
+          throw new Error("Human approval is allowed only while manual review is required");
+        }
+        const manifest = applyCandidateHumanReview(workDir, sessionId, parsedReview);
+        if (parsedReview.decision === "approved") {
+          transitionAutomaticSessionState({
+            workDir,
+            sessionId,
+            to: "finalizing",
+          });
+        }
+        return {
+          success: true,
+          manifest,
+          state: readAutomaticSessionState(workDir, sessionId),
+        };
+      };
+      const replay = idempotencyKey
+        ? await replayAutomaticSessionIdempotent({
+            workDir,
+            sessionId,
+            operation: "human_approval",
+            key: idempotencyKey,
+            request: { review: parsedReview, expectedRevision },
+            execute,
+          })
+        : { replayed: false, result: await execute() };
+      return res.json({ ...replay.result, idempotent: replay.replayed });
+    });
+  } catch (error: any) {
+    return res.status(409).json({ success: false, error: error.message });
+  }
+});
+
+app.post("/api/session/design-plan", async (req, res) => {
   const { sessionId, plan, contractVersion } = req.body || {};
   if (!sessionId) return res.status(400).json({ error: "sessionId required" });
   if (!plan || !Array.isArray(plan.transitions)) {
     return res.status(400).json({ error: "plan.transitions must be an array" });
   }
+  try {
+    validateSessionId(sessionId);
+  } catch (error: any) {
+    return res.status(400).json({ error: error.message });
+  }
+  const idempotencyKey = String(
+    req.get("Idempotency-Key") || req.body?.idempotencyKey || "",
+  ).trim();
+  try {
+  return await withSessionLock(sessionId, async () => {
+  const execute = async () => {
   if (!sessions[sessionId]) {
     sessions[sessionId] = { status: "running", logs: [] };
   }
-  if (!sessions[sessionId].projectBrief) {
+  if (
+    !sessions[sessionId].projectBrief &&
+    sessions[sessionId].workflowMode !== "automatic"
+  ) {
     try {
       parseManualToolCall(
         "set_design_plan",
@@ -2322,7 +3197,7 @@ app.post("/api/session/design-plan", (req, res) => {
         { allowLegacy: contractVersion === undefined },
       );
     } catch (error: any) {
-      return res.status(400).json({ error: error.message });
+      throw error;
     }
   }
 
@@ -2340,7 +3215,10 @@ app.post("/api/session/design-plan", (req, res) => {
     "outputPath",
   ];
 
-  if (!sessions[sessionId].projectBrief) {
+  if (
+    !sessions[sessionId].projectBrief &&
+    sessions[sessionId].workflowMode !== "automatic"
+  ) {
     for (const incoming of plan.transitions) {
       const key = `${incoming.fromTrackId}:${incoming.fromSectionId}:${incoming.toTrackId}:${incoming.toSectionId}`;
 
@@ -2377,12 +3255,12 @@ app.post("/api/session/design-plan", (req, res) => {
   const specialistPlan = ArrangementPlanSchema.safeParse(plan);
   if (specialistPlan.success) {
     const specialistContext = buildSpecialistContext(sessionId);
-    const authoritativePlan = bindLegacyArrangementAuthority(
+    let authoritativePlan = bindLegacyArrangementAuthority(
       specialistPlan.data,
       specialistContext,
     );
     if (authoritativePlan.projectId !== sessionId) {
-      return res.status(400).json({ error: "projectId must match sessionId" });
+      throw new Error("projectId must match sessionId");
     }
     const contextualErrors = validateArrangementContext(
       authoritativePlan,
@@ -2402,14 +3280,47 @@ app.post("/api/session/design-plan", (req, res) => {
       );
     }
     if (contextualErrors.length) {
-      return res.status(400).json({ error: contextualErrors.join("; ") });
+      throw new Error(contextualErrors.join("; "));
+    }
+    const automaticState = readAutomaticSessionState(workDir, sessionId);
+    if (automaticState) {
+      authoritativePlan = bindAutomaticCorrectionPolicy(authoritativePlan);
+      const snapshot = readDesignSnapshotV4(workDir, sessionId);
+      if (!snapshot || snapshot.designHash !== automaticState.designHash) {
+        throw new Error("Automatic v4 design snapshot is missing or does not match session state");
+      }
+      if (automaticState.state === "correcting") {
+        transitionAutomaticSessionState({ workDir, sessionId, to: "planning" });
+      }
+      transitionAutomaticSessionState({
+        workDir,
+        sessionId,
+        to: "validating_arrangement",
+      });
+      writeArrangementVersionV1(workDir, {
+        schemaVersion: 1,
+        workflowVersion: AUTOMATIC_WORKFLOW_VERSION,
+        sessionId,
+        arrangementVersion: authoritativePlan.arrangementVersion,
+        designHash: snapshot.designHash,
+        arrangement: authoritativePlan,
+        submittedAt: new Date().toISOString(),
+      });
+      const validatingState = readAutomaticSessionState(workDir, sessionId)!;
+      writeAutomaticSessionState(workDir, {
+        ...validatingState,
+        activeArrangementVersion: authoritativePlan.arrangementVersion,
+      }, validatingState.stateRevision);
+      transitionAutomaticSessionState({
+        workDir,
+        sessionId,
+        to: "executing_transitions",
+      });
     }
     sessions[sessionId].designPlan = authoritativePlan;
     sessions[sessionId].workflowStage = "production";
   } else if (sessions[sessionId].projectBrief) {
-    return res.status(400).json({
-      error: formatValidationIssues(specialistPlan.error).join("; "),
-    });
+    throw new Error(formatValidationIssues(specialistPlan.error).join("; "));
   } else {
     // Legacy/manual sessions retain their existing loose plan format.
     sessions[sessionId].designPlan = plan;
@@ -2441,11 +3352,36 @@ app.post("/api/session/design-plan", (req, res) => {
       }
     }
   }
-  res.json({
+  return {
     success: true,
     storedTransitions: plan.transitions.length,
     warnings,
+  };
+  };
+  const automaticState = readAutomaticSessionState(workDir, sessionId);
+  const replay = idempotencyKey && automaticState
+    ? await replayAutomaticSessionIdempotent({
+        workDir,
+        sessionId,
+        operation: "arrangement_submission",
+        key: idempotencyKey,
+        request: { plan, contractVersion },
+        execute,
+      })
+    : idempotencyKey
+      ? await replayIdempotent({
+          sessionId,
+          operation: "arrangement_submission",
+          key: idempotencyKey,
+          request: { plan, contractVersion },
+          execute,
+        })
+      : { replayed: false, result: await execute() };
+  return res.json({ ...replay.result, idempotent: replay.replayed });
   });
+  } catch (error: any) {
+    return res.status(400).json({ success: false, error: error.message });
+  }
 });
 
 // Musical transition endpoint (high-quality blending tool for the agent)
@@ -2473,6 +3409,37 @@ app.post("/api/apply-transition", async (req, res) => {
     });
   }
 
+  if (sessionId) {
+    try {
+      validateSessionId(sessionId);
+    } catch (error: any) {
+      return res.status(400).json({ error: error.message });
+    }
+  }
+  const idempotencyKey = String(
+    req.get("Idempotency-Key") || req.body?.idempotencyKey || "",
+  ).trim();
+  const idempotencyRequest = {
+    transitionId: transitionId || null,
+    fromTrackId,
+    fromSectionId,
+    toTrackId,
+    toSectionId,
+    style,
+    duration: duration ?? null,
+    intensity: intensity ?? null,
+    beatAlign: beatAlign ?? null,
+    notes: notes ?? null,
+    executionVersion: Number(executionVersion) || 1,
+    contractVersion: contractVersion ?? null,
+  };
+  const fail = (statusCode: number, message: string): never => {
+    const error: any = new Error(message);
+    error.statusCode = statusCode;
+    throw error;
+  };
+  const runTransition = async () => {
+
   // --- Basic implementation of musical transition ---
   console.log(
     `[apply-transition] Processing: ${fromTrackId}:${fromSectionId} → ${toTrackId}:${toSectionId} [${style}]`,
@@ -2481,7 +3448,12 @@ app.post("/api/apply-transition", async (req, res) => {
   const session = sessionId ? sessions[sessionId] : null;
   const designPlan = session?.designPlan;
   let validatedExecutionRequest: any = null;
-  if (session?.projectBrief) {
+  const automaticExecution = Boolean(
+    session?.projectBrief ||
+      session?.workflowMode === "automatic" ||
+      (sessionId && readAutomaticSessionState(workDir, sessionId)),
+  );
+  if (automaticExecution) {
     const parsedRequest = TransitionExecutionRequestSchema.safeParse({
       transitionId,
       fromTrackId,
@@ -2494,22 +3466,18 @@ app.post("/api/apply-transition", async (req, res) => {
       notes,
     });
     if (!parsedRequest.success) {
-      return res.status(400).json({
-        error: formatValidationIssues(parsedRequest.error).join("; "),
-      });
+      fail(400, formatValidationIssues(parsedRequest.error).join("; "));
     }
     const lockedPlan = ArrangementPlanSchema.safeParse(designPlan);
     if (!lockedPlan.success) {
-      return res
-        .status(400)
-        .json({ error: "No valid locked arrangement exists for this session" });
+      fail(400, "No valid locked arrangement exists for this session");
     }
     const contextualErrors = validateTransitionExecutionContext(
       parsedRequest.data,
       lockedPlan.data,
     );
     if (contextualErrors.length) {
-      return res.status(400).json({ error: contextualErrors.join("; ") });
+      fail(400, contextualErrors.join("; "));
     }
     validatedExecutionRequest = parsedRequest.data;
   } else {
@@ -2531,7 +3499,7 @@ app.post("/api/apply-transition", async (req, res) => {
         { allowLegacy: contractVersion === undefined },
       );
     } catch (error: any) {
-      return res.status(400).json({ error: error.message });
+      fail(400, error.message);
     }
   }
 
@@ -2553,10 +3521,8 @@ app.post("/api/apply-transition", async (req, res) => {
   const fromEntry = getLibrary().find((e: any) => e.id === fromTrackId);
   const toEntry = getLibrary().find((e: any) => e.id === toTrackId);
 
-  if (!fromEntry || !toEntry) {
-    return res
-      .status(404)
-      .json({ error: "One or both tracks not found in library" });
+    if (!fromEntry || !toEntry) {
+    fail(404, "One or both tracks not found in library");
   }
 
   const sessionWorkDir = path.join(workDir, sessionId || "default");
@@ -2656,7 +3622,7 @@ app.post("/api/apply-transition", async (req, res) => {
       };
       // Legacy manual sessions still expect execution details on the loose plan.
       if (
-        !session.projectBrief &&
+        !automaticExecution &&
         session.designPlan &&
         Array.isArray(session.designPlan.transitions)
       ) {
@@ -2739,7 +3705,7 @@ app.post("/api/apply-transition", async (req, res) => {
 
     // Only after successful preview render, set the outputPath (preview concern separated)
     if (
-      !session?.projectBrief &&
+      !automaticExecution &&
       session?.designPlan &&
       Array.isArray(session.designPlan.transitions)
     ) {
@@ -2756,7 +3722,7 @@ app.post("/api/apply-transition", async (req, res) => {
     }
 
     const finalNotes = `Applied ${style} transition (${transitionDuration}s).${beatSnapNotes} ${notes ? "Notes: " + notes : ""}`;
-    if (session?.projectBrief && transitionId) {
+    if (automaticExecution && transitionId) {
       if (!session.executionResults) session.executionResults = {};
       if (!session.executionResults[executionVersion])
         session.executionResults[executionVersion] = {};
@@ -2800,7 +3766,7 @@ app.post("/api/apply-transition", async (req, res) => {
     const curvesUsed = { curve1, curve2 };
     const extraProcessingApplied = extraFilters ? [extraFilters] : [];
 
-    res.json({
+    return {
       success: true,
       outputPath: outputTransitionPath,
       actualFromExitSec: fromStart + transitionDuration,
@@ -2827,7 +3793,7 @@ app.post("/api/apply-transition", async (req, res) => {
       ),
       assemblyHint:
         "Use actualFromExitSec / actualToEntrySec (or the recommended* fields) to trim the main snippets before concatenating with this transition file. Do NOT concat the full original snippets + this transition file.",
-    });
+    };
   } catch (err: any) {
     fs.rmSync(stagedTransitionPath, { force: true });
     if (sessionId) delete activeRenderProcesses[sessionId];
@@ -2855,7 +3821,8 @@ app.post("/api/apply-transition", async (req, res) => {
       };
     }
     console.error("[apply-transition] Error:", err);
-    res.status(500).json({
+    err.statusCode = err.statusCode || 500;
+    err.responsePayload = {
       success: false,
       error: "Failed to apply transition",
       details: err.message,
@@ -2864,7 +3831,44 @@ app.post("/api/apply-transition", async (req, res) => {
       to: `${toTrackId}:${toSectionId}`,
       attemptedDuration: transitionDuration,
       stack: process.env.NODE_ENV === "development" ? err.stack : undefined,
-    });
+    };
+    throw err;
+  }
+  };
+  try {
+    const execute = async () => runTransition();
+    const result = sessionId
+      ? await withSessionLock(sessionId, async () => {
+          const automaticState = readAutomaticSessionState(workDir, sessionId);
+          const replay = idempotencyKey && automaticState
+            ? await replayAutomaticSessionIdempotent({
+                workDir,
+                sessionId,
+                operation: "transition_execution",
+                key: idempotencyKey,
+                request: idempotencyRequest,
+                execute,
+              })
+            : idempotencyKey
+              ? await replayIdempotent({
+                  sessionId,
+                  operation: "transition_execution",
+                  key: idempotencyKey,
+                  request: idempotencyRequest,
+                  execute,
+                })
+              : { replayed: false, result: await execute() };
+          return { ...replay.result, idempotent: replay.replayed };
+        })
+      : await execute();
+    return res.json(result);
+  } catch (error: any) {
+    return res.status(error.statusCode || 500).json(
+      error.responsePayload || {
+        success: false,
+        error: error.message || "Failed to apply transition",
+      },
+    );
   }
 });
 
@@ -2925,8 +3929,31 @@ app.post("/api/render-review-candidate", async (req, res) => {
   } catch (error: any) {
     return res.status(400).json({ success: false, error: error.message });
   }
+  const idempotencyKey = String(
+    req.get("Idempotency-Key") || req.body?.idempotencyKey || "",
+  ).trim();
+  const idempotencyRequest = {
+    parentCandidateId,
+    legacy,
+    arrangementVersion,
+    executionVersion,
+    contractVersion: contractVersion ?? null,
+  };
 
   return withSessionLock(sessionId, async () => {
+    if (idempotencyKey) {
+      const replayed = readAutomaticIdempotencyResult<{
+        success: boolean;
+        [key: string]: unknown;
+      }>({
+        workDir,
+        sessionId,
+        operation: "candidate_rendering",
+        key: idempotencyKey,
+        request: idempotencyRequest,
+      });
+      if (replayed) return res.json({ ...replayed, idempotent: true });
+    }
     const session = sessions[sessionId];
     if (!session || !session.designPlan) {
       return res.status(400).json({
@@ -3019,20 +4046,67 @@ app.post("/api/render-review-candidate", async (req, res) => {
       fs.mkdirSync(sessionWorkDir, { recursive: true });
     }
     const manifest = readCandidateManifest(workDir, sessionId);
+    const renderState = !legacy
+      ? readAutomaticSessionState(workDir, sessionId)
+      : null;
+    if (renderState?.state === "executing_transitions") {
+      transitionAutomaticSessionState({
+        workDir,
+        sessionId,
+        to: "rendering_candidate",
+      });
+    }
+    const recoveredTechnicalEvaluation = recoverRegisteredCandidateTechnicalEvaluation({
+      workDir,
+      sessionId,
+      arrangementVersion,
+      executionVersion,
+    });
+      if (recoveredTechnicalEvaluation) {
+      sessions[sessionId].workflowStage = "quality_review";
+      sessions[sessionId].currentCandidate = recoveredTechnicalEvaluation.candidate;
+      const recoveredState = readAutomaticSessionState(workDir, sessionId);
+      if (recoveredState?.state === "rendering_candidate") {
+        transitionAutomaticSessionState({ workDir, sessionId, to: "technical_review" });
+      }
+      const responsePayload = {
+        success: true,
+        candidate: recoveredTechnicalEvaluation.candidate,
+        manifest: recoveredTechnicalEvaluation.manifest,
+        quality: recoveredTechnicalEvaluation.quality,
+        outputPath: recoveredTechnicalEvaluation.candidate.outputPath,
+        renderPath: "recovered-technical-evaluation",
+        recoveredAfterRegistrationFailure: true,
+        message: "Recovered the registered candidate's missing technical evaluation without rerendering audio.",
+      };
+      if (idempotencyKey && readAutomaticSessionState(workDir, sessionId)) {
+        const replay = await replayAutomaticSessionIdempotent({
+          workDir,
+          sessionId,
+          operation: "candidate_rendering",
+          key: idempotencyKey,
+          request: idempotencyRequest,
+          execute: async () => responsePayload,
+        });
+        return res.json({ ...replay.result, idempotent: replay.replayed });
+      }
+      return res.json(responsePayload);
+    }
     const { candidateId, candidateVersion } = nextCandidateIdentity(manifest);
+    const immutableOutputPath = path.join(
+      sessionWorkDir,
+      `${candidateId}.mp3`,
+    );
+    const validationPath = path.join(
+      sessionWorkDir,
+      `${candidateId}-validation.json`,
+    );
     assertCandidateStorageAvailable(workDir, sessionId, 150 * 1024 * 1024);
+    assertSessionArtifactBudget(workDir, sessionId, 150 * 1024 * 1024);
     const safeMp3Name = `${candidateId}.mp3.part`;
     const outputPath = path.join(sessionWorkDir, safeMp3Name);
     const artifactPrefix = candidateId;
     const graphName = `${artifactPrefix}-filtergraph.txt`;
-
-    // Clean up any old confusing filtergraph.txt from previous code paths
-    const oldGraph = path.join(sessionWorkDir, "filtergraph.txt");
-    if (fs.existsSync(oldGraph)) {
-      try {
-        fs.unlinkSync(oldGraph);
-      } catch {}
-    }
 
     console.log(
       `[finalize-medley] >>> ENTERING PURE-CLEAN-MVP ONLY PATH (no fallbacks) for session ${sessionId}`,
@@ -3049,6 +4123,77 @@ app.post("/api/render-review-candidate", async (req, res) => {
     }
 
     try {
+      const recovered = recoverUnregisteredRenderedCandidate({
+        workDir,
+        sessionId,
+        candidateId,
+        candidateVersion,
+        arrangementVersion,
+        executionVersion,
+        parentCandidateId,
+        workflowMode: legacy ? "legacy" : "automatic",
+        isExecutionVersionCompatible: legacy
+          ? undefined
+          : (candidate) =>
+              candidate.executionVersion < executionVersion &&
+              isRecoveredCandidateCompatibleWithExecution(
+                candidate,
+                session.executionReport,
+              ),
+      });
+      if (recovered) {
+        const recoveredManifest = recovered.qualityGate
+          ? appendCandidateTechnicalEvaluation(workDir, sessionId, {
+              candidateId: recovered.candidate.candidateId,
+              candidateVersion: recovered.candidate.candidateVersion,
+              technicallyValid: Boolean(recovered.qualityGate.technicallyValid),
+              blockingIssues: Array.isArray(recovered.qualityGate.blockingIssues)
+                ? recovered.qualityGate.blockingIssues
+                : [],
+              warnings: Array.isArray(recovered.qualityGate.warnings)
+                ? recovered.qualityGate.warnings
+                : [],
+              policyVersion: 1,
+              evaluatedAt: new Date().toISOString(),
+            })
+          : recovered.manifest;
+        const recoveredState = !legacy
+          ? readAutomaticSessionState(workDir, sessionId)
+          : null;
+        if (recoveredState?.state === "rendering_candidate") {
+          transitionAutomaticSessionState({ workDir, sessionId, to: "technical_review" });
+        }
+        sessions[sessionId].workflowStage = "quality_review";
+        sessions[sessionId].currentCandidate = recovered.candidate;
+        logToSession(
+          sessionId,
+          `[candidate-render] Recovered completed ${candidateId} after interrupted manifest registration.`,
+        );
+        const responsePayload = {
+          success: true,
+          candidate: recovered.candidate,
+          manifest: recoveredManifest,
+          quality: recovered.quality,
+          resolvedTransitions: recovered.candidate.resolvedTransitions,
+          outputPath: recovered.candidate.outputPath,
+          renderPath: "recovered-candidate-registration",
+          recoveredAfterRegistrationFailure: true,
+          message:
+            "Recovered the existing rendered candidate without rerendering audio.",
+        };
+        if (idempotencyKey && readAutomaticSessionState(workDir, sessionId)) {
+          const replay = await replayAutomaticSessionIdempotent({
+            workDir,
+            sessionId,
+            operation: "candidate_rendering",
+            key: idempotencyKey,
+            request: idempotencyRequest,
+            execute: async () => responsePayload,
+          });
+          return res.json({ ...replay.result, idempotent: replay.replayed });
+        }
+        return res.json(responsePayload);
+      }
       const selectedTransitions = selectRenderTransitions({
         sessionId,
         session,
@@ -3064,6 +4209,28 @@ app.post("/api/render-review-candidate", async (req, res) => {
       if (transitions.length === 0) {
         throw new Error(
           "MVP finalize_medley requires at least one transition to establish deterministic track ordering and crossfade points. Single-track support is out of current strict scope.",
+        );
+      }
+      if (
+        parentCandidateId &&
+        !manifest.candidates.some((item) => item.candidateId === parentCandidateId)
+      ) {
+        throw new Error("Parent candidate is not registered in this session");
+      }
+      const persistedResolvedTransitions = automaticSession
+        ? sanitizeResolvedTransitionsForManifest(transitions)
+        : undefined;
+      const planHash = computeCandidatePlanHash(persistedResolvedTransitions);
+      if (
+        planHash &&
+        manifest.candidates.some(
+          (item) =>
+            (item.planHash ?? computeCandidatePlanHash(item.resolvedTransitions)) ===
+            planHash,
+        )
+      ) {
+        throw new Error(
+          "Duplicate candidate plan rejected before rendering; the existing draft is already available for review",
         );
       }
 
@@ -3599,10 +4766,6 @@ app.post("/api/render-review-candidate", async (req, res) => {
       delete activeRenderProcesses[sessionId];
       const renderElapsed = (Date.now() - renderStartTime) / 1000;
 
-      const immutableOutputPath = path.join(
-        sessionWorkDir,
-        `${candidateId}.mp3`,
-      );
       if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size <= 0) {
         throw new Error("Candidate render produced no usable audio file");
       }
@@ -3629,17 +4792,14 @@ app.post("/api/render-review-candidate", async (req, res) => {
         .map((item: any) => item.outputPath)
         .map((item: unknown) => getServerGeneratedPreviewPath(sessionId, item))
         .filter((item: string | null): item is string => item !== null);
-      const validationPath = path.join(
-        sessionWorkDir,
-        `${candidateId}-validation.json`,
-      );
       const candidate = {
         candidateId,
         candidateVersion,
         parentCandidateId,
         arrangementVersion,
         executionVersion,
-        resolvedTransitions: automaticSession ? transitions : undefined,
+        planHash: planHash ?? undefined,
+        resolvedTransitions: persistedResolvedTransitions,
         outputPath: immutableOutputPath,
         debugPaths: [
           renderArtifacts.graphFile,
@@ -3666,12 +4826,31 @@ app.post("/api/render-review-candidate", async (req, res) => {
         JSON.stringify({ candidate, quality, qualityGate }, null, 2),
         "utf8",
       );
-      const updatedManifest = registerCandidate(
+      registerCandidate(
         workDir,
         sessionId,
         candidate,
         automaticSession ? "automatic" : "legacy",
       );
+      const updatedManifest = appendCandidateTechnicalEvaluation(
+        workDir,
+        sessionId,
+        {
+          candidateId,
+          candidateVersion,
+          technicallyValid: qualityGate.technicallyValid,
+          blockingIssues: qualityGate.blockingIssues,
+          warnings: qualityGate.warnings,
+          policyVersion: 1,
+          evaluatedAt: new Date().toISOString(),
+        },
+      );
+      const technicalState = !legacy
+        ? readAutomaticSessionState(workDir, sessionId)
+        : null;
+      if (technicalState?.state === "rendering_candidate") {
+        transitionAutomaticSessionState({ workDir, sessionId, to: "technical_review" });
+      }
       sessions[sessionId].workflowStage = "quality_review";
       sessions[sessionId].currentCandidate = candidate;
 
@@ -3710,7 +4889,7 @@ app.post("/api/render-review-candidate", async (req, res) => {
         });
       }
 
-      return res.json({
+      const responsePayload = {
         success: true,
         candidate,
         manifest: updatedManifest,
@@ -3729,9 +4908,44 @@ app.post("/api/render-review-candidate", async (req, res) => {
         stderrLog: renderArtifacts.stderrLog,
         segments: numSegments,
         crossfades: xfadeDurations.length,
-      });
+      };
+      if (idempotencyKey && readAutomaticSessionState(workDir, sessionId)) {
+        const replay = await replayAutomaticSessionIdempotent({
+          workDir,
+          sessionId,
+          operation: "candidate_rendering",
+          key: idempotencyKey,
+          request: idempotencyRequest,
+          execute: async () => responsePayload,
+        });
+        return res.json({ ...replay.result, idempotent: replay.replayed });
+      }
+      return res.json(responsePayload);
     } catch (err: any) {
       fs.rmSync(outputPath, { force: true });
+      const registrationPending =
+        fs.existsSync(immutableOutputPath) && fs.existsSync(validationPath);
+      const requiresManualReview =
+        /Candidate limit reached|INSUFFICIENT_STORAGE|SESSION_ARTIFACT_LIMIT/.test(String(err?.message || ""));
+      const failedRenderState = !legacy
+        ? readAutomaticSessionState(workDir, sessionId)
+        : null;
+      if (!registrationPending && failedRenderState?.state === "rendering_candidate") {
+        transitionAutomaticSessionState({
+          workDir,
+          sessionId,
+          to: "recoverable_error",
+          recoverableError: String(err?.message || "Candidate rendering failed").slice(0, 2_000),
+        });
+      }
+      if (requiresManualReview && sessions[sessionId]) {
+        sessions[sessionId].workflowStage = "manual_review_required";
+        sessions[sessionId].manualReviewReason = String(err.message);
+        broadcastToSession(sessionId, "manual_review_required", {
+          sessionId,
+          reason: String(err.message),
+        });
+      }
       console.error(
         "[candidate-render] HARD FAIL (no fallback, no silent concat):",
         err.message,
@@ -3765,12 +4979,17 @@ app.post("/api/render-review-candidate", async (req, res) => {
         );
       }
 
-      res.status(500).json({
+      res.status(requiresManualReview ? 409 : 500).json({
         success: false,
         error: err.message || "Failed to render review candidate",
+        manualReviewRequired: requiresManualReview,
+        renderSucceeded: registrationPending,
+        registrationPending,
         noFallback: true,
         renderPath: "pure-clean-mvp-failed",
-        note: "No medley file was written by this handler. Any existing .mp3 in the folder came from outside the pure-clean path.",
+        note: registrationPending
+          ? "The rendered candidate was preserved and can be recovered by retrying this same registration request."
+          : "No new candidate MP3 was completed by this request.",
         logFiles: {
           error: path.join(sessionWorkDir, `${artifactPrefix}-error.json`),
           graph: path.join(sessionWorkDir, `${artifactPrefix}-filtergraph.txt`),
@@ -3782,6 +5001,26 @@ app.post("/api/render-review-candidate", async (req, res) => {
     }
   });
 });
+
+function verifyFinalAudioWithFfmpeg(finalPath: string) {
+  if (!ffmpegPath) throw new Error("Bundled FFmpeg is unavailable for final audio verification");
+  const result = spawnSync(
+    ffmpegPath,
+    ["-v", "error", "-i", finalPath, "-map", "0:a:0", "-f", "null", "-"],
+    {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 120_000,
+      maxBuffer: 2 * 1024 * 1024,
+    },
+  );
+  if (result.error || result.status !== 0) {
+    const detail = String(result.error?.message || result.stderr || "decode failed")
+      .replace(/\s+/g, " ")
+      .slice(0, 500);
+    throw new Error(`Final MP3 audio verification failed: ${detail}`);
+  }
+}
 
 function finalizeRegisteredCandidate(
   sessionId: string,
@@ -3803,7 +5042,7 @@ function finalizeRegisteredCandidate(
     summary,
     promote: () => {
       const promoted = promoteCandidate(workDir, sessionId, candidateId, {
-        requireApproved: requireApproval,
+        requireHumanApproval: requireApproval,
         requireSelected: requireApproval,
       });
       const candidate = promoted.manifest.candidates.find(
@@ -3815,6 +5054,7 @@ function finalizeRegisteredCandidate(
         sha256: candidate.sha256,
       };
     },
+    verifyFinalAudio: verifyFinalAudioWithFfmpeg,
     readHistory: getHistory,
     writeHistory: saveHistory,
     readWisdom: getWisdom,
@@ -3837,8 +5077,9 @@ function finalizeRegisteredCandidate(
       designPlan: session.designPlan || null,
       finalAudioPath,
       candidateId,
-      tracksInvolved:
-        session.designPlan?.transitions?.map((t: any) => t.fromTrackId) || [],
+      tracksInvolved: collectTransitionTrackIds(
+        session.designPlan?.transitions,
+      ),
     }),
     deleteCheckpoint: () =>
       fs.rmSync(path.join(checkpointDir, `${sessionId}.json`), { force: true }),
@@ -3853,6 +5094,7 @@ function finalizeRegisteredCandidate(
 
 app.post("/api/finalize-medley", async (req, res) => {
   const { sessionId, candidateId, summary } = req.body || {};
+  const idempotencyKey = req.get("Idempotency-Key") || req.body?.idempotencyKey;
   if (!sessionId || !candidateId || typeof summary !== "string") {
     return res.status(400).json({
       success: false,
@@ -3861,28 +5103,51 @@ app.post("/api/finalize-medley", async (req, res) => {
   }
   try {
     validateSessionId(sessionId);
-    return await withSessionLock(sessionId, async () => {
+    const performFinalization = async () => {
       const transaction = finalizeRegisteredCandidate(
         sessionId,
         candidateId,
         summary,
       );
-      let cleanupWarning: string | null = null;
-      try {
-        cleanupRejectedCandidates(workDir, sessionId);
-      } catch (error: any) {
-        cleanupWarning = error.message;
+      const finalizingState = readAutomaticSessionState(workDir, sessionId);
+      if (finalizingState?.state === "finalizing") {
+        transitionAutomaticSessionState({
+          workDir,
+          sessionId,
+          to: "completed",
+        });
       }
       broadcastToSession(sessionId, "completed", { summary });
-      return res.json({
+      return {
         success: true,
         outputPath: transaction.finalPath,
         candidateId,
         sha256: transaction.journal.sha256,
         idempotent: transaction.idempotent,
-        cleanupWarning,
-      });
-    });
+        cleanupWarning: null,
+      };
+    };
+    const execute = () => withSessionLock(sessionId, performFinalization);
+    const automaticState = readAutomaticSessionState(workDir, sessionId);
+    const replay = idempotencyKey && automaticState
+      ? await replayAutomaticSessionIdempotent({
+          workDir,
+          sessionId,
+          operation: "finalization",
+          key: idempotencyKey,
+          request: { candidateId, summary },
+          execute: performFinalization,
+        })
+      : idempotencyKey
+        ? await replayIdempotent({
+            sessionId,
+            operation: "finalization",
+            key: idempotencyKey,
+            request: { candidateId, summary },
+            execute,
+          })
+        : { replayed: false, result: await execute() };
+    return res.json({ ...replay.result, idempotent: replay.replayed || replay.result.idempotent });
   } catch (error: any) {
     return res.status(400).json({ success: false, error: error.message });
   }
@@ -4191,40 +5456,16 @@ app.all("/api/*", (req, res) => {
     .json({ error: `API route ${req.method} ${req.path} not found` });
 });
 
-function reconcileIncompleteFinalizations() {
-  for (const journal of listFinalizationJournals(workDir)) {
-    if (journal.status === "completed") continue;
-    if (journal.candidateId === "legacy-output") {
-      console.warn(
-        `[finalization-reconcile] Legacy session ${journal.sessionId} requires an explicit retry`,
-      );
-      continue;
-    }
-    try {
-      finalizeRegisteredCandidate(
-        journal.sessionId,
-        journal.candidateId,
-        journal.summary,
-      );
-      console.log(
-        `[finalization-reconcile] Completed interrupted session ${journal.sessionId}`,
-      );
-    } catch (error) {
-      console.error(
-        `[finalization-reconcile] Could not complete ${journal.sessionId}:`,
-        error,
-      );
-    }
-  }
+for (const record of reconcileStartupState({ workDir, history: getHistory() })) {
+  console.warn(`[startup-reconcile] ${record.sessionId}: ${record.status} — ${record.detail}`);
 }
 
-reconcileIncompleteFinalizations();
-
 async function startServer() {
+  const httpServer = http.createServer(app);
   // Vite integration
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, hmr: { server: httpServer } },
       appType: "spa",
     });
     app.use(vite.middlewares);
@@ -4235,7 +5476,7 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, HOST, () => {
+  httpServer.listen(PORT, HOST, () => {
     console.log(`Server running on http://${HOST}:${PORT}`);
   });
 }

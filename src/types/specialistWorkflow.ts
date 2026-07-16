@@ -1,29 +1,25 @@
 import { z } from "zod";
 
 export const SPECIALIST_MODELS = {
-  context: "nvidia/nemotron-3-super-120b-a12b:free",
-  arrangement: "nvidia/nemotron-3-ultra-550b-a55b:free",
-  production: "nex-agi/nex-n2-pro:free",
+  // Automatic v4 calls Gemini directly. These are deliberately not OpenRouter
+  // aliases: the audio-review path uses Gemini's Files API through the local
+  // server, keeping credentials out of the browser and avoiding an
+  // intermediary's multimodal compatibility layer.
+  context: "gemini-3.1-pro-preview",
+  arrangement: "gemini-3.1-pro-preview",
+  production: "gemini-3.5-flash",
 } as const;
 
 export type SpecialistRole = keyof typeof SPECIALIST_MODELS;
 
 export const SPECIALIST_FALLBACKS: Record<SpecialistRole, string[]> = {
-  context: [
-    SPECIALIST_MODELS.context,
-    SPECIALIST_MODELS.arrangement,
-    SPECIALIST_MODELS.production,
-  ],
-  arrangement: [
-    SPECIALIST_MODELS.arrangement,
-    SPECIALIST_MODELS.context,
-    SPECIALIST_MODELS.production,
-  ],
-  production: [
-    SPECIALIST_MODELS.production,
-    SPECIALIST_MODELS.arrangement,
-    SPECIALIST_MODELS.context,
-  ],
+  context: [SPECIALIST_MODELS.context],
+  // Do not silently substitute Flash for an arrangement decision. If Pro is
+  // unavailable, v4 records the failed attempt and falls back to the local
+  // deterministic arrangement compiler instead.
+  arrangement: [SPECIALIST_MODELS.arrangement],
+  // v4 has no provider-backed production role.
+  production: [],
 };
 
 export const WORKFLOW_STAGES = [
@@ -33,15 +29,17 @@ export const WORKFLOW_STAGES = [
   "production",
   "review_candidate",
   "quality_review",
+  "candidate_options",
   "correction",
+  "manual_review_required",
   "final_render",
   "completed",
 ] as const;
 
 export type SpecialistStage = (typeof WORKFLOW_STAGES)[number];
 
-export const MAX_CORRECTION_RETRIES = 3;
-export const MAX_COMPLETE_CANDIDATES = 4;
+export const MAX_CORRECTION_RETRIES = 2;
+export const MAX_COMPLETE_CANDIDATES = 3;
 export const PROVIDER_REQUEST_TIMEOUT_MS = 120_000;
 export const MAX_PROVIDER_REQUEST_BYTES = 100 * 1024;
 export const MAX_PROVIDER_ESTIMATED_TOKENS = 24_000;
@@ -54,6 +52,21 @@ const Score100 = z.number().min(0).max(100);
 const Confidence = z.number().min(0).max(1);
 
 export const TransitionStyleSchema = z.enum([
+  "smooth_blend",
+  "beat_aligned",
+  "energy_ramp",
+  "harmonic_blend",
+  "dramatic_cut",
+  "reset_moment",
+  "mashup_layer",
+]);
+
+// Reviewers select a bounded local preset, never an arbitrary millisecond
+// offset. The execution compiler resolves these names against the locked
+// transition's explicit permissions.
+export const CorrectionPresetSchema = z.enum([
+  "shorter_crossfade",
+  "longer_crossfade",
   "smooth_blend",
   "beat_aligned",
   "energy_ramp",
@@ -165,6 +178,10 @@ export const ExecutionReportSchema = z.strictObject({
 
 export const QualityReviewSchema = z.strictObject({
   schemaVersion: z.literal(1),
+  // Historical text/metric-only reviews remain readable. Automatic v4 only
+  // treats an actual audio review as eligible to approve a new candidate.
+  reviewSource: z.enum(["legacy_metadata", "gemini_audio", "openrouter_audio"]).optional(),
+  reviewModel: z.string().trim().min(1).max(300).optional(),
   candidateId: Id,
   candidateVersion: z.number().int().positive(),
   arrangementVersion: z.number().int().positive(),
@@ -180,6 +197,7 @@ export const QualityReviewSchema = z.strictObject({
         transitionId: Id,
         issue: ShortText,
         requestedChange: ShortText,
+        correctionPreset: CorrectionPresetSchema.optional(),
       }),
     )
     .max(20),
@@ -193,6 +211,9 @@ export const RenderCandidateSchema = z.strictObject({
   parentCandidateId: Id.nullable(),
   arrangementVersion: z.number().int().positive(),
   executionVersion: z.number().int().positive(),
+  // Optional only for backward-compatible reads of historical manifests.
+  // Newly rendered Automatic candidates always record this hash.
+  planHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   resolvedTransitions: z.array(ResolvedTransitionSchema).max(99).optional(),
   outputPath: z.string().trim().min(1).max(1_000),
   debugPaths: z.array(z.string().trim().min(1).max(1_000)).max(10),
@@ -212,6 +233,23 @@ export const RenderCandidateSchema = z.strictObject({
   createdAt: z.string().datetime(),
 });
 
+export const CandidateTechnicalEvaluationSchema = z.strictObject({
+  candidateId: Id,
+  candidateVersion: z.number().int().positive(),
+  technicallyValid: z.boolean(),
+  blockingIssues: WarningList,
+  warnings: WarningList,
+  policyVersion: z.literal(1),
+  evaluatedAt: z.string().datetime(),
+});
+
+export const CandidateHumanReviewSchema = z.strictObject({
+  candidateId: Id,
+  decision: z.enum(["approved", "changes_requested"]),
+  notes: WarningList,
+  reviewedAt: z.string().datetime(),
+});
+
 export const CandidateManifestSchema = z.strictObject({
   schemaVersion: z.literal(1),
   sessionId: Id,
@@ -220,6 +258,11 @@ export const CandidateManifestSchema = z.strictObject({
   finalizedCandidateId: Id.nullable(),
   finalOutputPath: z.string().trim().max(1_000).nullable(),
   candidates: z.array(RenderCandidateSchema).max(MAX_COMPLETE_CANDIDATES),
+  // Evidence is append-only. The derived candidate fields are kept for fast
+  // UI display, but never replace an earlier technical or musical decision.
+  technicalEvaluations: z.array(CandidateTechnicalEvaluationSchema).max(500).default([]),
+  musicalReviews: z.array(QualityReviewSchema).max(500).default([]),
+  humanReviews: z.array(CandidateHumanReviewSchema).max(500).default([]),
   updatedAt: z.string().datetime(),
 });
 
@@ -243,6 +286,9 @@ export const SpecialistHandoffSchema = z.strictObject({
 
 export const AutomaticWorkflowCheckpointSchema = z.strictObject({
   schemaVersion: z.literal(3),
+  // Checkpoint schema versions and workflow versions are intentionally
+  // independent. Missing means historical v3 behavior, never an implicit v4.
+  workflowVersion: z.union([z.literal(3), z.literal(4)]).optional(),
   sessionId: Id,
   workflowMode: z.literal("automatic"),
   stage: z.enum(WORKFLOW_STAGES),
@@ -252,6 +298,7 @@ export const AutomaticWorkflowCheckpointSchema = z.strictObject({
   attemptedModels: z.array(z.string().trim().min(1).max(300)).max(20),
   repairCount: z.number().int().nonnegative(),
   correctionCount: z.number().int().min(0).max(MAX_CORRECTION_RETRIES),
+  selectedTrackIds: z.array(Id).min(2).max(25).optional(),
   projectBrief: ProjectBriefSchema.nullable(),
   arrangementPlan: ArrangementPlanSchema.nullable(),
   executionReport: ExecutionReportSchema.nullable(),
@@ -376,6 +423,24 @@ export function bindLegacyProjectBriefAuthority(
   };
 }
 
+function authoritativeTransitionFields(candidate: {
+  fromTrackId: string;
+  fromSectionId: string;
+  toTrackId: string;
+  toSectionId: string;
+  fromExitSec: number;
+  toEntrySec: number;
+}) {
+  return {
+    fromTrackId: candidate.fromTrackId,
+    fromSectionId: candidate.fromSectionId,
+    toTrackId: candidate.toTrackId,
+    toSectionId: candidate.toSectionId,
+    fromExitSec: candidate.fromExitSec,
+    toEntrySec: candidate.toEntrySec,
+  };
+}
+
 export function bindLegacyArrangementAuthority(
   plan: ArrangementPlan,
   context: SpecialistContext,
@@ -384,7 +449,22 @@ export function bindLegacyArrangementAuthority(
   return {
     ...plan,
     transitions: plan.transitions.map((transition) => {
-      if (transition.transitionCandidateId) return transition;
+      // A current candidate ID is the model's only authority over timing. The
+      // locally measured candidate owns every identity and timestamp field so
+      // an otherwise good choice cannot be rejected just because the model
+      // echoed one number imprecisely or mutated an internally locked field.
+      if (transition.transitionCandidateId) {
+        const candidate = context.transitionCandidatesById.get(
+          transition.transitionCandidateId,
+        );
+        return candidate
+          ? {
+              ...transition,
+              ...authoritativeTransitionFields(candidate),
+              transitionCandidateId: transition.transitionCandidateId,
+            }
+          : transition;
+      }
       const matches = [...context.transitionCandidatesById.entries()].filter(
         ([, candidate]) =>
           candidate.fromTrackId === transition.fromTrackId &&
@@ -395,7 +475,11 @@ export function bindLegacyArrangementAuthority(
           Math.abs(candidate.toEntrySec - transition.toEntrySec) <= 0.001,
       );
       return matches.length === 1
-        ? { ...transition, transitionCandidateId: matches[0][0] }
+        ? {
+            ...transition,
+            ...authoritativeTransitionFields(matches[0][1]),
+            transitionCandidateId: matches[0][0],
+          }
         : transition;
     }),
   };
@@ -488,6 +572,32 @@ export function formatValidationIssues(error: z.ZodError): string[] {
     const path = issue.path.length ? issue.path.join(".") : "root";
     return `${path}: ${issue.message}`;
   });
+}
+
+/** Mirrors the deterministic render timeline: selected sections plus a short final tail. */
+export function estimateArrangementDurationSec(
+  plan: ArrangementPlan,
+  context: SpecialistContext,
+  finalTailSec = 30,
+): number | null {
+  if (!plan.transitions.length) return null;
+  let duration = 0;
+  for (const [index, transition] of plan.transitions.entries()) {
+    if (index === 0) duration += transition.fromExitSec;
+    const nextTransition = plan.transitions[index + 1];
+    if (nextTransition) {
+      duration += nextTransition.fromExitSec - transition.toEntrySec;
+    } else {
+      const trackDuration = context.durationsByTrackId.get(transition.toTrackId);
+      const finalEnd =
+        trackDuration === undefined
+          ? transition.toEntrySec + finalTailSec
+          : Math.min(trackDuration, transition.toEntrySec + finalTailSec);
+      duration += finalEnd - transition.toEntrySec;
+    }
+    duration -= transition.duration;
+  }
+  return Number.isFinite(duration) && duration > 0 ? duration : null;
 }
 
 export function validateArrangementContext(
@@ -588,6 +698,76 @@ export function validateArrangementContext(
     }
     if (toDuration !== undefined && transition.toEntrySec > toDuration) {
       errors.push(`${prefix}.toEntrySec: Exceeds source duration`);
+    }
+  }
+  for (let index = 0; index < plan.transitions.length - 1; index++) {
+    const current = plan.transitions[index];
+    const next = plan.transitions[index + 1];
+    if (current.toTrackId !== next.fromTrackId) continue;
+    const availableSec = next.fromExitSec - current.toEntrySec;
+    const requiredSec = Math.max(current.duration, next.duration);
+    if (availableSec < requiredSec) {
+      errors.push(
+        `transitions[${index + 1}].fromExitSec: Intermediate segment for track ${current.toTrackId} has ${availableSec.toFixed(3)}s available after transitions[${index}].toEntrySec but requires at least ${requiredSec.toFixed(3)}s for adjacent crossfades`,
+      );
+    }
+  }
+  if (context.targetDurationSec && context.targetDurationSec > 0) {
+    const estimatedDurationSec = estimateArrangementDurationSec(plan, context);
+    const toleranceSec = Math.max(5, context.targetDurationSec * 0.1);
+    if (
+      estimatedDurationSec !== null &&
+      Math.abs(estimatedDurationSec - context.targetDurationSec) > toleranceSec
+    ) {
+      errors.push(
+        `estimatedDurationSec: Planned timeline is ${estimatedDurationSec.toFixed(1)}s but the target is ${context.targetDurationSec.toFixed(1)}s; choose shorter or longer sections before rendering`,
+      );
+    }
+
+    // A timeline can meet its total target while still being a poor medley:
+    // for example, nearly an entire first song followed by short fragments of
+    // every remaining selection. Reject that before any FFmpeg work so the
+    // constrained arrangement repair must choose shorter source sections.
+    // Two-track medleys can legitimately give one song more room. The defect
+    // being guarded against is a three-or-more-track medley that reduces one
+    // or more selected tracks to a token fragment.
+    const maxTrackShare = plan.orderedTrackIds.length >= 3
+      ? context.targetDurationSec >= 180
+        ? 0.6
+        : 0.8
+      : null;
+    const maxSegmentSec = maxTrackShare === null
+      ? null
+      : context.targetDurationSec * maxTrackShare;
+    const plannedSegments = [
+      {
+        trackId: plan.transitions[0].fromTrackId,
+        durationSec: plan.transitions[0].fromExitSec,
+      },
+      ...plan.transitions.map((transition, index) => ({
+        trackId: transition.toTrackId,
+        durationSec: index === plan.transitions.length - 1
+          ? Math.min(
+              context.durationsByTrackId.get(transition.toTrackId) ?? Infinity,
+              transition.toEntrySec + 30,
+            ) - transition.toEntrySec
+          : plan.transitions[index + 1].fromExitSec - transition.toEntrySec,
+      })),
+    ];
+    for (const segment of plannedSegments) {
+      const segmentTrackId = segment.trackId;
+      const segmentDuration = segment.durationSec;
+      if (
+        maxTrackShare !== null &&
+        maxSegmentSec !== null &&
+        Number.isFinite(segmentDuration) &&
+        segmentDuration > maxSegmentSec
+      ) {
+        errors.push(
+          `trackBalance: ${segmentTrackId} is planned for ${segmentDuration.toFixed(1)}s, ` +
+            `which exceeds the ${(maxTrackShare * 100).toFixed(0)}% per-track limit for a ${context.targetDurationSec.toFixed(1)}s medley; choose shorter sections.`,
+        );
+      }
     }
   }
   return errors;
